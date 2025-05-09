@@ -1,0 +1,18 @@
+# Python byte-code and caches
+__pycache__/
+*.py[cod]
+*.pyc
+# pytest cache
+.pytest_cache/
+# VSCode editor folder
+.vscode/
+# temp / output files
+*.faiss
+*.meta.pkl
+output.json
+tmp.*
+*.pdf
+*.xml
+**/__pycache__/
+**/*.py[cod]
+# anything else you don’t want under source control

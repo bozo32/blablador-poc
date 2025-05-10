@@ -54,36 +54,33 @@ def prebuild_indexes(
     max_chunks: int = 256,
     faiss_min_score: float = 0.2,
 ):
-    df = utils.read_csv(csv_path)                 # ✔ single call
+    df = utils.read_csv(csv_path)  # ✔ single call
     print("Prebuilding from:", csv_path, "rows:", len(df))
     required = {"Cited Author", "Cited Year", "tei_sentence", "TEI File"}
-    missing  = required - set(df.columns)
+    missing = required - set(df.columns)
     if missing:
         raise ValueError(f"CSV missing {missing}; found {list(df.columns)}")
 
     for (author, year), _ in df.groupby(["Cited Author", "Cited Year"]):
-        key      = _paper_key(author, year)
+        key = _paper_key(author, year)
         tei_path = SOURCE_DIR / f"{author}.pdf.tei.xml"
-        # 1) TEI chunks
-        chunks   = parser.tei_to_chunks(tei_path)
+        # Parse TEI chunks
+        docs = parser.parse_chunks(tei_path)
 
         idx_base = Path("backend/models") / key
         idx_base.parent.mkdir(parents=True, exist_ok=True)
-        r = retriever.Retriever(
-            idx_base,
-            embed_model=embed_model,
-            max_chunks=max_chunks,
+        retr = retriever.Retriever(
+            index_path=idx_base,
+            max_sentences=max_chunks,
             min_score=faiss_min_score,
+            embed_model=embed_model,
+            api_key=os.environ.get("API_KEY"),
+            base_url=os.environ.get("BASE_URL"),
+            # Pass the TEI chunk list as a lookup map for later retrieval
+            docstore={chunk["id"]: chunk for chunk in docs},
         )
-        # Load existing index if the .faiss file exists, otherwise build it
-        if r.index_path.exists():
-            r.load()
-            # Re-attach chunks list so queries can map back to text
-            r.chunks = chunks
-        else:
-            r.build(chunks)
-            r.chunks = chunks
-        retrievers[key] = r
+        retr.build(docs)
+        retrievers[key] = retr
     
 # ---------- per-sentence worker ----------
 def _process_sentence(row_id: int, segments: list[str], settings: Optional[Dict[str, Any]] = None):
@@ -156,7 +153,7 @@ def _process_sentence(row_id: int, segments: list[str], settings: Optional[Dict[
                 "evidence": top_passages
             }
             llm_model = settings.get("llm_model") if settings else None
-            justification = utils.call_llm_justification(llm_prompt, model_name=llm_model)
+            justification = utils.call_llm_justification(llm_prompt, model=llm_model)
             best_id = justification.get("best_id") if isinstance(justification, dict) else None
             rationale = justification.get("rationale") if isinstance(justification, dict) else justification
             seg = sent_result["segments"][-1]
@@ -184,15 +181,20 @@ def _process_sentence(row_id: int, segments: list[str], settings: Optional[Dict[
         json.dump(results, fh, indent=2)
 
 # Replace embeddings with embed_documents and fix session state references
+from backend.schemas import SentencePayload, Settings
+
 @app.post("/segment")
-async def segment(req: SegmentRequest):
-    # Look up the right FAISS retriever
+async def segment(req: SentencePayload):
+    """
+    Process a set of user-generated segments for one CSV row.
+    """
+    # Look up settings/data_dir key using req.citing_title and optional req.settings.data_dir
     key = f"{req.citing_title}-{req.settings.data_dir or 'default'}"
     retr = retrievers.get(key) or retrievers["default"]
 
     # Embed all segments in one shot
     seg_texts = [seg.claim for seg in req.segments]
-    seg_vecs  = embed_documents(
+    seg_vecs = embed_documents(
         [{"text": text} for text in seg_texts],
         model=req.settings.embed_model,
         api_key=req.settings.api_key,
@@ -201,28 +203,28 @@ async def segment(req: SegmentRequest):
 
     response_segments = []
     for seg, vec in zip(req.segments, seg_vecs):
-        # retrieve top-k 
-        ids, scores = retr.search([vec], k=5)
+        # retrieve top-k chunks relevant to this segment
+        search_results = retr.search([vec], k=5)
+        # each result is a dict with "text", "score", and "meta"
         evidences = []
-        for doc_id, score in zip(ids[0], scores[0]):
-            # get the original TEI sentence text & meta
-            matched = retr.docstore.get_document(doc_id)
+        for result in search_results[0]:
             evidences.append({
-                "text": matched.text,
-                "score": score,
-                **matched.meta
+                "text": result["text"],
+                "score": result["score"],
+                **result.get("meta", {})
             })
         response_segments.append({
             "segment_id": seg.segment_id,
-            "claim":      seg.claim,
-            "evidence":   evidences
+            "claim": seg.claim,
+            "evidence": evidences
         })
 
-    return {
-        "row": req.row, 
-        "status": "done",
-        "segments": response_segments
-    }
+    # Store per-row results
+    results: dict[int, Any] = {}
+    results[req.row_id] = {}
+
+    # Echo back the row_id for client merging
+    return {"row_id": req.row_id, "status": "done", "segments": response_segments}
 
 @app.get("/progress/{row_id}")
 async def progress(row_id: int):
@@ -258,6 +260,8 @@ async def prebuild(req: PrebuildRequest):
             max_sentences=req.max_chunks,
             min_score=req.faiss_min_score
         ))
+        # Log the successful build
+        logging.info(f"FAISS index built for folder: {req.folder!r}")
         return {"status": "ok"}
     except Exception as e:
         logger.error(f"Prebuild error: {e}")

@@ -1,21 +1,22 @@
-from typing import List, Dict
-from lxml import etree
-import faiss
-import numpy as np
 from pathlib import Path
 from . import utils
 from .bl_client import embed_documents
 from .parser import tei_and_csv_to_documents
+from typing import List, Dict, Optional
+from lxml import etree
+import faiss
+import numpy as np
 
 class Retriever:
     def __init__(
         self,
         index_path: Path,
-        max_sentences: int | None = None,
+        max_sentences: Optional[int] = None,
         min_score: float = 0.20,
         embed_model: str = "alias-embeddings",
         api_key: str = None,
-        base_url: str = None
+        base_url: str = None,
+        docstore: dict[str, dict] | None = None,  # New parameter for chunk metadata
     ):
         self.index_path = index_path.with_suffix(".faiss")
         self.index = None
@@ -25,6 +26,17 @@ class Retriever:
         self.embed_model = embed_model
         self.api_key = api_key
         self.base_url = base_url
+        # Attach the chunk metadata store
+        self.docstore = docstore or {}
+
+    def search(self, vectors: List[List[float]], k: int) -> tuple[List[int], List[float]]:
+        """
+        Run a FAISS top-k search over the prebuilt index.
+        Returns: (list_of_indices, list_of_scores)
+        """
+        arr = np.array(vectors, dtype="float32")
+        D, I = self.index.search(arr, k)
+        return I.tolist(), D.tolist()
 
     def build(self, chunks: List[Dict]):
         filtered = chunks[: self.max_sentences] if self.max_sentences else chunks
@@ -41,6 +53,9 @@ class Retriever:
         idx.add(embeddings)
         self.index = idx
         self.chunks = filtered
+        # Populate the docstore with chunk metadata
+        for chunk in filtered:
+            self.docstore[chunk["meta"]["id"]] = chunk
         faiss.write_index(self.index, str(self.index_path))
 
     def load(self):

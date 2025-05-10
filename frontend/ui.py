@@ -182,6 +182,9 @@ def handle_upload():
 def main():
     if "results" not in st.session_state:
         st.session_state["results"] = {}
+    if "selected_model" not in st.session_state:
+        st.session_state["selected_model"] = chat_aliases[0]
+
 
     folder_path = st.session_state.get("data_dir", "")
 
@@ -194,11 +197,19 @@ def main():
             key="uploaded_files",
             on_change=handle_upload
         )
+        # In case the app reloads and uploaded_files persists, but data_dir was lost:
+        if uploaded and "data_dir" not in st.session_state:
+            handle_upload()
 
         st.header("Settings")
+        # Always ensure API key and base URL fields are present and session_state is set
         api_key = st.text_input("Blablador API Key", value=os.getenv("BLABLADOR_API_KEY", ""), help="Your Blablador API key")
-        base_url = st.text_input("Blablador Base URL", value=os.getenv("BLABLADOR_BASE", ""), help="e.g. https://api.helmholtz-blablador.fz-juelich.de")
+        st.session_state["api_key"] = api_key
+        st.text_input("API Key", key="api_key")
         st.session_state["bl_api_key"] = api_key
+        base_url = st.text_input("Blablador Base URL", value=os.getenv("BLABLADOR_BASE", ""), help="e.g. https://api.helmholtz-blablador.fz-juelich.de")
+        st.session_state["base_url"] = base_url.rstrip("/")
+        st.text_input("Base URL", key="base_url")
         st.session_state["bl_base_url"] = base_url.rstrip("/")
         # FastAPI backend URL
         backend_url = st.text_input(
@@ -247,9 +258,21 @@ def main():
         )
 
         nli_choices = ["cross-encoder/nli-deberta-v3-base","BlackBeenie/nli-deberta-v3-large","amoux/scibert_nli_squad"]
-        nli_model = st.selectbox("Select local NLI model (runs via HuggingFace transformers)", nli_choices, index=0)
+        st.selectbox(
+            "Select local NLI model (runs via HuggingFace transformers)",
+            nli_choices,
+            index=0,
+            key="nli_model"
+        )
 
-        nli_threshold = st.slider("NLI confidence threshold", 0.0, 1.0, 0.5, 0.01)
+        # Ensure nli_threshold is initialized in session_state before showing slider
+        if "nli_threshold" not in st.session_state:
+            st.session_state["nli_threshold"] = 0.5
+        st.slider(
+            "NLI confidence threshold",
+            0.0, 1.0, 0.5, 0.01,
+            key="nli_threshold"
+        )
 
         if st.button("Start segmentation"):
             if "data_dir" in st.session_state:
@@ -308,19 +331,27 @@ def main():
                     segments_list = [
                         ln.strip() for ln in seg_text.splitlines() if ln.strip()
                     ]
-                    # Build the payload to match the backend's SegmentRequest model
+                    # Build the payload to match the backend's SentencePayload model
                     payload = {
                         "folder": folder_path,
-                        "row": idx,
+                        "row_id": idx,
                         "citing_title": row.get("Cited Author", ""),
-                        "citing_id":    row.get("tei_target", ""),
+                        "citing_id": row.get("tei_target", ""),
                         "original_sentence": row["tei_sentence"],
-                        "segments": segments_list,
+                        "segments": [
+                            {"segment_id": f"{idx}{chr(97 + i)}", "claim": seg_text}
+                            for i, seg_text in enumerate(segments_list)
+                        ],
                         "settings": {
-                            "llm_model":  st.session_state["selected_model"],
-                            "nli_model":  st.session_state["nli_model"],
-                            "data_dir":   st.session_state.get("data_dir")
-                        }
+                            "embed_model":    st.session_state["embed_model"],
+                            "max_sentences":  st.session_state["max_sentences"],
+                            "faiss_min_score":st.session_state["faiss_min_score"],
+                            "nli_model":      st.session_state["nli_model"],
+                            "llm_model":      st.session_state["selected_model"],
+                            "nli_threshold":  st.session_state["nli_threshold"],
+                            "api_key":        st.session_state["api_key"],
+                            "base_url":       st.session_state["base_url"],
+                        },
                     }
                     # POST to the /segment endpoint
                     resp = requests.post(f"{api_url}/segment", json=payload)
@@ -364,7 +395,7 @@ def main():
                         json=body
                     )
                     prebuild_resp.raise_for_status()
-                    st.success("Backend indexing started.")
+                    st.success("Backend indexing completed.")
                 except requests.HTTPError as e:
                     # Show detailed server error response
                     try:

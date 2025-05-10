@@ -22,6 +22,9 @@ class Settings(BaseModel):
     nli_model: Optional[str] = Field(None, description="Local NLI model name")
     llm_model: Optional[str] = Field(None, description="LLM model alias for remote calls")
     nli_threshold: Optional[float] = Field(None, description="Minimum NLI confidence threshold")
+    data_dir: Optional[str] = Field(None, description="Path to the folder containing CSV and TEI files")
+    api_key: Optional[str] = Field(None, description="API key for Blablador service")
+    base_url: Optional[str] = Field(None, description="Base URL for the Blablador API endpoint")
 
 class SentencePayload(BaseModel):
     row_id: int

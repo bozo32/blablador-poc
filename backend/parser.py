@@ -20,6 +20,10 @@ from .utils import embed  # noqa: F401  (imported for side‑effects elsewhere)
 import pandas as pd
 from .utils import read_csv
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 def tei_and_csv_to_documents(folder: Path, csv_path: str) -> list[dict]:
     """
     Load TEI-XML chunks + CSV citing sentences into one list of {'text','meta'} dicts.
@@ -33,18 +37,17 @@ def tei_and_csv_to_documents(folder: Path, csv_path: str) -> list[dict]:
     # Build docs from CSV citing sentences, including author and year for retriever keys
     # Ensure Cited Year is an integer
     df["Cited Year"] = df["Cited Year"].astype(int)
-    citing_docs = [
-        {
+    citing_docs = []
+    for _, row in df.iterrows():
+        doc_id = row["TEI File"]
+        citing_docs.append({
+            "id": doc_id,
             "text": row["tei_sentence"],
             "author": row["Cited Author"],
             "year": row["Cited Year"],
             "tei_file": row["TEI File"],
-            "meta": {
-                "id": row["TEI File"]
-            }
-        }
-        for _, row in df.iterrows()
-    ]
+            "meta": {"id": doc_id}
+        })
 
     return tei_docs + citing_docs
 
@@ -127,6 +130,7 @@ def tei_to_chunks(tei_path: Path) -> List[Dict]:
             sent_ctr += 1
             if sent_text:
                 meta = {
+                    "source": str(tei_path),
                     "type": "sentence",
                     "id": chunk_id,
                     "p_id": p_id,
@@ -136,13 +140,73 @@ def tei_to_chunks(tei_path: Path) -> List[Dict]:
                 }
                 chunks.append({
                     "text": sent_text,
-                    "meta": {
-                        "source": str(tei_path),
-                        "type": "sentence"
-                    }
+                    "id": chunk_id,
+                    "meta": meta
                 })
     print(f"Parsed {len(chunks)} sentence chunks from {tei_path.name}")
     return chunks
+
+
+# ========================================================================= #
+#  Data Integrity & Improvement Options                                      #
+#                                                                            #
+#  Current approach:                                                         #
+#    - Extracts only <s> sentence elements, assigning a stable 'id' via     #
+#      xml:id (if present) or fallback to numeric index.                    #
+#    - Wraps each <s> parse in try/except, logging and skipping malformed.   #
+#                                                                            #
+#  Integrity considerations:                                                 #
+#    - Skipped or malformed sentences result in fewer chunks than expected, #
+#      potentially misaligning downstream CSV-to-chunk mappings.            #
+#    - Table and figure content (e.g., <table>//<row>//<cell> or <figure>)  #
+#      are not handled here; such elements are better parsed via dedicated   #
+#      routines (see tei_to_chunks above).                                   #
+#    - TEI files from GROBID focus on bibliographic structure over content   #
+#      extraction, so some data (captions, footnotes, inline equations)      #
+#      may be missing or incomplete.                                         #
+#                                                                            #
+#  Possible improvements:                                                    #
+#    1) Placeholder stub chunks for malformed <s> to preserve alignment.     #
+#    2) Raw-XML fallback to salvage content rather than drop entirely.       #
+#    3) Pre-validate or auto-correct TEI via XSD/Schematron before parsing.  #
+#    4) Extend to include table/figure parsing:                              #
+#         - Split <table> rows/cells like tei_to_chunks does for paragraphs. #
+#         - Extract <figure> captions with sentence splitting.               #
+#    5) Surface errors fail-fast if full completeness is required, forcing   #
+#       upstream TEI fixes.                                                  #
+#                                                                            #
+#  These notes outline trade-offs between robustness, completeness, and      #
+#  complexity for evolving the parser as needed.                            #
+# ========================================================================= #
+def parse_chunks(tei_path: Path) -> List[dict]:
+    """
+    Parse a TEI file and return a list of chunks with text and metadata.
+    """
+    if not tei_path.exists():
+        raise FileNotFoundError(f"TEI file not found: {tei_path}")
+
+    tree = etree.parse(str(tei_path))
+    docs = []
+
+    for idx, s in enumerate(tree.findall('.//s', namespaces=NS)):
+        try:
+            xml_id = (s.get('{http://www.w3.org/XML/1998/namespace}id')
+                      or s.get('xml:id'))
+            text = ''.join(s.itertext()).strip()
+
+            chunk = {
+                "text": text,
+                "xml_id": xml_id,
+                # other metadata as needed
+            }
+            chunk["id"] = xml_id or str(idx)
+
+            docs.append(chunk)
+        except Exception as e:
+            logger.warning(f"Skipping malformed <s> at index {idx}: {e}")
+
+    print(f"Parsed {len(docs)} chunks from {tei_path.name}")
+    return docs
 
 
 # --------------------------------------------------------------------------- #

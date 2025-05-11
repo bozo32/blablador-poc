@@ -109,4 +109,4 @@ def pick_best_passage(
         # Return nothing rather than crash
         return None, None
 
-__all__ = ['clean_text', 'read_csv', 'embed', 'call_llm_justification', 'pick_best_passage']
+__all__ = ['clean_text', 'read_csv', 'embed', 'pick_best_passage']

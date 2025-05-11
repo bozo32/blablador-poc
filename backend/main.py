@@ -10,7 +10,7 @@ from . import parser, retriever, schemas, utils
 from .nli import assess
 from .parser import tei_and_csv_to_documents
 from .retriever import build_all
-from .utils import call_llm_justification, pick_best_passage
+from .utils import pick_best_passage
 
 # Add requests and logging imports
 import requests
@@ -24,8 +24,7 @@ logger = logging.getLogger(__name__)
 
 # Import embed_documents from bl_client
 from .bl_client import embed_documents
-# bring in the LLM‐justification helper
-from .utils import call_llm_justification
+
 
 # Import time for retry back-off
 import time

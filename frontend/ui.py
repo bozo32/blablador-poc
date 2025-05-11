@@ -174,6 +174,7 @@ def handle_upload():
 
 # ---------- Streamlit app ----------
 def main():
+    st.session_state.setdefault("seg_cache", {})
     if "results" not in st.session_state:
         st.session_state["results"] = {}
     if "selected_model" not in st.session_state:
@@ -319,54 +320,52 @@ def main():
     df   = df[mask]                       # keep only rows that have text
     # ------------------------------------------------------------------
 
+    # Perform segmentation if requested
     if st.session_state.seg_requested:
-        if "seg_cache" not in st.session_state:
-            st.session_state.seg_cache = {}
-            with st.spinner("Segmenting sentences..."):
+        # 1) Populate seg_cache if empty
+        if not st.session_state.get("seg_cache"):
+            st.session_state["seg_cache"] = {}
+            with st.spinner("Segmenting sentences…"):
                 for idx, row in df.iterrows():
-                    if idx not in st.session_state.seg_cache:
-                        st.session_state.seg_cache[idx] = seg_via_llm(
-                            row["tei_sentence"], idx, model=st.session_state["selected_model"]
-                        )
-
+                    st.session_state["seg_cache"][idx] = seg_via_llm(
+                        row["tei_sentence"],
+                        idx,
+                        st.session_state["selected_model"],
+                    )
+        # 2) Display all rows with editable segments
         for idx, row in df.iterrows():
             st.markdown("---")
             st.write(f"**Row {idx}**  \n{row['tei_sentence']}")
-
             seg_text = st.text_area(
-                "Candidate segments (edit if needed)",
-                "\n".join(st.session_state.seg_cache.get(idx, [])),
+                f"Candidate segments (edit if needed) - Row {idx}",
+                "\n".join(st.session_state.get("seg_cache", {}).get(idx, [])),
                 key=f"ta-{idx}",
                 height=120,
             )
+            st.session_state[f"edited-{idx}"] = [ln.strip() for ln in seg_text.splitlines() if ln.strip()]
 
-            done_flag = f"done-{idx}"
-            # placeholder for spinner/result for this row
-            result_placeholder = st.empty()
-
-            if st.button("Submit", key=f"submit-{idx}", disabled=st.session_state.get(done_flag, False)):
-                # use a global spinner to show progress during the POST
-                api_url = st.session_state.get("api_url", "http://localhost:8000")
-                with st.spinner("Running segmentation & checks…"):
-                    # collect the edited segments from the text area
-                    segments_list = [
-                        ln.strip() for ln in seg_text.splitlines() if ln.strip()
-                    ]
-                    # Build the payload to match the backend's SentencePayload model
+        # Single submit button at bottom
+        if st.button("Submit All Rows for Processing"):
+            api_url = st.session_state.get("api_url", "http://localhost:8000")
+            with st.spinner("Running citation-support for all rows…"):
+                for idx, row in df.iterrows():
+                    segments_list = []
+                    for i, seg_text in enumerate(st.session_state.get(f"edited-{idx}", [])):
+                        segments_list.append({
+                            "segment_id": f"{idx}{chr(97 + i)}",
+                            "claim": seg_text
+                        })
                     payload = {
-                        "folder": folder_path,
+                        "folder": st.session_state["data_dir"],
                         "row_id": idx,
                         "citing_title": row.get("Cited Author", ""),
                         "citing_id": row.get("tei_target", ""),
                         "original_sentence": row["tei_sentence"],
-                        "segments": [
-                            {"segment_id": f"{idx}{chr(97 + i)}", "claim": seg_text}
-                            for i, seg_text in enumerate(segments_list)
-                        ],
+                        "segments": segments_list,
                         "settings": {
                             "embed_model":    st.session_state["embed_model"],
                             "max_sentences":  st.session_state["max_sentences"],
-                            "faiss_min_score":st.session_state["faiss_min_score"],
+                            "faiss_min_score": st.session_state["faiss_min_score"],
                             "nli_model":      st.session_state["nli_model"],
                             "llm_model":      st.session_state["selected_model"],
                             "nli_threshold":  st.session_state["nli_threshold"],
@@ -374,70 +373,61 @@ def main():
                             "base_url":       st.session_state["base_url"],
                         },
                     }
-                    # POST to the /segment endpoint
                     resp = requests.post(f"{api_url}/segment", json=payload)
-                st.session_state[done_flag] = True
-                # parse and store result
-                try:
-                    result = resp.json()
-                except Exception:
-                    result = resp.text
-                st.session_state["results"][idx] = result
-                # display result
-                result_placeholder.success("Done")
-                if isinstance(result, dict):
-                    result_placeholder.json(result)
-                else:
-                    result_placeholder.write(result)
-            elif st.session_state.get(done_flag, False):
-                # show previously stored result
-                stored = st.session_state["results"].get(idx)
-                if stored is not None:
-                    if isinstance(stored, dict):
-                        result_placeholder.json(stored)
-                    else:
-                        result_placeholder.write(stored)
-
-        if st.session_state.seg_requested and "faiss_started" not in st.session_state:
-            # now kick off backend index build in background
-            with st.spinner("Building FAISS index in background…"):
-                api_url = st.session_state.get("api_url", "http://localhost:8000")
-                try:
-                    body = {
-                        "folder": str(st.session_state["data_dir"]),
-                        "embed_model":   st.session_state["embed_model"],
-                        "max_chunks":    int(st.session_state["max_sentences"]),
-                        "faiss_min_score": float(st.session_state["faiss_min_score"]),
-                        "api_key":  st.session_state["bl_api_key"],
-                        "base_url": st.session_state["bl_base_url"],
-                    }
-                    prebuild_resp = requests.post(
-                        f"{api_url}/prebuild",
-                        json=body
-                    )
-                    prebuild_resp.raise_for_status()
-                    st.success("Backend indexing completed.")
-                except requests.HTTPError as e:
-                    # Show detailed server error response
                     try:
-                        err_body = e.response.json()
-                    except Exception:
-                        err_body = e.response.text
-                    st.error(f"Failed to start backend indexing (HTTP {e.response.status_code}): {e}\nResponse body:\n{err_body}")
-                except Exception as e:
-                    st.error(f"Failed to start backend indexing: {e}")
-            st.session_state["faiss_started"] = True
+                        st.session_state["results"][idx] = resp.json()
+                    except:
+                        st.session_state["results"][idx] = resp.text
 
-        # ------------------------
-        # offer download once all rows are done
-        if all(st.session_state.get(f"done-{i}", False) for i in df.index):
-            import json
-            results_json = json.dumps(st.session_state["results"], indent=2)
-            st.download_button(
-                "Download all results as JSON",
-                data=results_json,
-                file_name="citation_support_results.json",
-                mime="application/json"
-            )
+            # Display results for all rows
+            for idx in df.index:
+                st.markdown(f"### Results for Row {idx}")
+                result = st.session_state["results"].get(idx)
+                if isinstance(result, dict):
+                    st.json(result)
+                else:
+                    st.write(result)
+
+    if st.session_state.seg_requested and "faiss_started" not in st.session_state:
+        # now kick off backend index build in background
+        with st.spinner("Building FAISS index in background…"):
+            api_url = st.session_state.get("api_url", "http://localhost:8000")
+            try:
+                body = {
+                    "folder": str(st.session_state["data_dir"]),
+                    "embed_model":   st.session_state["embed_model"],
+                    "max_chunks":    int(st.session_state["max_sentences"]),
+                    "faiss_min_score": float(st.session_state["faiss_min_score"]),
+                    "api_key":  st.session_state["bl_api_key"],
+                    "base_url": st.session_state["bl_base_url"],
+                }
+                prebuild_resp = requests.post(
+                    f"{api_url}/prebuild",
+                    json=body
+                )
+                prebuild_resp.raise_for_status()
+                st.success("Backend indexing completed.")
+            except requests.HTTPError as e:
+                # Show detailed server error response
+                try:
+                    err_body = e.response.json()
+                except Exception:
+                    err_body = e.response.text
+                st.error(f"Failed to start backend indexing (HTTP {e.response.status_code}): {e}\nResponse body:\n{err_body}")
+            except Exception as e:
+                st.error(f"Failed to start backend indexing: {e}")
+        st.session_state["faiss_started"] = True
+
+    # ------------------------
+    # offer download once all rows are done
+    if all(st.session_state.get(f"done-{i}", False) for i in df.index):
+        import json
+        results_json = json.dumps(st.session_state["results"], indent=2)
+        st.download_button(
+            "Download all results as JSON",
+            data=results_json,
+            file_name="citation_support_results.json",
+            mime="application/json"
+        )
 
 main()

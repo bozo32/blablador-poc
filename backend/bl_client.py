@@ -1,6 +1,7 @@
 import re, xml.etree.ElementTree as ET
 from pathlib import Path
 import requests
+import os
 
 
 def tei_to_chunks(xml_path: Path) -> list[dict]:
@@ -42,7 +43,13 @@ class BlabladorClient:
         self.api_key = api_key
         self.base_url = base_url
 
-    def completion(self, prompt, model="alias-large", temperature=0.0, max_tokens=512):
+    def completion(self, prompt, model=None, temperature=0.0, max_tokens=512):
+        """
+        Call the Blablador `/v1/completions` endpoint.
+        """
+        # if no model explicitly given, defer to environment or legacy
+        model = model or os.getenv("LLM_MODEL") or "gpt-3.5-turbo"
+
         base = self.base_url.rstrip("/")
         if not base.startswith(("http://", "https://")):
             base = "https://" + base
@@ -105,7 +112,7 @@ def embeddings(texts: list[str], model: str, api_key: str, base_url: str):
     docs = [{"text": t} for t in texts]
     return embed_documents(docs, model=model, api_key=api_key, base_url=base_url)
 
-def completion(prompt, model="alias-large", temperature=0.0, max_tokens=512, api_key=None, base_url=None):
+def completion(prompt, model="gpt-3.5-turbo", temperature=0.0, max_tokens=512, api_key=None, base_url=None):
     """
     Back-compat wrapper so modules can import and call
         from backend.bl_client import completion

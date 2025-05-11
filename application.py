@@ -54,7 +54,13 @@ if __name__ == "__main__":
     # Preprocess citations
 
     # Launch backend and frontend
-    backend_cmd = ["uvicorn", "backend.main:app", "--host", "localhost", "--port", "8000", "--reload"]
+    backend_cmd = [
+        "uvicorn", "backend.main:app",
+        "--host", "localhost",
+        "--port", "8000",
+        "--reload",
+        "--log-level", "debug",
+    ]
     # pass arguments to ui.py _after_ the `--` separator so Streamlit doesn't
     # try to parse them.
     frontend_cmd = ["streamlit", "run", "frontend/ui.py"]

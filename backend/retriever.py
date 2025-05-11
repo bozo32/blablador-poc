@@ -28,18 +28,31 @@ class Retriever:
         self.base_url = base_url
         # Attach the chunk metadata store
         self.docstore = docstore or {}
+        self._docs: List[Dict] = []
+        # Parallel list of stable IDs for FAISS index positions
+        self.id_list: List[str] = []
 
-    def search(self, vectors: List[List[float]], k: int) -> tuple[List[int], List[float]]:
+    def search(self, vectors: List[List[float]], k: int) -> tuple[List[List[str]], List[float]]:
         """
-        Run a FAISS top-k search over the prebuilt index.
-        Returns: (list_of_indices, list_of_scores)
+        Run a FAISS top‐k search over the prebuilt index.
+        Returns: (list_of_id_batches, list_of_scores)
         """
         arr = np.array(vectors, dtype="float32")
         D, I = self.index.search(arr, k)
-        return I.tolist(), D.tolist()
+        # Map numeric indices → stable chunk IDs
+        id_batches = [
+            [self.id_list[pos] for pos in batch]
+            for batch in I
+        ]
+        return id_batches, D.tolist()
 
-    def build(self, chunks: List[Dict]):
-        filtered = chunks[: self.max_sentences] if self.max_sentences else chunks
+    def build(self, docs: List[Dict]) -> None:
+        """
+        Build the FAISS index from the list of docs.
+        """
+        # retain full docs list so we can fetch by position later
+        self._docs = docs
+        filtered = docs[: self.max_sentences] if self.max_sentences else docs
         embeddings_list = embed_documents(
             [{"text": c["text"]} for c in filtered],
             model=self.embed_model,
@@ -53,9 +66,12 @@ class Retriever:
         idx.add(embeddings)
         self.index = idx
         self.chunks = filtered
-        # Populate the docstore with chunk metadata
+        # Build parallel ID list (position → chunk_id)
+        self.id_list = [chunk["meta"]["id"] for chunk in filtered]
+        # Ensure every chunk_id maps into the docstore
         for chunk in filtered:
-            self.docstore[chunk["meta"]["id"]] = chunk
+            cid = chunk["meta"]["id"]
+            self.docstore.setdefault(cid, chunk)
         faiss.write_index(self.index, str(self.index_path))
 
     def load(self):

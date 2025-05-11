@@ -14,3 +14,5 @@ try:
 except Exception as e:
     print(f"Warning: could not load local NLI models: {e}")
     _LOCAL_NLI_MODELS = {}
+
+assert "text" in first_ev

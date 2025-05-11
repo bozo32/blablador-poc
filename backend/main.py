@@ -10,14 +10,25 @@ from . import parser, retriever, schemas, utils
 from .nli import assess
 from .parser import tei_and_csv_to_documents
 from .retriever import build_all
+from .utils import call_llm_justification, pick_best_passage
 
 # Add requests and logging imports
 import requests
 import logging
+logging.basicConfig(
+    format="%(asctime)s %(levelname)s %(name)s ▶ %(message)s",
+    level=logging.DEBUG,
+)
 logger = logging.getLogger(__name__)
+
 
 # Import embed_documents from bl_client
 from .bl_client import embed_documents
+# bring in the LLM‐justification helper
+from .utils import call_llm_justification
+
+# Import time for retry back-off
+import time
 
 # --------- Pydantic model for /segment request ----------
 class SegmentRequest(BaseModel):
@@ -82,104 +93,7 @@ def prebuild_indexes(
         retr.build(docs)
         retrievers[key] = retr
     
-# ---------- per-sentence worker ----------
-def _process_sentence(row_id: int, segments: list[str], settings: Optional[Dict[str, Any]] = None):
-    # establish models (defaults if not overridden)
-    nli_model = settings.get("nli_model", None) if settings else None
-    llm_model = settings.get("llm_model", None) if settings else None
-    # if UI supplied a data_dir, use that to locate the CSV; otherwise fall back to CSV_PATH
-    if settings and settings.get("data_dir"):
-        csv_dir = Path(settings["data_dir"])
-        csv_files = list(csv_dir.glob("*.csv"))
-        if not csv_files:
-            raise FileNotFoundError(f"No CSV file found in {csv_dir}")
-        csv_path = csv_files[0]
-    else:
-        csv_path = CSV_PATH
-    df = utils.read_csv(csv_path)
-    row = df.iloc[row_id]
-    key = _paper_key(row["Cited Author"], row["Cited Year"])
-    r = retrievers.get(key) or retrievers.get("default")
-    if r is None:
-        raise KeyError(f"Retriever for {key} not built")
-
-    sent_result = {"text": row["tei_sentence"], "segments": []}
-    for i, claim in enumerate(segments):
-        # retrieve more candidates and bias toward prose sentences
-        candidates = r.query(claim, k=12)
-        # take up to 6 sentence chunks, backfill with others if needed
-        sentence_chunks = [c for c in candidates if c["meta"].get("type") == "sentence"]
-        if len(sentence_chunks) >= 6:
-            chosen = sentence_chunks[:6]
-        else:
-            chosen = sentence_chunks + candidates[: 6 - len(sentence_chunks)]
-        passages = [c["text"] for c in chosen]
-        metadatas = [c["meta"] for c in chosen]
-        print(f"\n\n🔎 Checking evidence for claim: {claim}")
-        for j, p in enumerate(passages):
-            print(f" Passage {j} ({len(p)} chars): {p[:200]!r} …")
-        ass = assess(
-            claim, passages, metadatas,
-            nli_model=nli_model,
-            llm_model=llm_model
-        )
-        # normalize NLI output into a list of evidence dicts
-        if isinstance(ass, dict):
-            evs = ass.get("evidence") or [ass]
-        elif isinstance(ass, list):
-            evs = ass
-        else:
-            evs = []
-        evidence = []
-        for idx, ev in enumerate(evs):
-            # ensure ev is a dict before annotating
-            if not isinstance(ev, dict):
-                continue
-            ev["source_id"] = chosen[idx]["meta"].get("id", "")
-            ev["source_type"] = chosen[idx]["meta"].get("type", "")
-            evidence.append(ev)
-        sent_result["segments"].append({
-            "segment_id": f"{row_id}{chr(97+i)}",
-            "claim": claim,
-            "quoted_evidence": evidence
-        })
-
-        # — now call LLM for final ranking/justification —
-        # collect only the “yes”/“partial” snippets
-        top_passages = [ev["quote"] for ev in evidence if ev["assessment"] in ("yes","partial")]
-        if top_passages:
-            llm_prompt = {
-                "claim": claim,
-                "evidence": top_passages
-            }
-            llm_model = settings.get("llm_model") if settings else None
-            justification = utils.call_llm_justification(llm_prompt, model=llm_model)
-            best_id = justification.get("best_id") if isinstance(justification, dict) else None
-            rationale = justification.get("rationale") if isinstance(justification, dict) else justification
-            seg = sent_result["segments"][-1]
-            seg["best_evidence_id"] = best_id
-            seg["llm_rationale"] = rationale
-
-    # --- nest into results structure ---
-    citing_id    = row["TEI File"]
-    citing_title = citing_id.split("-DOI")[0]
-    results.setdefault(key, {
-        "title": "",
-        "id": key,
-        "doi": row["Cited DOI"],
-        "citing_papers": {}
-    })
-    cpapers = results[key]["citing_papers"]
-    cpapers.setdefault(citing_title, {
-        "title": citing_title,
-        "id": citing_id,
-        "sentences": []
-    })
-    cpapers[citing_title]["sentences"].append(sent_result)
-
-    with open("output.json", "w") as fh:
-        json.dump(results, fh, indent=2)
-
+#
 # Replace embeddings with embed_documents and fix session state references
 from backend.schemas import SentencePayload, Settings
 
@@ -188,42 +102,133 @@ async def segment(req: SentencePayload):
     """
     Process a set of user-generated segments for one CSV row.
     """
-    # Look up settings/data_dir key using req.citing_title and optional req.settings.data_dir
+    # if nobody has ever called /prebuild, do it now so we at least have a default index
+    if not retrievers:
+        try:
+            retrievers.update(
+                build_all(
+                    folder=Path(req.folder),
+                    embed_model=req.settings.embed_model,
+                    api_key=req.settings.api_key,
+                    base_url=req.settings.base_url,
+                    max_sentences=req.settings.max_sentences,
+                    min_score=req.settings.faiss_min_score,
+                )
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Could not build FAISS indices on the fly: {e}"
+            )
+
+    # now pick the per‐paper retriever, or fall back to the global default
     key = f"{req.citing_title}-{req.settings.data_dir or 'default'}"
-    retr = retrievers.get(key) or retrievers["default"]
+    retr = retrievers.get(key) or retrievers.get("default")
+    if retr is None:
+        raise HTTPException(
+            status_code=500,
+            detail=f"No FAISS index found for key={key} and no default index available"
+        )
 
     # Embed all segments in one shot
     seg_texts = [seg.claim for seg in req.segments]
+    logger.debug(f"[EMBED] embedding segments: {seg_texts}")
     seg_vecs = embed_documents(
-        [{"text": text} for text in seg_texts],
+        [{"text": t} for t in seg_texts],
         model=req.settings.embed_model,
         api_key=req.settings.api_key,
-        base_url=req.settings.base_url
+        base_url=req.settings.base_url,
     )
+    logger.debug(f"[EMBED] returned {len(seg_vecs)} vectors; example vec[0]={seg_vecs[0] if seg_vecs else None}")
 
     response_segments = []
     for seg, vec in zip(req.segments, seg_vecs):
-        # retrieve top-k chunks relevant to this segment
-        search_results = retr.search([vec], k=5)
-        # each result is a dict with "text", "score", and "meta"
+        logger.debug(f"[SEGMENT]={seg.segment_id} claim={seg.claim!r}")
+
+        # 2) FAISS SEARCH
+        k_cap = req.settings.max_sentences or len(retr.chunks)
+        ids, scores = retr.search([vec], k=k_cap)
+        logger.debug(f"[FAISS] raw ids={ids[0]} scores={scores[0]}")
+
+        # 3) FAISS THRESHOLD + CAP
+        filtered = [
+            (doc_id, score)
+            for doc_id, score in zip(ids[0], scores[0])
+            if score >= req.settings.faiss_min_score
+        ]
+        # keep only top‐25 by score
+        filtered.sort(key=lambda x: x[1], reverse=True)
+        filtered = filtered[:25]
+        logger.debug(f"[FAISS→filtered] {filtered}")
+
+        # 4) PREPARE NLI INPUTS
+        texts, metadatas = [], []
+        for doc_id, faiss_score in filtered:
+            chunk = retr.docstore.get(doc_id)
+            if not chunk:
+                logger.warning(f"[FAISS→filtered] missing chunk id={doc_id}")
+                continue
+            texts.append(chunk["text"])
+            m = dict(chunk.get("meta", {}))
+            m["faiss_score"] = faiss_score
+            metadatas.append(m)
+        logger.debug(f"[NLI] inputs texts={len(texts)} passages")
+
+        # 5) NLI (we keep only entailment/contradiction above threshold)
+        raw_nli = assess(
+            seg.claim,
+            texts,
+            metadatas,
+            nli_model=req.settings.nli_model
+        )
+        logger.debug(f"[NLI→raw] {raw_nli}")
+        if not raw_nli:
+            logger.warning(f"[NLI] no raw evidence returned for segment {seg.segment_id!r}")
         evidences = []
-        for result in search_results[0]:
+        for ev in raw_nli:
+            label = ev.get("label")
+            score = ev.get("score", 0.0)
+            if label not in ("entailment", "contradiction"):
+                continue
+            if score < req.settings.nli_threshold:
+                continue
             evidences.append({
-                "text": result["text"],
-                "score": result["score"],
-                **result.get("meta", {})
+                "text":  ev.get("text", ""),
+                "score": score,
+                "label": label,
+                **{k: v for k, v in ev.items() if k not in ("text", "score", "label")},
             })
+        logger.debug(f"[NLI→filtered] {evidences}")
+
+        # 6) Dual LLM picks: support + contradiction, both over ALL evidences
+        texts = [e["text"] for e in evidences]
+        if texts:
+            sup_id, sup_rat = pick_best_passage(
+                seg.claim, texts, "support",
+                model_name=req.settings.llm_model,
+                api_key=req.settings.api_key,
+                base_url=req.settings.base_url,
+            )
+            con_id, con_rat = pick_best_passage(
+                seg.claim, texts, "contradict",
+                model_name=req.settings.llm_model,
+                api_key=req.settings.api_key,
+                base_url=req.settings.base_url,
+            )
+        else:
+            sup_id = con_id = None
+            sup_rat = con_rat = None
+
         response_segments.append({
-            "segment_id": seg.segment_id,
-            "claim": seg.claim,
-            "evidence": evidences
+            "segment_id":              seg.segment_id,
+            "claim":                   seg.claim,
+            "evidence":                evidences,
+            "best_support_id":         sup_id,
+            "support_rationale":       sup_rat,
+            "best_contradiction_id":   con_id,
+            "contradiction_rationale": con_rat,
         })
 
-    # Store per-row results
-    results: dict[int, Any] = {}
-    results[req.row_id] = {}
-
-    # Echo back the row_id for client merging
     return {"row_id": req.row_id, "status": "done", "segments": response_segments}
 
 @app.get("/progress/{row_id}")

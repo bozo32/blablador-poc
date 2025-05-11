@@ -58,11 +58,16 @@ st.session_state.setdefault("selected_model", None)
 st.session_state.setdefault("nli_model", None)
 
 def reset_segmentation():
-    """Clear any existing segmentation so we can rerun with new settings."""
+    # wipe any previous “done-…” flags
+    for k in list(st.session_state.keys()):
+        if k.startswith("done-"):
+            del st.session_state[k]
     st.session_state.started = False
     st.session_state.seg_requested = False
-    if "seg_cache" in st.session_state:
-        del st.session_state.seg_cache
+    st.session_state.pop("seg_cache", None)
+    # force a fresh FAISS build next time
+    st.session_state.pop("faiss_started", None)
+
 
 SEGMENT_PROMPT_TEMPLATE = """You are an expert at breaking sentences into standalone proposition segments.
 For example, given a sentence A and B cause 1 and 2 generate 4 segments:
@@ -107,7 +112,8 @@ SEG_RE = re.compile(r"^\s*\d+[a-z]\.", re.I)          # e.g. 2a.
 
 def seg_via_llm(sentence: str, row_idx: int, model: str) -> list[str]:
     prompt = SEGMENT_PROMPT_TEMPLATE.format(row_idx=row_idx, sentence=sentence)
-    actual_model = ALIAS_TO_MODEL.get(model, model)
+    actual_model = model  # use the model string as chosen in the UI
+
     client = BlabladorClient(
         api_key=st.session_state.get("bl_api_key", ""),
         base_url=st.session_state.get("bl_base_url", "")
@@ -120,21 +126,9 @@ def seg_via_llm(sentence: str, row_idx: int, model: str) -> list[str]:
             max_tokens=256
         )
     except Exception as e:
-        st.warning(
-            f"Blablador API error ({e}), falling back to '{DEFAULT_ALIAS}'."
-        )
-        actual_model = ALIAS_TO_MODEL[DEFAULT_ALIAS]
-        try:
-            text = client.completion(
-                prompt,
-                model=actual_model,
-                temperature=0,
-                max_tokens=256
+        st.error(f"Blablador API error: {e}")
+        return []
 
-            )
-        except Exception as e2:
-            st.error(f"Blablador API error after fallback: {e2}")
-            text = ""
     if actual_model == DEFAULT_ALIAS and "error" in text.lower():
         return []
     lines = [ln.strip() for ln in text.splitlines()]
@@ -248,30 +242,50 @@ def main():
         st.number_input(
             "Max initial sentences (FAISS cap)",
             min_value=1, max_value=1000, value=250, step=1,
-            key="max_sentences"
+            key="max_sentences",
+            on_change=reset_segmentation
         )
 
         st.slider(
             "FAISS min similarity",
             0.0, 1.0, 0.2, 0.01,
-            key="faiss_min_score"
+            key="faiss_min_score",
+            on_change=reset_segmentation
         )
 
-        nli_choices = ["cross-encoder/nli-deberta-v3-base","BlackBeenie/nli-deberta-v3-large","amoux/scibert_nli_squad"]
-        st.selectbox(
-            "Select local NLI model (runs via HuggingFace transformers)",
+        # NLI model selection (pick one of the built-in checkpoints or enter your own)
+        nli_choices = [
+            "cross-encoder/nli-deberta-v3-base",
+            "BlackBeenie/nli-deberta-v3-large",
+            "amoux/scibert_nli_squad",
+            "Custom..."
+        ]
+        selected = st.selectbox(
+            "Select local NLI model",
             nli_choices,
             index=0,
-            key="nli_model"
+            key="nli_model_choice",
+            help="Pick a built-in model or choose Custom to paste any HF repo path"
         )
+        if selected == "Custom...":
+            custom = st.text_input(
+                "Custom NLI model path (HF format)",
+                value=st.session_state.get("nli_model", ""),
+                key="nli_model_custom",
+                help="e.g. my-org/my-fine-tuned-nli-model"
+            ).strip()
+            st.session_state["nli_model"] = custom or None
+        else:
+            st.session_state["nli_model"] = selected
 
-        # Ensure nli_threshold is initialized in session_state before showing slider
+        # Now show the NLI confidence threshold slider
         if "nli_threshold" not in st.session_state:
             st.session_state["nli_threshold"] = 0.5
         st.slider(
             "NLI confidence threshold",
             0.0, 1.0, 0.5, 0.01,
-            key="nli_threshold"
+            key="nli_threshold",
+            on_change=reset_segmentation
         )
 
         if st.button("Start segmentation"):
@@ -294,7 +308,14 @@ def main():
     st.write("Folder path:", folder_path)
 
     # ---- drop blank or NaN sentences ---------------------------------
-    mask = df["tei_sentence"].notna() & df["tei_sentence"].str.strip().ne("")
+    # ensure everything is a string first, then strip out empty lines
+    mask = (
+        df["tei_sentence"]
+        .fillna("")      # turn NaN → ""
+        .astype(str)     # ensure dtype=object with strings
+        .str.strip()     # safe to call .str now
+        .ne("")          # keep non-empty strings
+    )
     df   = df[mask]                       # keep only rows that have text
     # ------------------------------------------------------------------
 

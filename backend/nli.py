@@ -2,16 +2,28 @@
 
 import os, json
 import logging
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s ▶ %(message)s")
 import functools
-from transformers import pipeline
+from transformers import pipeline as hf_pipeline
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from backend.bl_client import BlabladorClient   # new central wrapper
 from requests import HTTPError
 
 THRESHOLD = 0.0
 
 @functools.lru_cache()
-def get_nli_pipeline():
-    return pipeline("text-classification", model="microsoft/deberta-v3-large-mnli")
+def get_nli_pipeline(model_name: str):
+    """
+    Return a HF text-classification pipeline for the given model,
+    configured to return all label scores (so we can extract entail/contradiction).
+    """
+    return hf_pipeline(
+        "text-classification",
+        model=model_name,
+        return_all_scores=True,
+        truncation=True,
+        device=-1,
+    )
 
 def predict_nli(premise: str, hypothesis: str):
     nli_pipeline = get_nli_pipeline()
@@ -34,7 +46,7 @@ def get_local_nli_pipeline(name: str):
     from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline as hf_pipeline
     if name not in _LOCAL_NLI_PATHS:
         raise KeyError(f"No local NLI model configured for '{name}'")
-    if name not in _LOCAL_NLI_MODELS:
+    if name not in _LOCAL_NLI_MODELS[name]:
         path = _LOCAL_NLI_PATHS[name]
         tok = AutoTokenizer.from_pretrained(path, use_fast=False)
         model = AutoModelForSequenceClassification.from_pretrained(path)
@@ -52,10 +64,10 @@ SYSTEM_INSTR = """
 You are an expert evidence‐checking assistant. Your goal is to determine if each claim is supported by the provided passages, allowing for synonyms, paraphrases, and implied meanings. Use only the passages given; do not draw on external knowledge.
 
 For each claim:
-- Return  a JSON object with a single key "evidence" which is an array of evidence objects.
-- Each evidence object must have "quote", "location", "assessment", "chunk_id", and "type" keys.
-- The "assessment" for each evidence object must be one of: "yes", "circumstantial", "partial", or "no".
-- If no passage supports or implies the claim, return an empty "evidence" array.
+- Return a JSON object with a single key "evidence" which is an array of evidence objects.
+- Each evidence object must have "quote", "location", "label", "chunk_id", and "type" keys.
+- The "label" for each evidence object must be one of: "entailment" or "contradiction".
+If no passage supports or contradicts the claim, return an empty "evidence" array.
 
 Always produce valid JSON with the described structure.
 """
@@ -64,71 +76,54 @@ def assess(
     claim: str,
     passages: list[str],
     metadatas: list[dict],
-    nli_model: str = None,
-    llm_model: str = None,
-    api_key: str = None,
-    base_url: str = None
+    nli_model: str = None
 ) -> list[dict]:
-    # If a local NLI model is requested, run locally
-    if nli_model in _LOCAL_NLI_PATHS:
-        pipeline = get_local_nli_pipeline(nli_model)
-        evidence = []
-        for text, meta in zip(passages, metadatas):
-            # run NLI on claim vs text
-            in_text = f"{claim} [SEP] {text}"
-            preds = pipeline(in_text, truncation=True)
-            # find highest entailment or contradiction
-            best = max(preds, key=lambda p: p["score"])
-            if best["score"] < THRESHOLD:
-                continue
-            label = best["label"].lower()
-            assessment = "yes" if "entail" in label else ("no" if "contradict" in label else "circumstantial")
-            evidence.append({
-                "quote": text,
-                "location": meta.get("chunk_id"),
-                "assessment": assessment,
-                "chunk_id": meta.get("chunk_id"),
-                "type": meta.get("type"),
-                "score": best["score"]
-            })
-        return evidence
-    else:
-        # ------------------------------------------------------------------
-        # Remote LLM call via Blablador /v1/completions (through wrapper)
-        # ------------------------------------------------------------------
-        actual_model = llm_model or "alias-large"
-        user_payload = json.dumps({
-            "claim": claim,
-            "passages": [
-                {"text": p,
-                 "chunk_id": m.get("chunk_id"),
-                 "type":     m.get("type")}
-                for p, m in zip(passages, metadatas)
-            ]
-        }, ensure_ascii=False)
-
-        prompt = (
-            SYSTEM_INSTR.strip()
-            + "\n\n<INPUT>\n"
-            + user_payload
-            + "\n</INPUT>\n\nReturn the JSON object as specified above."
-        )
-
-        # use the BlabladorClient instead of bare completion()
-        client = BlabladorClient(
-            api_key=api_key or os.getenv("BLABLADOR_API_KEY"),
-            base_url=base_url or os.getenv("BLABLADOR_BASE")
-        )
-        raw = client.completion(
-            prompt=prompt,
-            model=actual_model,
-            temperature=0.0,
-            max_tokens=512
-        )
-
+    """
+    Always runs a HF sequence-classification model for NLI.
+    Accepts any HF checkpoint string via `nli_model`.
+    Returns a list of { quote, chunk_id, type, label, score } dicts,
+    keeping only entailment & contradiction above THRESHOLD.
+    """
+    model_to_use = nli_model or "cross-encoder/nli-deberta-v3-base"
+    logging.debug(f"[NLI] using model {model_to_use}")
+    pipe = get_nli_pipeline(model_to_use)
+    evidence = []
+    for text, meta in zip(passages, metadatas):
+        # the cross-encoder expects "[premise] [SEP] [hypothesis]"
+        # here: passage is the premise, claim is the hypothesis
+        in_text = f"{text} [SEP] {claim}"
         try:
-            result = json.loads(raw)
-            return result.get("evidence", [])
-        except Exception:
-            # model returned non‑JSON – treat as no evidence
-            return []
+            preds = pipe(in_text)
+            # HF sometimes returns nested lists—flatten to List[dict]
+            if isinstance(preds, dict):
+                preds = [preds]
+            elif isinstance(preds, list) and preds and isinstance(preds[0], list):
+                preds = preds[0]
+            logging.debug(f"[NLI→preds] {preds}")
+        except Exception as e:
+            logging.error(f"[NLI] error during pipeline(...) for a passage: {e}")
+            continue
+
+        # extract scores for entailment & contradiction
+        ent = next((p for p in preds if p["label"].lower() == "entailment"), None)
+        con = next((p for p in preds if p["label"].lower() == "contradiction"), None)
+
+        if ent and ent["score"] >= THRESHOLD:
+            evidence.append({
+                "text":       text,
+                "chunk_id":   meta.get("chunk_id"),
+                "type":       meta.get("type"),
+                "label":      "entailment",
+                "score":      ent["score"],
+            })
+
+        if con and con["score"] >= THRESHOLD:
+            evidence.append({
+                "text":       text,
+                "chunk_id":   meta.get("chunk_id"),
+                "type":       meta.get("type"),
+                "label":      "contradiction",
+                "score":      con["score"],
+            })
+
+    return evidence

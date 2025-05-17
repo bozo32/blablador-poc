@@ -85,16 +85,6 @@ def _add_chunk(chunks: List[Dict], text: str, kind: str, chunk_id: str | None = 
 #   Public API
 # --------------------------------------------------------------------------- #
 def tei_to_chunks(tei_path: Path) -> List[Dict]:
-    """
-    Parse a TEI file (from GROBID) and return a list of chunks:
-
-        [{"text": "...", "meta": {"type": "paragraph"}}, ...]
-
-    The extraction order is:
-        1. Body paragraphs  (//text//p)
-        2. Table rows       (//table//row//cell)
-        3. Figure captions  (//figure//head | //figure//figDesc)
-    """
     if not tei_path.exists():
         raise FileNotFoundError(tei_path)
 
@@ -114,36 +104,50 @@ def tei_to_chunks(tei_path: Path) -> List[Dict]:
     chunks: List[Dict] = []
 
     sent_ctr = 1
-    # 1. Sentence chunks with paragraph and section context
+    # Build sliding windows of 1, 2, and 3 sentences within each paragraph
     for p in tree.xpath(".//tei:text//tei:body//tei:p", namespaces=NS):
+        # paragraph identifier
         p_id = p.get("{http://www.w3.org/XML/1998/namespace}id") or f"p{sent_ctr}"
-        # find nearest ancestor div for this paragraph
+        # section metadata if available
         ancestor_divs = p.xpath("ancestor::tei:div", namespaces=NS)
-        section_info = None
-        if ancestor_divs:
-            div_elem = ancestor_divs[0]
-            section_info = div_meta_map.get(div_elem)
-        for s in p.xpath(".//tei:s", namespaces=NS):
-            sent_text = "".join(s.itertext())
-            sent_text = _clean(sent_text)
-            chunk_id = s.get("{http://www.w3.org/XML/1998/namespace}id") or f"s{sent_ctr}"
+        section_info = div_meta_map.get(ancestor_divs[0]) if ancestor_divs else None
+        # collect cleaned sentences and ids
+        s_elems = p.xpath(".//tei:s", namespaces=NS)
+        texts, ids = [], []
+        for s in s_elems:
+            raw = "".join(s.itertext())
+            sent = _clean(raw)
+            if not sent:
+                continue
+            sid = s.get("{http://www.w3.org/XML/1998/namespace}id") or f"s{sent_ctr}"
             sent_ctr += 1
-            if sent_text:
+            texts.append(sent)
+            ids.append(sid)
+        # generate sliding windows sizes 1, 2, 3
+        for w in (1, 2, 3):
+            for i in range(len(texts) - w + 1):
+                window_text = " ".join(texts[i:i+w])
+                window_id = f"{p_id}_w{w}_{i+1}"
                 meta = {
+                    "id": window_id,
                     "source": str(tei_path),
-                    "type": "sentence",
-                    "id": chunk_id,
+                    "type": "sentence_window",
                     "p_id": p_id,
-                    "section_id": section_info["id"] if section_info is not None else None,
-                    "section_type": section_info.get("type") if section_info is not None else None,
-                    "section_head": section_info.get("head") if section_info is not None else None
+                    "window_size": w,
+                    "sent_ids": ids[i:i+w],
                 }
+                if section_info:
+                    meta.update({
+                        "section_id": section_info.get("id"),
+                        "section_type": section_info.get("type"),
+                        "section_head": section_info.get("head"),
+                    })
                 chunks.append({
-                    "text": sent_text,
-                    "id": chunk_id,
-                    "meta": meta
+                    "text": window_text,
+                    "id": window_id,
+                    "meta": meta,
                 })
-    print(f"Parsed {len(chunks)} sentence chunks from {tei_path.name}")
+    print(f"Parsed {len(chunks)} sentence-window chunks from {tei_path.name}")
     return chunks
 
 

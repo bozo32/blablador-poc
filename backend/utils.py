@@ -5,9 +5,10 @@ import re
 from pathlib import Path
 import pandas as pd
 import json
+import logging
 from requests import HTTPError
 from backend.bl_client import BlabladorClient
-from typing import List, Tuple, Literal  # new import
+from typing import List, Tuple, Literal, Optional  # new import
 
 
 def clean_text(text: str) -> str:
@@ -64,49 +65,64 @@ def embed(texts: list[str]) -> list[list[float]]:
     )
 
 def pick_best_passage(
-    claim:       str,
-    passages:    List[str],
-    mode:        Literal["support", "contradict"],
-    model_name:  str,
-    api_key:     str,
-    base_url:    str,
-) -> Tuple[int, str]:
+    claim: str,
+    passages: List[str],
+    mode: Literal["support", "contradict"],
+    model_name: str,
+    api_key: str,
+    base_url: str,
+) -> Tuple[Optional[int], Optional[str]]:
     """
-    Ask the LLM to choose the single best passage that
-    either supports or contradicts `claim` from `passages`.
-    Returns (best_index, rationale).
+    Pick the single best passage by index and produce a one-line rationale.
+    Returns (best_index, rationale) or (None, None) on failure.
     """
-    instruction = {
-        "support":   "Which passage BEST SUPPORTS the claim? Respond ONLY with JSON {\"best_id\":<int>,\"rationale\":<string>}.",
-        "contradict":"Which passage BEST CONTRADICTS the claim? Respond ONLY with JSON {\"best_id\":<int>,\"rationale\":<string>}.",
-    }[mode]
-
-    payload = {"claim": claim, "passages": passages}
-    prompt  = f"{instruction}\n\n```json\n{json.dumps(payload)}\n```"
+    # 1) Build a minimal, unambiguous prompt
+    verb = "SUPPORTS" if mode == "support" else "CONTRADICTS"
+    instruction = (
+        f"Claim: {claim}\n"
+        f"Passages:\n" + "\n".join(f"{i}: {p}" for i, p in enumerate(passages)) + "\n\n"
+        f"Which single passage index {verb} the claim?  \n"
+        "Respond with exactly this JSON (no extra text):\n"
+        '{"best_id": <index>, "rationale": "<very brief explanation>"}\n'
+        "Now your answer:\n"
+    )
 
     client = BlabladorClient(api_key=api_key, base_url=base_url)
     resp_text = client.completion(
-        prompt,
+        instruction,
         model=model_name,
         temperature=0.0,
-        max_tokens=128,
+        max_tokens=150,
     )
 
-    # Try to pull out the JSON object from the response
-    try:
-        # simple bracket‐matching extract
-        start = resp_text.find("{")
-        end   = resp_text.rfind("}")
-        if start == -1 or end == -1:
-            raise ValueError("No JSON object found in response")
-        json_str = resp_text[start : end+1]
-        out = json.loads(json_str)
-        return out["best_id"], out["rationale"]
-    except Exception as e:
-        # Log the raw output for debugging
-        import logging
-        logging.error(f"Failed to parse JSON from LLM response: {e}\nRaw response:\n{resp_text}")
-        # Return nothing rather than crash
+    # 2) Log raw output for debugging—even if it’s empty
+    logging.debug(f"pick_best_passage raw response: {resp_text!r}")
+
+    # 3) Try to extract the first {...} block
+    if not resp_text or not resp_text.strip():
+        logging.error("Empty response from LLM in pick_best_passage")
         return None, None
+
+    # Regex to find {...} (non-greedy)
+    match = re.search(r"\{.*?\}", resp_text, flags=re.DOTALL)
+    if match:
+        candidate = match.group()
+        try:
+            out = json.loads(candidate)
+            bid = out.get("best_id")
+            rat = out.get("rationale")
+            if isinstance(bid, int) and isinstance(rat, str):
+                return bid, rat
+            else:
+                logging.error(f"Parsed JSON missing expected types: {candidate}")
+        except Exception as e:
+            logging.error(f"Failed to json.loads() in pick_best_passage: {e}\nCandidate: {candidate}")
+
+    else:
+        logging.error(f"No JSON object found in pick_best_passage output:\n{resp_text}")
+
+    # 4) Fallback: pick the highest-score passage automatically
+    logging.warning("Falling back to highest-FAISS-score passage (index 0) without rationale")
+    return 0, "no rationale"
 
 __all__ = ['clean_text', 'read_csv', 'embed', 'pick_best_passage']

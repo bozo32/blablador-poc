@@ -15,14 +15,16 @@ _LOCAL_NLI_PATHS = {
 _LOCAL_NLI_MODELS: Dict[str, Any] = {}
 
 
-def get_local_nli_pipeline(model_name: str):
-    if model_name not in _LOCAL_NLI_PATHS:
-        raise KeyError(f"Model name {model_name} not found in local NLI paths.")
-    if model_name not in _LOCAL_NLI_MODELS:
-        tokenizer = AutoTokenizer.from_pretrained(_LOCAL_NLI_PATHS[model_name], use_fast=False)
-        model = AutoModelForSequenceClassification.from_pretrained(_LOCAL_NLI_PATHS[model_name])
-        _LOCAL_NLI_MODELS[model_name] = hf_pipeline("text-classification", model=model, tokenizer=tokenizer, device=-1)
-    return _LOCAL_NLI_MODELS[model_name]
+def get_local_nli_pipeline(model_name: str, batch_size: int = 32):
+    tokenizer = AutoTokenizer.from_pretrained(_LOCAL_NLI_PATHS[model_name], use_fast=False)
+    model     = AutoModelForSequenceClassification.from_pretrained(_LOCAL_NLI_PATHS[model_name])
+    return hf_pipeline(
+        "text-classification",
+        model=model,
+        tokenizer=tokenizer,
+        device=-1,              # CPU
+        batch_size=batch_size,  # batch many inferences at once
+    )
 
 def assess(model_name: str, premise: str, hypothesis: str):
     if model_name in _LOCAL_NLI_PATHS:

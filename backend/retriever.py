@@ -156,8 +156,12 @@ def build_all(
         retr.build([doc])
         indexes[key] = retr
 
-    # Build default (global) FAISS index, but only over TEI sentence chunks
-    tei_docs = [doc for doc in docs if doc["meta"].get("type") == "sentence"]
+    # include both single sentences and our sliding‐window spans
+    tei_docs = [
+        doc for doc in docs
+        if doc["meta"].get("type") in ("sentence", "sentence_window")
+    ]
+
     default_retr = Retriever(
         index_path=folder / "default",
         max_sentences=max_sentences,

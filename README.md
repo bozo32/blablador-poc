@@ -109,4 +109,4 @@ CLI entrypoint to launch both FastAPI backend and Streamlit frontend, with healt
 This project is licensed under the MIT License. See `LICENSE` for details.
 
 ## Test data
-There are files in testing/dummy data to support testing of the scripts.
+There are files in tests/dummy data to support testing of the scripts.

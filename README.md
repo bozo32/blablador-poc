@@ -17,6 +17,7 @@ An integrated system for segmenting citing sentences into discrete claims and te
 - [Project Structure](#project-structure)
 - [Modules](#modules)
 - [Contributing](#contributing)
+- [Test data](#test-data)
 - [License](#license)
 
 ## Upstream
@@ -106,3 +107,6 @@ CLI entrypoint to launch both FastAPI backend and Streamlit frontend, with healt
 
 ## License
 This project is licensed under the MIT License. See `LICENSE` for details.
+
+## Test data
+There are files in testing/dummy data to support testing of the scripts.

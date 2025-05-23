@@ -4,25 +4,29 @@ import os, json
 import logging
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s ▶ %(message)s")
 import functools
-from transformers import pipeline as hf_pipeline
+from transformers import pipeline
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from backend.bl_client import BlabladorClient   # new central wrapper
 from requests import HTTPError
+from functools import lru_cache
 
 THRESHOLD = 0.0
 
-@functools.lru_cache()
+@lru_cache(maxsize=None)
 def get_nli_pipeline(model_name: str):
     """
-    Return a HF text-classification pipeline for the given model,
-    configured to return all label scores (so we can extract entail/contradiction).
+    Dynamically load any Hugging Face sequence-classification model as an NLI pipeline.
+    Cached to avoid reloading.
     """
-    return hf_pipeline(
+    # Load tokenizer and model from Hugging Face
+    tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True)
+    model = AutoModelForSequenceClassification.from_pretrained(model_name)
+    # Return a text-classification pipeline configured for NLI
+    return pipeline(
         "text-classification",
-        model=model_name,
-        return_all_scores=True,
-        truncation=True,
-        device=-1,
+        model=model,
+        tokenizer=tokenizer,
+        return_all_scores=True
     )
 
 def predict_nli(premise: str, hypothesis: str):

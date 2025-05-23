@@ -82,6 +82,8 @@ becomes
     cold water causes hypothermia
     snow causes hypothermia
 
+Some citing sentences directly mention the source. They may take variants on the form '(author name) found that A causes 1. In such cases drop the direct mention of the source so that the sentence becomes 'A causes 1'
+
 List each segment on its own line, numbered {row_idx}a, {row_idx}b, etc., continuing alphabetically. 
 
 Sentence:

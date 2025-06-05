@@ -1,40 +1,24 @@
+# backend/main.py
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
-import os, json
-from typing import Optional, Dict, Any
+import os, json, logging
+from typing import Optional, Dict, Any, List
 from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
+
 from . import parser, retriever, schemas, utils
-# Import assess directly for clarity and to update signature
 from .nli import assess
 from .parser import tei_and_csv_to_documents
 from .retriever import build_all
 from .utils import pick_best_passage
 
-# Add requests and logging imports
-import requests
-import logging
+# Configure logging (so that logger.debug/info/etc. actually prints)
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s ▶ %(message)s",
     level=logging.DEBUG,
 )
 logger = logging.getLogger(__name__)
-
-
-# Import embed_documents from bl_client
-from .bl_client import embed_documents
-
-
-# Import time for retry back-off
-import time
-
-# --------- Pydantic model for /segment request ----------
-class SegmentRequest(BaseModel):
-    folder: str
-    row: int
-    segments: List[str]
-    settings: Optional[Dict[str, Any]] = None
 
 app = FastAPI(title="Blablador NLI backend")
 
@@ -52,75 +36,35 @@ app.add_middleware(
     allow_methods=["*"], allow_headers=["*"],
 )
 
+# Store in-memory indices here
 results, retrievers = {}, {}
 
-def _paper_key(author: str, year: int) -> str:
-    return f"{author}-{year}"
 
-# ---------- index builder ----------
-def prebuild_indexes(
-    csv_path: Path,
-    embed_model: str = "alias-embeddings",
-    max_chunks: int = 256,
-    faiss_min_score: float = 0.2,
-):
-    df = utils.read_csv(csv_path)  # ✔ single call
-    print("Prebuilding from:", csv_path, "rows:", len(df))
-    required = {"Cited Author", "Cited Year", "tei_sentence", "TEI File"}
-    missing = required - set(df.columns)
-    if missing:
-        raise ValueError(f"CSV missing {missing}; found {list(df.columns)}")
-
-    for (author, year), _ in df.groupby(["Cited Author", "Cited Year"]):
-        key = _paper_key(author, year)
-        tei_path = SOURCE_DIR / f"{author}.pdf.tei.xml"
-        # Parse TEI chunks
-        docs = parser.parse_chunks(tei_path)
-
-        idx_base = Path("backend/models") / key
-        idx_base.parent.mkdir(parents=True, exist_ok=True)
-        retr = retriever.Retriever(
-            index_path=idx_base,
-            max_sentences=max_chunks,
-            min_score=faiss_min_score,
-            embed_model=embed_model,
-            api_key=os.environ.get("API_KEY"),
-            base_url=os.environ.get("BASE_URL"),
-            # Pass the TEI chunk list as a lookup map for later retrieval
-            docstore={chunk["id"]: chunk for chunk in docs},
-        )
-        retr.build(docs)
-        retrievers[key] = retr
-    
-#
-# Replace embeddings with embed_documents and fix session state references
-from backend.schemas import SentencePayload, Settings
-
+# ---------- /segment endpoint ----------
 @app.post("/segment")
-async def segment(req: SentencePayload):
+async def segment(req: schemas.SentencePayload):
     """
     Process a set of user-generated segments for one CSV row.
     """
-    # if nobody has ever called /prebuild, do it now so we at least have a default index
+    # 1) If no FAISS index exists yet, build it on the fly
     if not retrievers:
         try:
             retrievers.update(
                 build_all(
                     folder=Path(req.folder),
                     embed_model=req.settings.embed_model,
-                    api_key=req.settings.api_key,
-                    base_url=req.settings.base_url,
                     max_sentences=req.settings.max_sentences,
                     min_score=req.settings.faiss_min_score,
                 )
             )
+            logging.info("Built FAISS indices on the fly (default).")
         except Exception as e:
             raise HTTPException(
                 status_code=500,
                 detail=f"Could not build FAISS indices on the fly: {e}"
             )
 
-    # now pick the per‐paper retriever, or fall back to the global default
+    # 2) Pick the per-paper retriever (or fall back to "default")
     key = f"{req.citing_title}-{req.settings.data_dir or 'default'}"
     retr = retrievers.get(key) or retrievers.get("default")
     if retr is None:
@@ -129,38 +73,38 @@ async def segment(req: SentencePayload):
             detail=f"No FAISS index found for key={key} and no default index available"
         )
 
-    # Embed all segments in one shot
+    # 3) Embed all submitted “segments” locally (via sentence-transformers)
     seg_texts = [seg.claim for seg in req.segments]
     logger.debug(f"[EMBED] embedding segments: {seg_texts}")
-    seg_vecs = embed_documents(
-        [{"text": t} for t in seg_texts],
-        model=req.settings.embed_model,
-        api_key=req.settings.api_key,
-        base_url=req.settings.base_url,
-    )
+    try:
+        seg_vecs = utils.embed(seg_texts, model_name=req.settings.embed_model)
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Local embedding failed: {e}"
+        )
     logger.debug(f"[EMBED] returned {len(seg_vecs)} vectors; example vec[0]={seg_vecs[0] if seg_vecs else None}")
 
     response_segments = []
     for seg, vec in zip(req.segments, seg_vecs):
         logger.debug(f"[SEGMENT]={seg.segment_id} claim={seg.claim!r}")
 
-        # 2) FAISS SEARCH
+        # 4) FAISS search (top-k candidates)
         k_cap = req.settings.max_sentences or len(retr.chunks)
         ids, scores = retr.search([vec], k=k_cap)
         logger.debug(f"[FAISS] raw ids={ids[0]} scores={scores[0]}")
 
-        # 3) FAISS THRESHOLD + CAP
+        # 5) Threshold + cap to top 25
         filtered = [
             (doc_id, score)
             for doc_id, score in zip(ids[0], scores[0])
             if score >= req.settings.faiss_min_score
         ]
-        # keep only top‐25 by score
         filtered.sort(key=lambda x: x[1], reverse=True)
         filtered = filtered[:25]
         logger.debug(f"[FAISS→filtered] {filtered}")
 
-        # 4) PREPARE NLI INPUTS
+        # 6) Assemble texts and metadata for NLI
         texts, metadatas = [], []
         for doc_id, faiss_score in filtered:
             chunk = retr.docstore.get(doc_id)
@@ -173,7 +117,7 @@ async def segment(req: SentencePayload):
             metadatas.append(m)
         logger.debug(f"[NLI] inputs texts={len(texts)} passages")
 
-        # 5) NLI (we keep only entailment/contradiction above threshold)
+        # 7) Run NLI (entailment/contradiction) locally via HF pipeline
         raw_nli = assess(
             seg.claim,
             texts,
@@ -183,6 +127,8 @@ async def segment(req: SentencePayload):
         logger.debug(f"[NLI→raw] {raw_nli}")
         if not raw_nli:
             logger.warning(f"[NLI] no raw evidence returned for segment {seg.segment_id!r}")
+
+        # 8) Filter NLI results by label & threshold
         evidences = []
         for ev in raw_nli:
             label = ev.get("label")
@@ -199,17 +145,17 @@ async def segment(req: SentencePayload):
             })
         logger.debug(f"[NLI→filtered] {evidences}")
 
-        # 6) Dual LLM picks: support + contradiction, both over ALL evidences
-        texts = [e["text"] for e in evidences]
-        if texts:
+        # 9) If there is at least one piece of evidence, run pick_best_passage
+        texts_for_llm = [e["text"] for e in evidences]
+        if texts_for_llm:
             sup_id, sup_rat = pick_best_passage(
-                seg.claim, texts, "support",
+                seg.claim, texts_for_llm, "support",
                 model_name=req.settings.llm_model,
                 api_key=req.settings.api_key,
                 base_url=req.settings.base_url,
             )
             con_id, con_rat = pick_best_passage(
-                seg.claim, texts, "contradict",
+                seg.claim, texts_for_llm, "contradict",
                 model_name=req.settings.llm_model,
                 api_key=req.settings.api_key,
                 base_url=req.settings.base_url,
@@ -219,54 +165,45 @@ async def segment(req: SentencePayload):
             sup_rat = con_rat = None
 
         response_segments.append({
-            "segment_id":              seg.segment_id,
-            "claim":                   seg.claim,
-            "evidence":                evidences,
-            "best_support_id":         sup_id,
-            "support_rationale":       sup_rat,
-            "best_contradiction_id":   con_id,
+            "segment_id":            seg.segment_id,
+            "claim":                 seg.claim,
+            "evidence":              evidences,
+            "best_support_id":       sup_id,
+            "support_rationale":     sup_rat,
+            "best_contradiction_id": con_id,
             "contradiction_rationale": con_rat,
         })
 
     return {"row_id": req.row_id, "status": "done", "segments": response_segments}
 
-@app.get("/progress/{row_id}")
-async def progress(row_id: int):
-    # Check if any segment for this row_id is present in results
-    str_row_id = str(row_id)
-    for paper in results.values():
-        for cp in paper.get("citing_papers", {}).values():
-            for sent in cp.get("sentences", []):
-                for seg in sent.get("segments", []):
-                    if str(seg.get("segment_id", "")).startswith(str_row_id):
-                        return {"row_id": row_id, "status": "done"}
-    return {"row_id": row_id, "status": "pending"}
 
-# ---------- manual prebuild endpoint ----------
-class PrebuildRequest(BaseModel):
-    folder: str
-    embed_model: str = "alias-embeddings"
-    max_chunks: int = 256
-    faiss_min_score: float = 0.2
-    api_key: str
-    base_url: str
-
+# ---------- /prebuild endpoint ----------
 @app.post("/prebuild")
-async def prebuild(req: PrebuildRequest):
+def prebuild(req: schemas.PrebuildRequest):
+    import math
     try:
+        # 1) Validate numeric fields
+        if req.max_chunks is not None and (not isinstance(req.max_chunks, int) or req.max_chunks <= 0):
+            raise HTTPException(status_code=400, detail="max_chunks must be a positive integer")
+        if req.faiss_min_score is not None and (not isinstance(req.faiss_min_score, float) or math.isnan(req.faiss_min_score) or math.isinf(req.faiss_min_score)):
+            raise HTTPException(status_code=400, detail="faiss_min_score must be a real float between 0 and 1")
+
+        # 2) Rebuild global retrievers using local embedding
         global retrievers
         retrievers.clear()
-        retrievers.update(retriever.build_all(
-            folder=Path(req.folder),
-            embed_model=req.embed_model,
-            api_key=req.api_key,
-            base_url=req.base_url,
-            max_sentences=req.max_chunks,
-            min_score=req.faiss_min_score
-        ))
-        # Log the successful build
+        retrievers.update(
+            build_all(
+                folder=Path(req.folder),
+                embed_model=req.embed_model,
+                max_sentences=req.max_chunks,
+                min_score=req.faiss_min_score
+            )
+        )
         logging.info(f"FAISS index built for folder: {req.folder!r}")
         return {"status": "ok"}
+
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Prebuild error: {e}")
         raise HTTPException(status_code=500, detail=str(e))

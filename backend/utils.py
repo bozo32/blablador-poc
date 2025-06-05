@@ -9,6 +9,7 @@ import logging
 from requests import HTTPError
 from backend.bl_client import BlabladorClient
 from typing import List, Tuple, Literal, Optional  # new import
+from sentence_transformers import SentenceTransformer
 
 
 def clean_text(text: str) -> str:
@@ -53,16 +54,52 @@ def read_csv(path: Path | str) -> pd.DataFrame:
     header, *data = rows
     return pd.DataFrame(data, columns=header)
 
-# Embedding utility using OpenAI
+# ----------------------------------------
+# Local‐HF sentence‐transformers cache & loading
+# ----------------------------------------
 
-def embed(texts: list[str]) -> list[list[float]]:
-    from backend.bl_client import embeddings
-    return embeddings(
+# Use a dedicated cache folder for local HF models
+MODEL_CACHE_DIR = Path.home() / ".cache/hf_sentence_models"
+MODEL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+# List locally cached models (those with a config.json file)
+def list_local_models() -> list[str]:
+    return sorted([
+        d.name
+        for d in MODEL_CACHE_DIR.iterdir()
+        if d.is_dir() and (d / "config.json").exists()
+    ])
+
+# Cache loaded models in memory for performance
+_loaded_models: dict[str, SentenceTransformer] = {}
+
+def get_model(model_name: str) -> SentenceTransformer:
+    """
+    Load a SentenceTransformer from local cache if present; otherwise, download to MODEL_CACHE_DIR.
+    """
+    if model_name in _loaded_models:
+        return _loaded_models[model_name]
+    try:
+        local_path = MODEL_CACHE_DIR / model_name
+        if local_path.exists():
+            model = SentenceTransformer(str(local_path))
+        else:
+            model = SentenceTransformer(model_name, cache_folder=str(MODEL_CACHE_DIR))
+        _loaded_models[model_name] = model
+        return model
+    except Exception as e:
+        raise RuntimeError(f"Could not load embedding model '{model_name}': {e}")
+
+def embed(texts: list[str], model_name: str = "all-MiniLM-L6-v2") -> list[list[float]]:
+    """
+    Embed texts using a local Hugging Face model (as chosen by the user).
+    """
+    model = get_model(model_name)
+    return model.encode(
         texts,
-        model="alias-embeddings",
-        api_key=os.getenv("BLABLADOR_API_KEY"),
-        base_url=os.getenv("BLABLADOR_BASE")
-    )
+        show_progress_bar=False,
+        convert_to_numpy=True
+    ).tolist()
 
 def pick_best_passage(
     claim: str,
@@ -125,4 +162,4 @@ def pick_best_passage(
     logging.warning("Falling back to highest-FAISS-score passage (index 0) without rationale")
     return 0, "no rationale"
 
-__all__ = ['clean_text', 'read_csv', 'embed', 'pick_best_passage']
+__all__ = ['clean_text', 'read_csv', 'embed', 'list_local_models', 'get_model', 'pick_best_passage']

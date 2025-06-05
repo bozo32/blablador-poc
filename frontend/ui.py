@@ -3,6 +3,7 @@ import tempfile
 import streamlit as st
 import requests
 import re
+import pandas as pd
 from pathlib import Path
 
 
@@ -46,9 +47,9 @@ def get_responsive_models():
   # ---------- default Session-State values ----------
 _defaults = {
       "embed_model":    "alias-embeddings",
-      "max_chunks":     256,
+      "max_chunks":     1024,  
       "faiss_min_score":0.20,
-      "max_sentences": 250,
+      "max_sentences": 1000,  # default max sentences for FAISS index
 }
 for _k, _v in _defaults.items():
       st.session_state.setdefault(_k, _v)
@@ -70,19 +71,29 @@ def reset_segmentation():
 
 
 SEGMENT_PROMPT_TEMPLATE = """You are an expert at breaking sentences into standalone proposition segments.
-For example, given a sentence A and B cause 1 and 2 generate 4 segments:
+For example, given a sentence A and B cause 1 and 2 you generate 4 segments:
     A causes 1
     A causes 2
     B causes 1
     B causes 2
 
-Keep modifiers with nouns. For example
+You only work with the words provided in the prompting sentence
+For example, give the sentence A causes B, you generate:
+    A causes B
+You do not add any extra information, context, or explanation. 
+You do not use synonyms or paraphrases. 
+You do not add any new ideas or concepts that are not present in the original sentence.
+
+You always keep modifiers (adjectives or adverbs) with what they modify (nouns or verbs). For example
 immersion in cold water or snow causes hypothermia 
 becomes
     cold water causes hypothermia
     snow causes hypothermia
 
-Some citing sentences directly mention the source. They may take variants on the form '(author name) found that A causes 1. In such cases drop the direct mention of the source so that the sentence becomes 'A causes 1'
+Some citing sentences directly mention the source. 
+They may take variants on the form '(author name) found that A causes 1. 
+In such cases drop the direct mention of the source so that the sentence becomes: 
+    A causes 1
 
 List each segment on its own line, numbered {row_idx}a, {row_idx}b, etc., continuing alphabetically. 
 
@@ -234,17 +245,46 @@ def main():
             help="Supported Blablador chat models (fetched dynamically)"
         )
 
-        # Embedding model (Blablador only)
+        # --- Embedding model picker ---
+        from backend.utils import list_local_models
+        local_models = list_local_models()
+        default_model = "all-MiniLM-L6-v2"
+
+        # 1) Let user paste a new model name into a text box
+        custom_model = st.text_input(
+            "Paste HF model name to download/use (e.g. all-MiniLM-L6-v2, then hit Enter)",
+            value=st.session_state.get("custom_embed_model", st.session_state.get("embed_model", default_model)),
+            key="custom_embed_model"
+        )
+
+        # 2) Build the dropdown list. Always include the current custom_model if non-empty.
+        choices = []
+        if custom_model:
+            choices.append(custom_model)
+        for m in local_models:
+            if m != custom_model:
+                choices.append(m)
+        if default_model not in choices:
+            choices.insert(0, default_model)
+
+        # 3) Determine the default index into choices
+        current_embed = st.session_state.get("embed_model", default_model)
+        if current_embed in choices:
+            default_index = choices.index(current_embed)
+        else:
+            default_index = 0
+
+        # 4) Create the selectbox. Streamlit will write the user’s choice into session_state["embed_model"].
         st.selectbox(
-            "Select embedding model",
-            ["alias-embeddings"],
-            index=0,
+            "Or select a previously downloaded embedding model:",
+            choices,
+            index=default_index,
             key="embed_model"
         )
 
         st.number_input(
             "Max initial sentences (FAISS cap)",
-            min_value=1, max_value=1000, value=250, step=1,
+            min_value=1, max_value=2000, value=1000, step=1,
             key="max_sentences",
             on_change=reset_segmentation
         )
@@ -357,11 +397,17 @@ def main():
                             "segment_id": f"{idx}{chr(97 + i)}",
                             "claim": seg_text
                         })
+
+                    # Coerce possible NaN → "" for the 'tei_target' field
+                    tid = row.get("tei_target", "")
+                    if pd.isna(tid):
+                        tid = ""
+
                     payload = {
                         "folder": st.session_state["data_dir"],
                         "row_id": idx,
                         "citing_title": row.get("Cited Author", ""),
-                        "citing_id": row.get("tei_target", ""),
+                        "citing_id":    tid,
                         "original_sentence": row["tei_sentence"],
                         "segments": segments_list,
                         "settings": {
@@ -395,13 +441,18 @@ def main():
         with st.spinner("Building FAISS index in background…"):
             api_url = st.session_state.get("api_url", "http://localhost:8000")
             try:
+                import math
+                max_sent = st.session_state["max_sentences"]
+                if pd.isna(max_sent) or (isinstance(max_sent, float) and math.isnan(max_sent)):
+                    max_sent = 256
+                min_score = st.session_state["faiss_min_score"]
+                if pd.isna(min_score) or (isinstance(min_score, float) and math.isnan(min_score)):
+                    min_score = 0.2
                 body = {
                     "folder": str(st.session_state["data_dir"]),
-                    "embed_model":   st.session_state["embed_model"],
-                    "max_chunks":    int(st.session_state["max_sentences"]),
-                    "faiss_min_score": float(st.session_state["faiss_min_score"]),
-                    "api_key":  st.session_state["bl_api_key"],
-                    "base_url": st.session_state["bl_base_url"],
+                    "embed_model": st.session_state["embed_model"],
+                    "max_chunks": int(max_sent),
+                    "faiss_min_score": float(min_score),
                 }
                 prebuild_resp = requests.post(
                     f"{api_url}/prebuild",
@@ -431,5 +482,26 @@ def main():
             file_name="citation_support_results.json",
             mime="application/json"
         )
+
+def run_prebuild():
+    # (somewhere you collect these from sliders/text inputs)
+    max_chunks = st.session_state["max_chunks"]
+    faiss_min_score = st.session_state["faiss_min_score"]
+
+    # Coerce NaN → 0 (or whatever default you prefer) before building JSON:
+    if pd.isna(max_chunks):
+        max_chunks = None
+    if pd.isna(faiss_min_score):
+        faiss_min_score = 0.0
+
+    payload = {
+        "folder": st.session_state["data_dir"],
+        "max_chunks": max_chunks,
+        "faiss_min_score": float(faiss_min_score),
+        "embed_model": st.session_state["embed_model"],
+        "api_key": st.session_state["api_key"],
+        "base_url": st.session_state["base_url"],
+    }
+    resp = requests.post(f"{api_url}/prebuild", json=payload)
 
 main()

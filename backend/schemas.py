@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 from typing import List, Optional, Dict, Any
 
 class Evidence(BaseModel):
@@ -21,14 +21,23 @@ class Segment(BaseModel):
 
 class Settings(BaseModel):
     embed_model: Optional[str] = Field(None, description="Embedding model alias or HF path")
-    max_sentences: Optional[int] = Field(None, description="How many FAISS candidates to pull before thresholding")
-    faiss_min_score: Optional[float] = Field(None, description="Minimum FAISS similarity score threshold")
+    max_sentences: Optional[int] = Field(None, ge=1, le=10000, description="How many FAISS candidates to pull before thresholding")
+    faiss_min_score: Optional[float] = Field(None, ge=0.0, le=1.0, description="Minimum FAISS similarity score threshold")
     nli_model: Optional[str] = Field(None, description="Local NLI model for entailment/contradiction")
     llm_model: Optional[str] = Field(None, description="LLM model alias for remote calls")
-    nli_threshold: Optional[float] = Field(None, description="Minimum NLI confidence threshold")
+    nli_threshold: Optional[float] = Field(None, ge=0.0, le=1.0, description="Minimum NLI confidence threshold")
     data_dir: Optional[str] = Field(None, description="Path to the folder containing CSV and TEI files")
     api_key: Optional[str] = Field(None, description="API key for Blablador service")
     base_url: Optional[str] = Field(None, description="Base URL for the Blablador API endpoint")
+
+    @validator("max_sentences", "faiss_min_score", "nli_threshold", pre=True, always=True)
+    def check_not_nan(cls, v):
+        import math
+        if v is None:
+            return v
+        if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+            raise ValueError("Field must not be NaN or infinite")
+        return v
 
 class SentenceResult(BaseModel):
     text: str
@@ -66,3 +75,18 @@ class SentencePayload(BaseModel):
         ...,  # required
         description="Runtime settings for embedding, FAISS, NLI, and LLM models",
     )
+
+class PrebuildRequest(BaseModel):
+    folder: str
+    embed_model: str = "alias-embeddings"
+    max_chunks: int = 256
+    faiss_min_score: float = 0.2
+
+    @validator("max_chunks", "faiss_min_score", pre=True, always=True)
+    def check_not_nan(cls, v):
+        import math
+        if v is None:
+            return v
+        if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+            raise ValueError("Field must not be NaN or infinite")
+        return v

@@ -141,6 +141,7 @@ async def segment(req: schemas.SentencePayload):
                 "text":  ev.get("text", ""),
                 "score": score,
                 "label": label,
+                "section_path": ev.get("meta", {}).get("section_path"),  
                 **{k: v for k, v in ev.items() if k not in ("text", "score", "label")},
             })
         logger.debug(f"[NLI→filtered] {evidences}")

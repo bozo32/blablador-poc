@@ -24,6 +24,21 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+NS = {"tei": "http://www.tei-c.org/ns/1.0"}
+
+_RE_WS = re.compile(r"\s+")
+
+# --- NEW: helper for section path extraction ---
+def _section_path_from_paragraph(p_elem, div_meta_map):
+    # Collect <head> values from all ancestor <div> (from outermost to innermost)
+    ancestors = p_elem.xpath("ancestor::tei:div", namespaces=NS)
+    heads = []
+    for div in reversed(ancestors):  # outermost to innermost
+        meta = div_meta_map.get(div)
+        if meta and meta.get("head"):
+            heads.append(meta["head"].strip())
+    return ":".join(heads) if heads else None
+
 def tei_and_csv_to_documents(folder: Path, csv_path: str) -> list[dict]:
     """
     Load TEI-XML chunks + CSV citing sentences into one list of {'text','meta'} dicts.
@@ -34,6 +49,7 @@ def tei_and_csv_to_documents(folder: Path, csv_path: str) -> list[dict]:
         tei_docs.extend(chunks)
 
     df = read_csv(csv_path)
+    df = df[df["tei_sentence"].notnull()]
     # Build docs from CSV citing sentences, including author and year for retriever keys
     # Ensure Cited Year is an integer
     df["Cited Year"] = df["Cited Year"].astype(int)
@@ -51,12 +67,6 @@ def tei_and_csv_to_documents(folder: Path, csv_path: str) -> list[dict]:
 
     return tei_docs + citing_docs
 
-NS = {"tei": "http://www.tei-c.org/ns/1.0"}
-
-_RE_WS = re.compile(r"\s+")
-
-
-
 # Helper to strip XML tags and citation markers
 def _strip_citations(txt: str) -> str:
     # remove anything in angle brackets and citation markers like #[...] or [\d+]
@@ -70,7 +80,6 @@ def _clean(txt: str) -> str:
     txt = _strip_citations(txt)
     return _RE_WS.sub(" ", txt).strip()
 
-
 def _add_chunk(chunks: List[Dict], text: str, kind: str, chunk_id: str | None = None) -> None:
     """Utility to append non‑empty chunks with a meta tag."""
     text = _clean(text)
@@ -79,7 +88,6 @@ def _add_chunk(chunks: List[Dict], text: str, kind: str, chunk_id: str | None = 
         if chunk_id is not None:
             meta["id"] = chunk_id
         chunks.append({"text": text, "meta": meta})
-
 
 # --------------------------------------------------------------------------- #
 #   Public API
@@ -111,6 +119,8 @@ def tei_to_chunks(tei_path: Path) -> List[Dict]:
         # section metadata if available
         ancestor_divs = p.xpath("ancestor::tei:div", namespaces=NS)
         section_info = div_meta_map.get(ancestor_divs[0]) if ancestor_divs else None
+        # --- NEW: get full section path ---
+        section_path = _section_path_from_paragraph(p, div_meta_map)
         # collect cleaned sentences and ids
         s_elems = p.xpath(".//tei:s", namespaces=NS)
         texts, ids = [], []
@@ -142,6 +152,9 @@ def tei_to_chunks(tei_path: Path) -> List[Dict]:
                         "section_type": section_info.get("type"),
                         "section_head": section_info.get("head"),
                     })
+                # --- NEW: include hierarchical section_path ---
+                if section_path:
+                    meta["section_path"] = section_path
                 chunks.append({
                     "text": window_text,
                     "id": window_id,
@@ -149,7 +162,6 @@ def tei_to_chunks(tei_path: Path) -> List[Dict]:
                 })
     print(f"Parsed {len(chunks)} sentence-window chunks from {tei_path.name}")
     return chunks
-
 
 # ========================================================================= #
 #  Data Integrity & Improvement Options                                      #
@@ -211,7 +223,6 @@ def parse_chunks(tei_path: Path) -> List[dict]:
 
     print(f"Parsed {len(docs)} chunks from {tei_path.name}")
     return docs
-
 
 # --------------------------------------------------------------------------- #
 #   Figure caption sentence splitter

@@ -113,21 +113,26 @@ def assess(
         con = next((p for p in preds if p["label"].lower() == "contradiction"), None)
 
         if ent and ent["score"] >= THRESHOLD:
-            evidence.append({
-                "text":       text,
-                "chunk_id":   meta.get("chunk_id"),
-                "type":       meta.get("type"),
-                "label":      "entailment",
-                "score":      ent["score"],
-            })
+            ev_dict = {
+                "text": text,
+                "label": "entailment",
+                "score": ent["score"],
+                **meta
+            }
+            # Always set chunk_id and type explicitly for consistency:
+            ev_dict["chunk_id"] = meta.get("id") or meta.get("chunk_id")
+            ev_dict["type"] = meta.get("type")
+            evidence.append(ev_dict)
 
         if con and con["score"] >= THRESHOLD:
-            evidence.append({
-                "text":       text,
-                "chunk_id":   meta.get("chunk_id"),
-                "type":       meta.get("type"),
-                "label":      "contradiction",
-                "score":      con["score"],
-            })
+            ev_dict = {
+                "text": text,
+                "label": "contradiction",
+                "score": con["score"],
+                **meta
+            }
+            ev_dict["chunk_id"] = meta.get("id") or meta.get("chunk_id")
+            ev_dict["type"] = meta.get("type")
+            evidence.append(ev_dict)
 
     return evidence

@@ -30,15 +30,22 @@ _RE_WS = re.compile(r"\s+")
 
 # --- NEW: helper for section path extraction ---
 def _section_path_from_paragraph(p_elem, div_meta_map):
-    # Collect <head> values from all ancestor <div> (from outermost to innermost)
+    # Collect <head> values + IDs from all ancestor <div> (outermost → innermost)
     ancestors = p_elem.xpath("ancestor::tei:div", namespaces=NS)
-    heads = []
+    breadcrumbs = []
     for div in reversed(ancestors):  # outermost to innermost
         meta = div_meta_map.get(div)
-        if meta and meta.get("head"):
-            heads.append(meta["head"].strip())
-    return ":".join(heads) if heads else None
-
+        if not meta:
+            continue
+        head_text = meta.get("head")
+        sec_id = meta.get("id")
+        if head_text:
+            head_text = head_text.strip()
+            if sec_id:
+                breadcrumbs.append(f"{sec_id} {head_text}")
+            else:
+                breadcrumbs.append(head_text)
+    return " > ".join(breadcrumbs) if breadcrumbs else None
 def tei_and_csv_to_documents(folder: Path, csv_path: str) -> list[dict]:
     """
     Load TEI-XML chunks + CSV citing sentences into one list of {'text','meta'} dicts.

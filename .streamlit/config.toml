@@ -1,0 +1,7 @@
+# .streamlit/config.toml
+
+[server]
+fileWatcherType = "watchdog"
+
+[watcher]
+ignoreDirectories = ["torch"]

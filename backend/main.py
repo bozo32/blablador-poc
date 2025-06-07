@@ -11,7 +11,7 @@ from . import parser, retriever, schemas, utils
 from .nli import assess
 from .parser import tei_and_csv_to_documents
 from .retriever import build_all
-from .utils import pick_best_passage
+from .utils import pick_best_passage, rerank
 
 # Configure logging (so that logger.debug/info/etc. actually prints)
 logging.basicConfig(
@@ -103,6 +103,28 @@ async def segment(req: schemas.SentencePayload):
         filtered.sort(key=lambda x: x[1], reverse=True)
         filtered = filtered[:25]
         logger.debug(f"[FAISS→filtered] {filtered}")
+
+        # ——— 5.5) Rerank the FAISS candidates if requested ———
+        if req.settings.reranker_model:
+            # build candidate dicts
+            candidates = [
+                {
+                    "id": doc_id,
+                    "text": retr.docstore[doc_id]["text"],
+                    "meta": retr.docstore[doc_id]["meta"],
+                    "faiss_score": score,
+                }
+                for doc_id, score in filtered
+            ]
+            reranked = utils.rerank(
+                query=seg.claim,
+                candidates=candidates,
+                model_name=req.settings.reranker_model,
+                top_k=req.settings.reranker_top_k,
+            )
+            # replace filtered list (preserving original FAISS score)
+            filtered = [(c["id"], c["faiss_score"]) for c in reranked]
+# ————————————————————————————————
 
         # 6) Assemble texts and metadata for NLI
         texts, metadatas = [], []

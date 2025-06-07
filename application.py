@@ -40,17 +40,19 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Citation checking CLI")
     parser.add_argument("--folder", help="Path to folder containing CSV and TEI.XML files", default=os.getenv("DATA_FOLDER", "."))
-    parser.add_argument("--api_key", help="Blablador API key", default=os.getenv("BLABLADOR_API_KEY", ""))
-    parser.add_argument("--api_base", help="Blablador API base URL", default=os.getenv("BLABLADOR_BASE", None))
+    parser.add_argument("--api_key", help="Blablador API key", default=os.getenv("API_KEY", ""))
+    parser.add_argument("--api_base", help="Blablador API base URL", default=os.getenv("API_BASE", None))
     args = parser.parse_args()
 
     args.csv = str(Path(args.folder) / "short.csv")  # or whichever default filename you're expecting
     os.environ["SOURCE_DIR"] = str(Path(args.folder))
 
-    if args.api_key:
-        os.environ["BLABLADOR_API_KEY"] = args.api_key
+    # Export unified env vars for frontend and backend
+    os.environ["API_KEY"] = args.api_key
     if args.api_base:
-        os.environ["BLABLADOR_BASE"] = args.api_base
+        os.environ["API_BASE"] = args.api_base
+    # Set backend URL for the UI to call
+    os.environ.setdefault("BACKEND_URL", f"http://localhost:8000")
 
     # Prebuild is now triggered later from UI after user uploads folder
     # Preprocess citations
@@ -65,7 +67,10 @@ if __name__ == "__main__":
     ]
     # pass arguments to ui.py _after_ the `--` separator so Streamlit doesn't
     # try to parse them.
-    frontend_cmd = ["streamlit", "run", "frontend/ui.py"]
+    frontend_cmd = [
+        "streamlit", "run", "frontend/ui.py",
+        "--server.fileWatcherType", "watchdog"
+    ]
 
     def backend_ready(proc: subprocess.Popen) -> bool:
         """

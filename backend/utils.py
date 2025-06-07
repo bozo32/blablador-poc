@@ -9,7 +9,7 @@ import logging
 from requests import HTTPError
 from backend.bl_client import BlabladorClient
 from typing import List, Tuple, Literal, Optional  # new import
-from sentence_transformers import SentenceTransformer
+from sentence_transformers import SentenceTransformer, CrossEncoder
 
 
 def clean_text(text: str) -> str:
@@ -162,4 +162,26 @@ def pick_best_passage(
     logging.warning("Falling back to highest-FAISS-score passage (index 0) without rationale")
     return 0, "no rationale"
 
-__all__ = ['clean_text', 'read_csv', 'embed', 'list_local_models', 'get_model', 'pick_best_passage']
+def rerank(
+    query: str,
+    candidates: list[dict],
+    model_name: str,
+    top_k: int
+) -> list[dict]:
+    """
+    candidates: list of dicts with keys 'text' plus any metadata.
+    Returns the same dicts with an added 'rerank_score', sorted and sliced to top_k.
+    """
+    # 1) Load (or cache) the cross-encoder
+    model = CrossEncoder(model_name)
+    # 2) Score each (query, passage)
+    pairs = [(query, c["text"]) for c in candidates]
+    scores = model.predict(pairs).tolist()
+    # 3) Attach and sort
+    for c, s in zip(candidates, scores):
+        c["rerank_score"] = float(s)
+    candidates.sort(key=lambda c: c["rerank_score"], reverse=True)
+    # 4) Return top_k
+    return candidates[:top_k]
+
+__all__ = ['clean_text', 'read_csv', 'embed', 'list_local_models', 'get_model', 'pick_best_passage', 'rerank']

@@ -16,3 +16,5 @@ torch
 transformers
 tqdm
 uvicorn
+pydantic_settings
+watchdog

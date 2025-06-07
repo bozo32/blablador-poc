@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional, Dict, Any
 
 class Evidence(BaseModel):
@@ -29,8 +29,17 @@ class Settings(BaseModel):
     data_dir: Optional[str] = Field(None, description="Path to the folder containing CSV and TEI files")
     api_key: Optional[str] = Field(None, description="API key for Blablador service")
     base_url: Optional[str] = Field(None, description="Base URL for the Blablador API endpoint")
+    reranker_model: Optional[str] = Field(
+        None,
+        description="HF path for cross-encoder reranker (e.g. 'cross-encoder/mmarco-mMiniLMv2-L12-H384-v1')"
+    )
+    reranker_top_k: int = Field(
+        10,
+        ge=1,
+        description="How many of the FAISS candidates to keep after reranking"
+    )
 
-    @validator("max_sentences", "faiss_min_score", "nli_threshold", pre=True, always=True)
+    @field_validator("max_sentences", "faiss_min_score", "nli_threshold", mode="before")
     def check_not_nan(cls, v):
         import math
         if v is None:
@@ -82,8 +91,8 @@ class PrebuildRequest(BaseModel):
     max_chunks: int = 256
     faiss_min_score: float = 0.2
 
-    @validator("max_chunks", "faiss_min_score", pre=True, always=True)
-    def check_not_nan(cls, v):
+    @field_validator("max_chunks", "faiss_min_score", mode="before")
+    def check_not_nan_prebuild(cls, v):
         import math
         if v is None:
             return v

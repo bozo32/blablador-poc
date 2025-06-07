@@ -1,0 +1,12 @@
+{
+  "embed": [
+    "intfloat/multilingual-e5-base"
+  ],
+  "reranker": [
+    "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
+  ],
+  "nli": [
+    "MoritzLaurer/DeBERTa-v3-large-mnli-fever-anli-ling-wanli"
+  ],
+  "llm": []
+}

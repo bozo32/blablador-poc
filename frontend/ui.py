@@ -3,27 +3,31 @@
 # === Imports ===
 # Standard library
 import os
-import sys
 import pathlib
-import tempfile
 import re
+import sys
+import tempfile
+
+import pandas as pd
+import requests
+import streamlit as st
 
 # Add project root to sys.path so `backend` is importable
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from backend import utils
+from backend.bl_client import BlabladorClient
+from backend.model_cache import add_model, get_models
+from backend.settings import Settings
+from backend.utils import list_local_models
+
+
 # Third-party
-import streamlit as st
-import requests
-import pandas as pd
+
 
 # Local application
-from backend.settings import Settings
-from backend.model_cache import get_models, add_model
-from backend.utils import list_local_models
-from backend.bl_client import BlabladorClient
-from backend import utils
 
 # === Settings & State Initialization ===
 settings = Settings()
@@ -89,7 +93,7 @@ def get_responsive_models():
         )
         resp.raise_for_status()
         ids = [m["id"] for m in resp.json().get("data", [])]
-    except:
+    except BaseException:
         return []
     valid = []
     for m in ids:
@@ -102,7 +106,7 @@ def get_responsive_models():
             )
             if test.status_code == 200:
                 valid.append(m)
-        except:
+        except BaseException:
             pass
     return valid
 
@@ -129,9 +133,7 @@ For example, given a sentence A and B cause 1 and 2 you generate 4 segments:
 You only work with the words provided in the prompting sentence
 For example, given the sentence A causes B, you generate:
     A causes B
-You do not add any extra information, context, or explanation.
-You do not use synonyms or paraphrases.
-You do not add any new ideas or concepts that are not present in the original sentence.
+You stop segmenting when you run out of words in the original sentence.
 You always keep modifiers (adjectives or adverbs) with what they modify (nouns or verbs). For example
 immersion in cold water or snow causes hypothermia
 becomes
@@ -142,6 +144,8 @@ Some citing sentences directly mention the source.
 They may take variants on the form '(author name) found that A causes 1.'.
 In such cases drop the direct mention of the source so that the sentence becomes:
     A causes 1
+
+ **Do not output any explanation, commentary, or extra text. Only list the segments generated from the original sentence. Your output must end after the last segment.**
 
 List each segment on its own line, numbered {row_idx}a, {row_idx}b, etc., continuing alphabetically.
 
@@ -284,7 +288,8 @@ def draw_main():
         return
 
     st.title("Citation-Support Checker")
-    import glob, os
+    import glob
+    import os
 
     folder = st.session_state.get("data_dir", "")
     csv_files = glob.glob(os.path.join(folder, "*.csv"))
@@ -362,7 +367,7 @@ def draw_main():
                     resp = requests.post(f"{api_url}/segment", json=payload)
                     try:
                         st.session_state["results"][idx] = resp.json()
-                    except:
+                    except BaseException:
                         st.session_state["results"][idx] = resp.text
 
             # Display results for all rows

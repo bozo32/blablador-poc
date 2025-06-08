@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Literal, List
+from typing import List, Literal
 
 # We’ll track four categories of models
 ModelCategory = Literal["embed", "reranker", "nli", "llm"]

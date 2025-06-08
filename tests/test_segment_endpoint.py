@@ -1,8 +1,8 @@
 from transformers import (
-    AutoTokenizer,
     AutoModelForSequenceClassification,
-    pipeline as hf_pipeline,
+    AutoTokenizer,
 )
+from transformers import pipeline as hf_pipeline
 
 _LOCAL_NLI_MODELS = {}
 

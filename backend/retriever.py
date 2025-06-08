@@ -1,9 +1,11 @@
 from pathlib import Path
-from . import utils
-from .parser import tei_and_csv_to_documents
-from typing import List, Dict, Optional
+from typing import Dict, List, Optional
+
 import faiss
 import numpy as np
+
+from . import utils
+from .parser import tei_and_csv_to_documents
 
 
 class Retriever:

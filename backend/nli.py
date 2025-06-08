@@ -1,14 +1,14 @@
 # backend/nli.py
 
 import logging
+from functools import lru_cache
+
+from transformers import AutoModelForSequenceClassification, AutoTokenizer, pipeline
 
 logging.basicConfig(
     level=logging.DEBUG, format="%(asctime)s %(levelname)s ▶ %(message)s"
 )
-from transformers import pipeline
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
-from backend.bl_client import BlabladorClient  # new central wrapper
-from functools import lru_cache
+
 
 THRESHOLD = 0.0
 
@@ -49,10 +49,10 @@ _LOCAL_NLI_MODELS: dict[str, any] = {}
 
 def get_local_nli_pipeline(name: str):
     from transformers import (
-        AutoTokenizer,
         AutoModelForSequenceClassification,
-        pipeline as hf_pipeline,
+        AutoTokenizer,
     )
+    from transformers import pipeline as hf_pipeline
 
     if name not in _LOCAL_NLI_PATHS:
         raise KeyError(f"No local NLI model configured for '{name}'")

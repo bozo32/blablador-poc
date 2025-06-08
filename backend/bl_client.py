@@ -1,7 +1,8 @@
+import os
 import xml.etree.ElementTree as ET
 from pathlib import Path
+
 import requests
-import os
 
 
 def tei_to_chunks(xml_path: Path) -> list[dict]:
@@ -90,7 +91,7 @@ def embed_documents(docs, model, api_key, base_url):
     batch_size = 50  # adjust as needed
 
     for start in range(0, len(texts), batch_size):
-        batch = texts[start : start + batch_size]
+        batch = texts[start: start + batch_size]
         payload = {"model": model, "input": batch}
         try:
             resp = requests.post(url, headers=headers, json=payload, timeout=60)

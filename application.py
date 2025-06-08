@@ -1,13 +1,14 @@
-from typing import Dict, Any
-from transformers import (
-    AutoTokenizer,
-    AutoModelForSequenceClassification,
-    pipeline as hf_pipeline,
-)
 import os
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
+from typing import Any, Dict
+
+from transformers import (
+    AutoModelForSequenceClassification,
+    AutoTokenizer,
+)
+from transformers import pipeline as hf_pipeline
 
 _LOCAL_NLI_PATHS = {
     "roberta-large-mnli": "roberta-large-mnli",
@@ -102,7 +103,9 @@ if __name__ == "__main__":
         Poll the backend health‑check while also detecting early crashes.
         Returns True when http://localhost:8000/docs is reachable.
         """
-        import requests, time
+        import time
+
+        import requests
 
         for _ in range(30):
             if proc.poll() is not None:

@@ -12,14 +12,15 @@ Low‑level helpers for turning a GROBID‑TEI file into a list of
   surface the paragraph and NLI will judge the sentence‑level claim.
 """
 
+import logging
 import re
 from pathlib import Path
 from typing import Dict, List
+
 from lxml import etree
+
 from .utils import embed  # noqa: F401  (imported for side‑effects elsewhere)
 from .utils import read_csv
-
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -153,7 +154,7 @@ def tei_to_chunks(tei_path: Path) -> List[Dict]:
         # generate sliding windows sizes 1, 2, 3
         for w in (1, 2, 3):
             for i in range(len(texts) - w + 1):
-                window_text = " ".join(texts[i : i + w])
+                window_text = " ".join(texts[i: i + w])
                 window_id = f"{p_id}_w{w}_{i+1}"
                 meta = {
                     "id": window_id,
@@ -161,7 +162,7 @@ def tei_to_chunks(tei_path: Path) -> List[Dict]:
                     "type": "sentence_window",
                     "p_id": p_id,
                     "window_size": w,
-                    "sent_ids": ids[i : i + w],
+                    "sent_ids": ids[i: i + w],
                 }
                 if section_info:
                     meta.update(

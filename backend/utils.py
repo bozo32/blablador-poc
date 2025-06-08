@@ -1,13 +1,15 @@
 # backend/utils.py
 
-import re
-from pathlib import Path
-import pandas as pd
 import json
 import logging
+import re
+from pathlib import Path
+from typing import List, Literal, Optional, Tuple  # new import
+
+import pandas as pd
+from sentence_transformers import CrossEncoder, SentenceTransformer
+
 from backend.bl_client import BlabladorClient
-from typing import List, Tuple, Literal, Optional  # new import
-from sentence_transformers import SentenceTransformer, CrossEncoder
 
 
 def clean_text(text: str) -> str:

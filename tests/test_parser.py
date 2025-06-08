@@ -1,4 +1,3 @@
-import pytest
 from pathlib import Path
 from backend.parser import tei_to_chunks
 

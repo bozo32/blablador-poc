@@ -17,7 +17,6 @@ from pathlib import Path
 from typing import Dict, List
 from lxml import etree
 from .utils import embed  # noqa: F401  (imported for side‑effects elsewhere)
-import pandas as pd
 from .utils import read_csv
 
 import logging

@@ -3,15 +3,13 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
-import os, json, logging
-from typing import Optional, Dict, Any, List
-from pydantic import BaseModel
+import os
+import logging
 
-from . import parser, retriever, schemas, utils
+from . import schemas, utils
 from .nli import assess
-from .parser import tei_and_csv_to_documents
 from .retriever import build_all
-from .utils import pick_best_passage, rerank
+from .utils import pick_best_passage
 
 # Configure logging (so that logger.debug/info/etc. actually prints)
 logging.basicConfig(

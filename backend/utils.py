@@ -1,12 +1,10 @@
 # backend/utils.py
 
-import os
 import re
 from pathlib import Path
 import pandas as pd
 import json
 import logging
-from requests import HTTPError
 from backend.bl_client import BlabladorClient
 from typing import List, Tuple, Literal, Optional  # new import
 from sentence_transformers import SentenceTransformer, CrossEncoder
@@ -25,7 +23,6 @@ def read_csv(path: Path | str) -> pd.DataFrame:
     Read a CSV file into a pandas DataFrame, ensuring correct path resolution.
     Handles edge cases like globally quoted files and nested quoting.
     """
-    from io import StringIO
     import csv
 
     path = Path(path)

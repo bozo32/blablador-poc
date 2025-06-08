@@ -8,7 +8,6 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-import requests
 
 _LOCAL_NLI_PATHS = {
     "roberta-large-mnli": "roberta-large-mnli",
@@ -46,7 +45,6 @@ def assess(model_name: str, premise: str, hypothesis: str):
 
 if __name__ == "__main__":
     import argparse
-    import time
 
     parser = argparse.ArgumentParser(description="Citation checking CLI")
     parser.add_argument(

@@ -1,7 +1,5 @@
-import os
 import numpy as np
 import pytest
-from pathlib import Path
 
 import backend.utils as utils
 from backend.retriever import Retriever

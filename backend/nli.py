@@ -1,16 +1,13 @@
 # backend/nli.py
 
-import os, json
 import logging
 
 logging.basicConfig(
     level=logging.DEBUG, format="%(asctime)s %(levelname)s ▶ %(message)s"
 )
-import functools
 from transformers import pipeline
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from backend.bl_client import BlabladorClient  # new central wrapper
-from requests import HTTPError
 from functools import lru_cache
 
 THRESHOLD = 0.0

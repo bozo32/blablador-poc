@@ -1,4 +1,4 @@
-import re, xml.etree.ElementTree as ET
+import xml.etree.ElementTree as ET
 from pathlib import Path
 import requests
 import os
@@ -80,8 +80,6 @@ def embed_documents(docs, model, api_key, base_url):
     """
     Embed a list of document dicts by batching inputs to avoid service errors.
     """
-    import math
-    import json
 
     # Prepare the full list of texts
     texts = [doc["text"] for doc in docs]

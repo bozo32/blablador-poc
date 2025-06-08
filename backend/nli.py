@@ -2,15 +2,19 @@
 
 import os, json
 import logging
-logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s ▶ %(message)s")
+
+logging.basicConfig(
+    level=logging.DEBUG, format="%(asctime)s %(levelname)s ▶ %(message)s"
+)
 import functools
 from transformers import pipeline
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
-from backend.bl_client import BlabladorClient   # new central wrapper
+from backend.bl_client import BlabladorClient  # new central wrapper
 from requests import HTTPError
 from functools import lru_cache
 
 THRESHOLD = 0.0
+
 
 @lru_cache(maxsize=None)
 def get_nli_pipeline(model_name: str):
@@ -23,16 +27,15 @@ def get_nli_pipeline(model_name: str):
     model = AutoModelForSequenceClassification.from_pretrained(model_name)
     # Return a text-classification pipeline configured for NLI
     return pipeline(
-        "text-classification",
-        model=model,
-        tokenizer=tokenizer,
-        return_all_scores=True
+        "text-classification", model=model, tokenizer=tokenizer, return_all_scores=True
     )
+
 
 def predict_nli(premise: str, hypothesis: str):
     nli_pipeline = get_nli_pipeline()
     result = nli_pipeline(f"{premise} [SEP] {hypothesis}", top_k=None)
     return result
+
 
 # -----------------------------------------------------------------------------
 # Local NLI model registry: defer loading until needed
@@ -41,13 +44,19 @@ def predict_nli(premise: str, hypothesis: str):
 # Map model names to HuggingFace repo paths
 _LOCAL_NLI_PATHS = {
     "deberta-base": "cross-encoder/nli-deberta-v3-base",
-    "deberta-large": "microsoft/deberta-v3-large"
+    "deberta-large": "microsoft/deberta-v3-large",
 }
 
 _LOCAL_NLI_MODELS: dict[str, any] = {}
 
+
 def get_local_nli_pipeline(name: str):
-    from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline as hf_pipeline
+    from transformers import (
+        AutoTokenizer,
+        AutoModelForSequenceClassification,
+        pipeline as hf_pipeline,
+    )
+
     if name not in _LOCAL_NLI_PATHS:
         raise KeyError(f"No local NLI model configured for '{name}'")
     if name not in _LOCAL_NLI_MODELS[name]:
@@ -59,9 +68,10 @@ def get_local_nli_pipeline(name: str):
             model=model,
             tokenizer=tok,
             return_all_scores=True,
-            device=-1
+            device=-1,
         )
     return _LOCAL_NLI_MODELS[name]
+
 
 # A system prompt that fixes the model’s role and constraints:
 SYSTEM_INSTR = """
@@ -76,11 +86,9 @@ If no passage supports or contradicts the claim, return an empty "evidence" arra
 Always produce valid JSON with the described structure.
 """
 
+
 def assess(
-    claim: str,
-    passages: list[str],
-    metadatas: list[dict],
-    nli_model: str = None
+    claim: str, passages: list[str], metadatas: list[dict], nli_model: str = None
 ) -> list[dict]:
     """
     Always runs a HF sequence-classification model for NLI.
@@ -117,7 +125,7 @@ def assess(
                 "text": text,
                 "label": "entailment",
                 "score": ent["score"],
-                **meta
+                **meta,
             }
             # Always set chunk_id and type explicitly for consistency:
             ev_dict["chunk_id"] = meta.get("id") or meta.get("chunk_id")
@@ -129,7 +137,7 @@ def assess(
                 "text": text,
                 "label": "contradiction",
                 "score": con["score"],
-                **meta
+                **meta,
             }
             ev_dict["chunk_id"] = meta.get("id") or meta.get("chunk_id")
             ev_dict["type"] = meta.get("type")

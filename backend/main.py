@@ -22,18 +22,22 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Blablador NLI backend")
 
-CSV_PATH  = Path(os.environ.get("CSV_PATH", "source.csv")).resolve()
+CSV_PATH = Path(os.environ.get("CSV_PATH", "source.csv")).resolve()
 SOURCE_DIR = Path(os.environ.get("SOURCE_DIR", CSV_PATH.parent / "source")).resolve()
+
 
 @app.on_event("startup")
 async def startup_event():
     # automatic prebuild disabled; will be triggered manually from the UI
     pass
 
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], allow_credentials=True,
-    allow_methods=["*"], allow_headers=["*"],
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Store in-memory indices here
@@ -60,8 +64,7 @@ async def segment(req: schemas.SentencePayload):
             logging.info("Built FAISS indices on the fly (default).")
         except Exception as e:
             raise HTTPException(
-                status_code=500,
-                detail=f"Could not build FAISS indices on the fly: {e}"
+                status_code=500, detail=f"Could not build FAISS indices on the fly: {e}"
             )
 
     # 2) Pick the per-paper retriever (or fall back to "default")
@@ -70,7 +73,7 @@ async def segment(req: schemas.SentencePayload):
     if retr is None:
         raise HTTPException(
             status_code=500,
-            detail=f"No FAISS index found for key={key} and no default index available"
+            detail=f"No FAISS index found for key={key} and no default index available",
         )
 
     # 3) Embed all submitted “segments” locally (via sentence-transformers)
@@ -79,11 +82,10 @@ async def segment(req: schemas.SentencePayload):
     try:
         seg_vecs = utils.embed(seg_texts, model_name=req.settings.embed_model)
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Local embedding failed: {e}"
-        )
-    logger.debug(f"[EMBED] returned {len(seg_vecs)} vectors; example vec[0]={seg_vecs[0] if seg_vecs else None}")
+        raise HTTPException(status_code=500, detail=f"Local embedding failed: {e}")
+    logger.debug(
+        f"[EMBED] returned {len(seg_vecs)} vectors; example vec[0]={seg_vecs[0] if seg_vecs else None}"
+    )
 
     response_segments = []
     for seg, vec in zip(req.segments, seg_vecs):
@@ -124,7 +126,7 @@ async def segment(req: schemas.SentencePayload):
             )
             # replace filtered list (preserving original FAISS score)
             filtered = [(c["id"], c["faiss_score"]) for c in reranked]
-# ————————————————————————————————
+        # ————————————————————————————————
 
         # 6) Assemble texts and metadata for NLI
         texts, metadatas = [], []
@@ -140,15 +142,12 @@ async def segment(req: schemas.SentencePayload):
         logger.debug(f"[NLI] inputs texts={len(texts)} passages")
 
         # 7) Run NLI (entailment/contradiction) locally via HF pipeline
-        raw_nli = assess(
-            seg.claim,
-            texts,
-            metadatas,
-            nli_model=req.settings.nli_model
-        )
+        raw_nli = assess(seg.claim, texts, metadatas, nli_model=req.settings.nli_model)
         logger.debug(f"[NLI→raw] {raw_nli}")
         if not raw_nli:
-            logger.warning(f"[NLI] no raw evidence returned for segment {seg.segment_id!r}")
+            logger.warning(
+                f"[NLI] no raw evidence returned for segment {seg.segment_id!r}"
+            )
 
         # 8) Filter NLI results by label & threshold
         evidences = []
@@ -159,26 +158,36 @@ async def segment(req: schemas.SentencePayload):
                 continue
             if score < req.settings.nli_threshold:
                 continue
-            evidences.append({
-                "text":  ev.get("text", ""),
-                "score": score,
-                "label": label,
-                "section_path": ev.get("meta", {}).get("section_path"),  
-                **{k: v for k, v in ev.items() if k not in ("text", "score", "label")},
-            })
+            evidences.append(
+                {
+                    "text": ev.get("text", ""),
+                    "score": score,
+                    "label": label,
+                    "section_path": ev.get("meta", {}).get("section_path"),
+                    **{
+                        k: v
+                        for k, v in ev.items()
+                        if k not in ("text", "score", "label")
+                    },
+                }
+            )
         logger.debug(f"[NLI→filtered] {evidences}")
 
         # 9) If there is at least one piece of evidence, run pick_best_passage
         texts_for_llm = [e["text"] for e in evidences]
         if texts_for_llm:
             sup_id, sup_rat = pick_best_passage(
-                seg.claim, texts_for_llm, "support",
+                seg.claim,
+                texts_for_llm,
+                "support",
                 model_name=req.settings.llm_model,
                 api_key=req.settings.api_key,
                 base_url=req.settings.base_url,
             )
             con_id, con_rat = pick_best_passage(
-                seg.claim, texts_for_llm, "contradict",
+                seg.claim,
+                texts_for_llm,
+                "contradict",
                 model_name=req.settings.llm_model,
                 api_key=req.settings.api_key,
                 base_url=req.settings.base_url,
@@ -187,15 +196,17 @@ async def segment(req: schemas.SentencePayload):
             sup_id = con_id = None
             sup_rat = con_rat = None
 
-        response_segments.append({
-            "segment_id":            seg.segment_id,
-            "claim":                 seg.claim,
-            "evidence":              evidences,
-            "best_support_id":       sup_id,
-            "support_rationale":     sup_rat,
-            "best_contradiction_id": con_id,
-            "contradiction_rationale": con_rat,
-        })
+        response_segments.append(
+            {
+                "segment_id": seg.segment_id,
+                "claim": seg.claim,
+                "evidence": evidences,
+                "best_support_id": sup_id,
+                "support_rationale": sup_rat,
+                "best_contradiction_id": con_id,
+                "contradiction_rationale": con_rat,
+            }
+        )
 
     return {"row_id": req.row_id, "status": "done", "segments": response_segments}
 
@@ -204,12 +215,24 @@ async def segment(req: schemas.SentencePayload):
 @app.post("/prebuild")
 def prebuild(req: schemas.PrebuildRequest):
     import math
+
     try:
         # 1) Validate numeric fields
-        if req.max_chunks is not None and (not isinstance(req.max_chunks, int) or req.max_chunks <= 0):
-            raise HTTPException(status_code=400, detail="max_chunks must be a positive integer")
-        if req.faiss_min_score is not None and (not isinstance(req.faiss_min_score, float) or math.isnan(req.faiss_min_score) or math.isinf(req.faiss_min_score)):
-            raise HTTPException(status_code=400, detail="faiss_min_score must be a real float between 0 and 1")
+        if req.max_chunks is not None and (
+            not isinstance(req.max_chunks, int) or req.max_chunks <= 0
+        ):
+            raise HTTPException(
+                status_code=400, detail="max_chunks must be a positive integer"
+            )
+        if req.faiss_min_score is not None and (
+            not isinstance(req.faiss_min_score, float)
+            or math.isnan(req.faiss_min_score)
+            or math.isinf(req.faiss_min_score)
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="faiss_min_score must be a real float between 0 and 1",
+            )
 
         # 2) Rebuild global retrievers using local embedding
         global retrievers
@@ -219,7 +242,7 @@ def prebuild(req: schemas.PrebuildRequest):
                 folder=Path(req.folder),
                 embed_model=req.embed_model,
                 max_sentences=req.max_chunks,
-                min_score=req.faiss_min_score
+                min_score=req.faiss_min_score,
             )
         )
         logging.info(f"FAISS index built for folder: {req.folder!r}")

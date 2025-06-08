@@ -28,6 +28,7 @@ NS = {"tei": "http://www.tei-c.org/ns/1.0"}
 
 _RE_WS = re.compile(r"\s+")
 
+
 # --- NEW: helper for section path extraction ---
 def _section_path_from_paragraph(p_elem, div_meta_map):
     # Collect <head> values + IDs from all ancestor <div> (outermost → innermost)
@@ -46,6 +47,8 @@ def _section_path_from_paragraph(p_elem, div_meta_map):
             else:
                 breadcrumbs.append(head_text)
     return " > ".join(breadcrumbs) if breadcrumbs else None
+
+
 def tei_and_csv_to_documents(folder: Path, csv_path: str) -> list[dict]:
     """
     Load TEI-XML chunks + CSV citing sentences into one list of {'text','meta'} dicts.
@@ -63,16 +66,19 @@ def tei_and_csv_to_documents(folder: Path, csv_path: str) -> list[dict]:
     citing_docs = []
     for _, row in df.iterrows():
         doc_id = row["TEI File"]
-        citing_docs.append({
-            "id": doc_id,
-            "text": row["tei_sentence"],
-            "author": row["Cited Author"],
-            "year": row["Cited Year"],
-            "tei_file": row["TEI File"],
-            "meta": {"id": doc_id}
-        })
+        citing_docs.append(
+            {
+                "id": doc_id,
+                "text": row["tei_sentence"],
+                "author": row["Cited Author"],
+                "year": row["Cited Year"],
+                "tei_file": row["TEI File"],
+                "meta": {"id": doc_id},
+            }
+        )
 
     return tei_docs + citing_docs
+
 
 # Helper to strip XML tags and citation markers
 def _strip_citations(txt: str) -> str:
@@ -82,12 +88,16 @@ def _strip_citations(txt: str) -> str:
     txt = re.sub(r"\[\d+\]", "", txt)
     return txt
 
+
 def _clean(txt: str) -> str:
     """Collapse whitespace & strip."""
     txt = _strip_citations(txt)
     return _RE_WS.sub(" ", txt).strip()
 
-def _add_chunk(chunks: List[Dict], text: str, kind: str, chunk_id: str | None = None) -> None:
+
+def _add_chunk(
+    chunks: List[Dict], text: str, kind: str, chunk_id: str | None = None
+) -> None:
     """Utility to append non‑empty chunks with a meta tag."""
     text = _clean(text)
     if text:
@@ -95,6 +105,7 @@ def _add_chunk(chunks: List[Dict], text: str, kind: str, chunk_id: str | None = 
         if chunk_id is not None:
             meta["id"] = chunk_id
         chunks.append({"text": text, "meta": meta})
+
 
 # --------------------------------------------------------------------------- #
 #   Public API
@@ -143,7 +154,7 @@ def tei_to_chunks(tei_path: Path) -> List[Dict]:
         # generate sliding windows sizes 1, 2, 3
         for w in (1, 2, 3):
             for i in range(len(texts) - w + 1):
-                window_text = " ".join(texts[i:i+w])
+                window_text = " ".join(texts[i : i + w])
                 window_id = f"{p_id}_w{w}_{i+1}"
                 meta = {
                     "id": window_id,
@@ -151,24 +162,29 @@ def tei_to_chunks(tei_path: Path) -> List[Dict]:
                     "type": "sentence_window",
                     "p_id": p_id,
                     "window_size": w,
-                    "sent_ids": ids[i:i+w],
+                    "sent_ids": ids[i : i + w],
                 }
                 if section_info:
-                    meta.update({
-                        "section_id": section_info.get("id"),
-                        "section_type": section_info.get("type"),
-                        "section_head": section_info.get("head"),
-                    })
+                    meta.update(
+                        {
+                            "section_id": section_info.get("id"),
+                            "section_type": section_info.get("type"),
+                            "section_head": section_info.get("head"),
+                        }
+                    )
                 # --- NEW: include hierarchical section_path ---
                 if section_path:
                     meta["section_path"] = section_path
-                chunks.append({
-                    "text": window_text,
-                    "id": window_id,
-                    "meta": meta,
-                })
+                chunks.append(
+                    {
+                        "text": window_text,
+                        "id": window_id,
+                        "meta": meta,
+                    }
+                )
     print(f"Parsed {len(chunks)} sentence-window chunks from {tei_path.name}")
     return chunks
+
 
 # ========================================================================= #
 #  Data Integrity & Improvement Options                                      #
@@ -211,11 +227,12 @@ def parse_chunks(tei_path: Path) -> List[dict]:
     tree = etree.parse(str(tei_path))
     docs = []
 
-    for idx, s in enumerate(tree.findall('.//s', namespaces=NS)):
+    for idx, s in enumerate(tree.findall(".//s", namespaces=NS)):
         try:
-            xml_id = (s.get('{http://www.w3.org/XML/1998/namespace}id')
-                      or s.get('xml:id'))
-            text = ''.join(s.itertext()).strip()
+            xml_id = s.get("{http://www.w3.org/XML/1998/namespace}id") or s.get(
+                "xml:id"
+            )
+            text = "".join(s.itertext()).strip()
 
             chunk = {
                 "text": text,
@@ -231,6 +248,7 @@ def parse_chunks(tei_path: Path) -> List[dict]:
     print(f"Parsed {len(docs)} chunks from {tei_path.name}")
     return docs
 
+
 # --------------------------------------------------------------------------- #
 #   Figure caption sentence splitter
 # --------------------------------------------------------------------------- #
@@ -240,11 +258,13 @@ def figure_caption_sentence(text: str, counter: int) -> list[dict]:
     Each sentence is returned as a dict with 'text' and 'meta':{'type':'figure', 'fig_id':counter}.
     """
     # naive sentence split on period followed by space; can be refined
-    sentences = [s.strip() for s in text.split('. ') if s.strip()]
+    sentences = [s.strip() for s in text.split(". ") if s.strip()]
     chunks = []
     for idx, sent in enumerate(sentences):
-        chunks.append({
-            "text": sent.rstrip('.') + '.',
-            "meta": {"type": "figure", "fig_id": counter, "sent_id": idx}
-        })
+        chunks.append(
+            {
+                "text": sent.rstrip(".") + ".",
+                "meta": {"type": "figure", "fig_id": counter, "sent_id": idx},
+            }
+        )
     return chunks

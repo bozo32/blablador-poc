@@ -8,17 +8,19 @@ def tei_to_chunks(xml_path: Path) -> list[dict]:
     """Parse a TEI XML file and split into chunks (e.g. paragraphs)."""
     tree = ET.parse(xml_path)
     root = tree.getroot()
-    ns = {'tei': 'http://www.tei-c.org/ns/1.0'}
+    ns = {"tei": "http://www.tei-c.org/ns/1.0"}
     chunks = []
-    for p in root.findall('.//tei:p', ns):
-        text = ''.join(p.itertext()).strip()
+    for p in root.findall(".//tei:p", ns):
+        text = "".join(p.itertext()).strip()
         if text:
             chunks.append({"text": text, "meta": {"source": str(xml_path)}})
     return chunks
 
+
 def tei_and_csv_to_documents(folder: Path, csv_path: str) -> list[dict]:
     """Combine TEI XML chunks and CSV citing sentences into one unified document list."""
     from .utils import read_csv
+
     docs: list[dict] = []
     # 1) TEI XML chunks
     for xml_file in Path(folder).glob("*.xml"):
@@ -31,10 +33,7 @@ def tei_and_csv_to_documents(folder: Path, csv_path: str) -> list[dict]:
             meta["citing_title"] = row["citing_title"]
         if "citing_id" in row:
             meta["citing_id"] = row["citing_id"]
-        docs.append({
-            "text": row["citing_sentence"],
-            "meta": meta
-        })
+        docs.append({"text": row["citing_sentence"], "meta": meta})
     return docs
 
 
@@ -67,6 +66,7 @@ class BlabladorClient:
             timeout=120,
         )
         from requests import HTTPError
+
         try:
             response.raise_for_status()
         except HTTPError:
@@ -112,7 +112,15 @@ def embeddings(texts: list[str], model: str, api_key: str, base_url: str):
     docs = [{"text": t} for t in texts]
     return embed_documents(docs, model=model, api_key=api_key, base_url=base_url)
 
-def completion(prompt, model="gpt-3.5-turbo", temperature=0.0, max_tokens=512, api_key=None, base_url=None):
+
+def completion(
+    prompt,
+    model="gpt-3.5-turbo",
+    temperature=0.0,
+    max_tokens=512,
+    api_key=None,
+    base_url=None,
+):
     """
     Back-compat wrapper so modules can import and call
         from backend.bl_client import completion
@@ -122,10 +130,5 @@ def completion(prompt, model="gpt-3.5-turbo", temperature=0.0, max_tokens=512, a
         base_url=base_url,
     )
     return client.completion(
-        prompt,
-        model=model,
-        temperature=temperature,
-        max_tokens=max_tokens
+        prompt, model=model, temperature=temperature, max_tokens=max_tokens
     )
-
-

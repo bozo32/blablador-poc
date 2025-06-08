@@ -3,9 +3,10 @@ from pathlib import Path
 from typing import Literal, List
 
 # We’ll track four categories of models
-ModelCategory = Literal['embed', 'reranker', 'nli', 'llm']
+ModelCategory = Literal["embed", "reranker", "nli", "llm"]
 
 CACHE_FILE = Path(__file__).parent / "model_cache.json"
+
 
 def _load_cache() -> dict[ModelCategory, List[str]]:
     """
@@ -16,9 +17,10 @@ def _load_cache() -> dict[ModelCategory, List[str]]:
         return json.loads(CACHE_FILE.read_text())
     else:
         # start with empty history for each category
-        cache = {cat: [] for cat in ('embed','reranker','nli','llm')}
+        cache = {cat: [] for cat in ("embed", "reranker", "nli", "llm")}
         _save_cache(cache)
         return cache
+
 
 def _save_cache(cache: dict[ModelCategory, List[str]]):
     """
@@ -26,12 +28,14 @@ def _save_cache(cache: dict[ModelCategory, List[str]]):
     """
     CACHE_FILE.write_text(json.dumps(cache, indent=2))
 
+
 def get_models(category: ModelCategory) -> List[str]:
     """
     Retrieve the history list for a given category.
     """
     cache = _load_cache()
     return cache.get(category, [])
+
 
 def add_model(category: ModelCategory, model: str):
     """

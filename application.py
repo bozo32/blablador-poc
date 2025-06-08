@@ -1,5 +1,9 @@
 from typing import Dict, Any
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline as hf_pipeline
+from transformers import (
+    AutoTokenizer,
+    AutoModelForSequenceClassification,
+    pipeline as hf_pipeline,
+)
 import os
 from pathlib import Path
 import subprocess
@@ -16,15 +20,20 @@ _LOCAL_NLI_MODELS: Dict[str, Any] = {}
 
 
 def get_local_nli_pipeline(model_name: str, batch_size: int = 32):
-    tokenizer = AutoTokenizer.from_pretrained(_LOCAL_NLI_PATHS[model_name], use_fast=False)
-    model     = AutoModelForSequenceClassification.from_pretrained(_LOCAL_NLI_PATHS[model_name])
+    tokenizer = AutoTokenizer.from_pretrained(
+        _LOCAL_NLI_PATHS[model_name], use_fast=False
+    )
+    model = AutoModelForSequenceClassification.from_pretrained(
+        _LOCAL_NLI_PATHS[model_name]
+    )
     return hf_pipeline(
         "text-classification",
         model=model,
         tokenizer=tokenizer,
-        device=-1,              # CPU
+        device=-1,  # CPU
         batch_size=batch_size,  # batch many inferences at once
     )
+
 
 def assess(model_name: str, premise: str, hypothesis: str):
     if model_name in _LOCAL_NLI_PATHS:
@@ -34,17 +43,28 @@ def assess(model_name: str, premise: str, hypothesis: str):
     # existing logic for other models
     # ...
 
+
 if __name__ == "__main__":
     import argparse
     import time
 
     parser = argparse.ArgumentParser(description="Citation checking CLI")
-    parser.add_argument("--folder", help="Path to folder containing CSV and TEI.XML files", default=os.getenv("DATA_FOLDER", "."))
-    parser.add_argument("--api_key", help="Blablador API key", default=os.getenv("API_KEY", ""))
-    parser.add_argument("--api_base", help="Blablador API base URL", default=os.getenv("API_BASE", None))
+    parser.add_argument(
+        "--folder",
+        help="Path to folder containing CSV and TEI.XML files",
+        default=os.getenv("DATA_FOLDER", "."),
+    )
+    parser.add_argument(
+        "--api_key", help="Blablador API key", default=os.getenv("API_KEY", "")
+    )
+    parser.add_argument(
+        "--api_base", help="Blablador API base URL", default=os.getenv("API_BASE", None)
+    )
     args = parser.parse_args()
 
-    args.csv = str(Path(args.folder) / "short.csv")  # or whichever default filename you're expecting
+    args.csv = str(
+        Path(args.folder) / "short.csv"
+    )  # or whichever default filename you're expecting
     os.environ["SOURCE_DIR"] = str(Path(args.folder))
 
     # Export unified env vars for frontend and backend
@@ -59,17 +79,24 @@ if __name__ == "__main__":
 
     # Launch backend and frontend
     backend_cmd = [
-        "uvicorn", "backend.main:app",
-        "--host", "localhost",
-        "--port", "8000",
+        "uvicorn",
+        "backend.main:app",
+        "--host",
+        "localhost",
+        "--port",
+        "8000",
         "--reload",
-        "--log-level", "debug",
+        "--log-level",
+        "debug",
     ]
     # pass arguments to ui.py _after_ the `--` separator so Streamlit doesn't
     # try to parse them.
     frontend_cmd = [
-        "streamlit", "run", "frontend/ui.py",
-        "--server.fileWatcherType", "watchdog"
+        "streamlit",
+        "run",
+        "frontend/ui.py",
+        "--server.fileWatcherType",
+        "watchdog",
     ]
 
     def backend_ready(proc: subprocess.Popen) -> bool:
@@ -78,12 +105,16 @@ if __name__ == "__main__":
         Returns True when http://localhost:8000/docs is reachable.
         """
         import requests, time
+
         for _ in range(30):
             if proc.poll() is not None:
                 print("❌ Backend process exited prematurely.")
                 return False
             try:
-                if requests.get("http://localhost:8000/docs", timeout=1).status_code == 200:
+                if (
+                    requests.get("http://localhost:8000/docs", timeout=1).status_code
+                    == 200
+                ):
                     return True
             except requests.exceptions.ConnectionError:
                 print("⏳ Waiting for backend to start...")

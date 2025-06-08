@@ -5,13 +5,14 @@ from typing import List, Dict, Optional
 import faiss
 import numpy as np
 
+
 class Retriever:
     def __init__(
         self,
         index_path: Path,
         max_sentences: Optional[int] = None,
         min_score: float = 0.20,
-        embed_model: str = "all-MiniLM-L6-v2",   # HF default
+        embed_model: str = "all-MiniLM-L6-v2",  # HF default
         docstore: dict[str, dict] | None = None,
     ):
         self.index_path = index_path.with_suffix(".faiss")
@@ -24,13 +25,12 @@ class Retriever:
         self._docs: List[Dict] = []
         self.id_list: List[str] = []
 
-    def search(self, vectors: List[List[float]], k: int) -> tuple[List[List[str]], List[float]]:
+    def search(
+        self, vectors: List[List[float]], k: int
+    ) -> tuple[List[List[str]], List[float]]:
         arr = np.array(vectors, dtype="float32")
         D, I = self.index.search(arr, k)
-        id_batches = [
-            [self.id_list[pos] for pos in batch]
-            for batch in I
-        ]
+        id_batches = [[self.id_list[pos] for pos in batch] for batch in I]
         return id_batches, D.tolist()
 
     def build(self, docs: List[Dict]) -> None:
@@ -59,7 +59,9 @@ class Retriever:
 
     def query(self, text: str, k: int = 5) -> List[Dict]:
         if self.index is None or not self.chunks:
-            raise ValueError("Index and chunks must be loaded or built before querying.")
+            raise ValueError(
+                "Index and chunks must be loaded or built before querying."
+            )
         raw_emb = utils.embed([text], model_name=self.embed_model)
         query_embedding = np.array(raw_emb, dtype="float32")
         if query_embedding.ndim == 1:
@@ -71,16 +73,16 @@ class Retriever:
             if dist < self.min_score:
                 continue
             chunk = self.chunks[idx]
-            results.append({
-                "score": float(dist),
-                "text": chunk["text"],
-                "meta": chunk["meta"]
-            })
+            results.append(
+                {"score": float(dist), "text": chunk["text"], "meta": chunk["meta"]}
+            )
         return results
 
     def query_many(self, texts: List[str], k: int = 5) -> List[List[Dict]]:
         if self.index is None or not self.chunks:
-            raise ValueError("Index and chunks must be loaded or built before querying.")
+            raise ValueError(
+                "Index and chunks must be loaded or built before querying."
+            )
         raw_embs = utils.embed(texts, model_name=self.embed_model)
         arr = np.array(raw_embs, dtype="float32")
         if arr.ndim == 1:
@@ -94,19 +96,15 @@ class Retriever:
                 if dist < self.min_score:
                     continue
                 chunk = self.chunks[idx]
-                results.append({
-                    "score": float(dist),
-                    "text": chunk["text"],
-                    "meta": chunk["meta"]
-                })
+                results.append(
+                    {"score": float(dist), "text": chunk["text"], "meta": chunk["meta"]}
+                )
             all_results.append(results)
         return all_results
 
+
 def build_all(
-    folder: Path,
-    embed_model: str,
-    max_sentences: int = None,
-    min_score: float = 0.2
+    folder: Path, embed_model: str, max_sentences: int = None, min_score: float = 0.2
 ) -> Dict[str, Retriever]:
     # find CSV in folder
     csv_file = next(folder.glob("*.csv"), None)
@@ -118,21 +116,22 @@ def build_all(
     indexes = {}
     # Build per-paper indexes for CSV-derived docs (which have author/year)
     for doc in docs:
-        if 'author' not in doc or 'year' not in doc:
+        if "author" not in doc or "year" not in doc:
             continue
         key = f"{doc['author']}-{doc['year']}"
         retr = Retriever(
             index_path=folder / key,
             max_sentences=max_sentences,
             min_score=min_score,
-            embed_model=embed_model
+            embed_model=embed_model,
         )
         retr.build([doc])
         indexes[key] = retr
 
     # include both single sentences and our sliding‐window spans
     tei_docs = [
-        doc for doc in docs
+        doc
+        for doc in docs
         if doc["meta"].get("type") in ("sentence", "sentence_window")
     ]
 
@@ -140,7 +139,7 @@ def build_all(
         index_path=folder / "default",
         max_sentences=max_sentences,
         min_score=min_score,
-        embed_model=embed_model
+        embed_model=embed_model,
     )
     default_retr.build(tei_docs)
     indexes["default"] = default_retr

@@ -6,6 +6,7 @@ from pathlib import Path
 import backend.utils as utils
 from backend.retriever import Retriever
 
+
 @pytest.fixture
 def dummy_chunks():
     # 20 dummy sentence‐chunks
@@ -14,8 +15,10 @@ def dummy_chunks():
         for i in range(20)
     ]
 
+
 def test_max_sentences_cap(tmp_path, monkeypatch, dummy_chunks):
     idx_base = tmp_path / "idx"
+
     # monkey‐patch the real embed to just return random vectors
     def fake_embed(texts):
         # one‐dimensional embeddings so index.dim = 1
@@ -23,6 +26,7 @@ def test_max_sentences_cap(tmp_path, monkeypatch, dummy_chunks):
         # normalize for cosine
         norms = np.linalg.norm(arr, axis=1, keepdims=True)
         return (arr / norms).astype("float32")
+
     monkeypatch.setattr(utils, "embed", fake_embed)
 
     # cap at 10 sentences
@@ -34,13 +38,18 @@ def test_max_sentences_cap(tmp_path, monkeypatch, dummy_chunks):
     # and FAISS index should have 10 entries
     assert r.index.ntotal == 10
 
+
 def test_faiss_min_score(tmp_path, monkeypatch, dummy_chunks):
     idx_base = tmp_path / "idx2"
+
     # fake embed that returns unit vectors where chunk 0 matches query perfectly
     def fake_embed(texts):
         # if text contains "0" return [1.0], else [0.0]
-        arr = np.array([[1.0] if "sentence 0" in t else [0.0] for t in texts], dtype="float32")
+        arr = np.array(
+            [[1.0] if "sentence 0" in t else [0.0] for t in texts], dtype="float32"
+        )
         return arr
+
     monkeypatch.setattr(utils, "embed", fake_embed)
 
     # no sentence cap, but filter out anything with score < 0.5

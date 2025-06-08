@@ -91,7 +91,7 @@ def embed_documents(docs, model, api_key, base_url):
     batch_size = 50  # adjust as needed
 
     for start in range(0, len(texts), batch_size):
-        batch = texts[start: start + batch_size]
+        batch = texts[start : start + batch_size]
         payload = {"model": model, "input": batch}
         try:
             resp = requests.post(url, headers=headers, json=payload, timeout=60)

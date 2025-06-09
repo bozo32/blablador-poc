@@ -3,6 +3,8 @@
 from pydantic import Field
 from pydantic_settings import BaseSettings
 
+NLI_BATCH_SIZE = 50
+
 
 class Settings(BaseSettings):
     # — FastAPI backend URL for the frontend to call

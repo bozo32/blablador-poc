@@ -12,6 +12,33 @@ from sentence_transformers import CrossEncoder, SentenceTransformer
 from backend.bl_client import BlabladorClient
 
 
+# testing for parallelism support
+def set_sane_threads():
+    """
+    Sets a sane number of threads for heavy compute libraries.
+    Uses number of physical cores if possible.
+    """
+    import os
+
+    try:
+        import psutil
+
+        num_threads = psutil.cpu_count(logical=False) or os.cpu_count()
+    except ImportError:
+        num_threads = os.cpu_count()
+
+    # Set threading env vars before any imports of numpy/torch/transformers
+    os.environ["OMP_NUM_THREADS"] = str(num_threads)
+    os.environ["MKL_NUM_THREADS"] = str(num_threads)
+    try:
+        import torch
+
+        torch.set_num_threads(num_threads)
+    except ImportError:
+        pass
+    return num_threads
+
+
 def clean_text(text: str) -> str:
     # remove TEI tags remnants and citation markers
     text = re.sub(r"<[^>]+>", "", text)
@@ -97,10 +124,19 @@ def get_model(model_name: str) -> SentenceTransformer:
         raise RuntimeError(f"Could not load embedding model '{model_name}': {e}")
 
 
-def embed(texts: list[str], model_name: str = "all-MiniLM-L6-v2") -> list[list[float]]:
+def embed(
+    texts: list[str], model_name: str = "all-MiniLM-L6-v2", mode: str = None
+) -> list[list[float]]:
     """
     Embed texts using a local Hugging Face model (as chosen by the user).
     """
+    # Models that require prefix
+    models_with_prefix = ["e5", "infloat", "bge"]  # add/adjust as needed
+    lower_model = model_name.lower()
+    needs_prefix = any(prefix in lower_model for prefix in models_with_prefix)
+    if mode and needs_prefix:
+        prefix = f"{mode}: "
+        texts = [f"{prefix}{t}" for t in texts]
     model = get_model(model_name)
     return model.encode(texts, show_progress_bar=False, convert_to_numpy=True).tolist()
 

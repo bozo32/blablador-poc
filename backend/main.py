@@ -1,5 +1,6 @@
 # backend/main.py
 
+from backend import utils
 import logging
 import os
 from pathlib import Path
@@ -7,10 +8,11 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import schemas, utils
-from .nli import assess
-from .retriever import build_all
-from .utils import pick_best_passage
+from backend import schemas, utils
+from backend.nli import assess
+from backend.retriever import build_all
+from backend.utils import pick_best_passage
+
 
 # Configure logging (so that logger.debug/info/etc. actually prints)
 logging.basicConfig(
@@ -79,7 +81,9 @@ async def segment(req: schemas.SentencePayload):
     seg_texts = [seg.claim for seg in req.segments]
     logger.debug(f"[EMBED] embedding segments: {seg_texts}")
     try:
-        seg_vecs = utils.embed(seg_texts, model_name=req.settings.embed_model)
+        seg_vecs = utils.embed(
+            seg_texts, model_name=req.settings.embed_model, mode="query"
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Local embedding failed: {e}")
     logger.debug(
@@ -207,7 +211,12 @@ async def segment(req: schemas.SentencePayload):
             }
         )
 
-    return {"row_id": req.row_id, "status": "done", "segments": response_segments}
+    return {
+        "row_id": req.row_id,
+        "status": "done",
+        "original_sentence": req.original_sentence,
+        "segments": response_segments,
+    }
 
 
 # ---------- /prebuild endpoint ----------

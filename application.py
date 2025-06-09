@@ -10,6 +10,10 @@ from transformers import (
 )
 from transformers import pipeline as hf_pipeline
 
+from backend import utils
+
+utils.set_sane_threads()
+
 _LOCAL_NLI_PATHS = {
     "roberta-large-mnli": "roberta-large-mnli",
     "facebook/bart-large-mnli": "facebook/bart-large-mnli",

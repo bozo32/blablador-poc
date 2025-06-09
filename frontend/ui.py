@@ -1,7 +1,6 @@
 # frontend/ui.py
 
 # === Imports ===
-# Standard library
 import os
 import pathlib
 import re
@@ -68,7 +67,9 @@ def model_selector(
     if allow_custom:
         options.append("Custom...")
     sel = st.selectbox(
-        label, options, index=options.index(current) if current in options else 0
+        label,
+        options,
+        index=options.index(current) if current in options else 0,
     )
     if allow_custom and sel == "Custom...":
         custom = st.text_input(f"Custom {label}", value=current or "")
@@ -167,7 +168,10 @@ def seg_via_llm(sentence: str, row_idx: int, model: str) -> list[str]:
     )
     try:
         text = client.completion(
-            prompt, model=actual_model, temperature=0, max_tokens=256
+            prompt,
+            model=actual_model,
+            temperature=0,
+            max_tokens=256,
         )
     except Exception as e:
         st.error(f"Blablador API error: {e}")
@@ -179,7 +183,7 @@ def seg_via_llm(sentence: str, row_idx: int, model: str) -> list[str]:
 
 
 def handle_upload():
-    """Save uploaded files to tempdir and reset segmentation."""
+    """Save uploaded files to a temporary directory and reset segmentation."""
     files = st.session_state.get("uploaded_files", [])
     if not files:
         return
@@ -259,7 +263,11 @@ def draw_sidebar():
         rerank_choices = get_models("reranker") or [settings.RERANKER_MODEL]
         model_selector("Reranker model", "reranker_model", rerank_choices)
         add_model("reranker", st.session_state.reranker_model)
-        st.number_input("Reranker top-K", min_value=1, key="reranker_top_k")
+        st.number_input(
+            "Reranker top-K",
+            min_value=1,
+            key="reranker_top_k",
+        )
 
         st.header("NLI Model")
         nli_choices = get_models("nli") or [settings.NLI_MODEL]
@@ -289,7 +297,6 @@ def draw_main():
 
     st.title("Citation-Support Checker")
     import glob
-    import os
 
     folder = st.session_state.get("data_dir", "")
     csv_files = glob.glob(os.path.join(folder, "*.csv"))
@@ -300,7 +307,7 @@ def draw_main():
     st.write("Loaded rows:", len(df))
     st.write("Folder path:", folder)
 
-    # Perform segmentation if requested
+    # ==== Begin Streamlit form for segment evaluation UI ====
     if st.session_state.seg_requested:
         # 1) Populate seg_cache if empty
         if not st.session_state.get("seg_cache"):
@@ -312,22 +319,28 @@ def draw_main():
                         idx,
                         st.session_state["selected_model"],
                     )
-        # 2) Display all rows with editable segments
-        for idx, row in df.iterrows():
-            st.markdown("---")
-            st.write(f"**Row {idx}**  \n{row['tei_sentence']}")
-            seg_text = st.text_area(
-                f"Candidate segments (edit if needed) - Row {idx}",
-                "\n".join(st.session_state.get("seg_cache", {}).get(idx, [])),
-                key=f"ta-{idx}",
-                height=120,
-            )
-            st.session_state[f"edited-{idx}"] = [
-                ln.strip() for ln in seg_text.splitlines() if ln.strip()
-            ]
 
-        # Single submit button at bottom
-        if st.button("Submit All Rows for Processing"):
+        # Now, use a Streamlit form with one expander per sentence/segment.
+        with st.form("sentence_segment_evaluation_form"):
+            for idx, row in df.iterrows():
+                expanded = True if idx == df.index[0] else False
+                with st.expander(
+                    f"Row {idx}: {row['tei_sentence']}",
+                    expanded=expanded,
+                ):
+                    seg_text = st.text_area(
+                        f"Candidate segments (edit if needed) - Row {idx}",
+                        "\n".join(st.session_state.get("seg_cache", {}).get(idx, [])),
+                        key=f"ta-{idx}",
+                        height=120,
+                    )
+                    st.session_state[f"edited-{idx}"] = [
+                        ln.strip() for ln in seg_text.splitlines() if ln.strip()
+                    ]
+            submitted = st.form_submit_button("Submit all choices")
+
+        # If form submitted, process all user inputs together
+        if submitted:
             api_url = st.session_state.get("api_url", "http://localhost:8000")
             with st.spinner("Running citation-support for all rows…"):
                 for idx, row in df.iterrows():
@@ -336,7 +349,10 @@ def draw_main():
                         st.session_state.get(f"edited-{idx}", [])
                     ):
                         segments_list.append(
-                            {"segment_id": f"{idx}{chr(97 + i)}", "claim": seg_text}
+                            {
+                                "segment_id": f"{idx}{chr(97 + i)}",
+                                "claim": seg_text,
+                            }
                         )
 
                     # Coerce possible NaN → "" for the 'tei_target' field
@@ -364,20 +380,113 @@ def draw_main():
                             "reranker_top_k": st.session_state.get("reranker_top_k"),
                         },
                     }
-                    resp = requests.post(f"{api_url}/segment", json=payload)
+                    # Remove unused variable resp; just assign to results directly
                     try:
-                        st.session_state["results"][idx] = resp.json()
+                        response = requests.post(f"{api_url}/segment", json=payload)
+                        st.session_state["results"][idx] = response.json()
                     except BaseException:
-                        st.session_state["results"][idx] = resp.text
+                        st.session_state["results"][idx] = response.text
 
-            # Display results for all rows
-            for idx in df.index:
-                st.markdown(f"### Results for Row {idx}")
+        # --- Results/Assessment UI ---
+        # After the segmentation form
+        if st.session_state.get("results"):
+            # Show results/assessment forms for rows with results
+            for idx in sorted(st.session_state["results"].keys()):
                 result = st.session_state["results"].get(idx)
-                if isinstance(result, dict):
+                if not (result and isinstance(result, dict)):
+                    continue
+
+                st.markdown(f"### Results for Row {idx}")
+                original_sentence = result.get("original_sentence", "")
+                st.markdown(f"**Original sentence:** {original_sentence}")
+
+                # Per-row form for all segments in this row
+                with st.form(f"assessment_form_row_{idx}"):
+                    segs = result.get("segments", [])
+                    for seg_idx, seg in enumerate(segs):
+                        seg_id = seg.get("segment_id", "")
+                        claim = seg.get("claim", "")
+                        exp_key = f"exp_{idx}_{seg_id}"
+
+                        with st.expander(
+                            f"Row {idx} Segment {seg_id}: {claim}",
+                            expanded=(
+                                seg_idx == 0
+                                and not st.session_state.get(f"done_row_{idx}", False)
+                            ),
+                        ):
+                            evidence = seg.get("evidence", [])
+                            support = [
+                                ev for ev in evidence if ev.get("label") == "entailment"
+                            ]
+                            contradiction = [
+                                ev
+                                for ev in evidence
+                                if ev.get("label") == "contradiction"
+                            ]
+
+                            st.write("**Supporting Evidence:**")
+                            support_checked = []
+                            for i, ev in enumerate(support):
+                                eid = ev["id"]
+                                text = ev.get("text", "")
+                                section_path = (
+                                    ev.get("section_path")
+                                    or ev.get("section_head")
+                                    or ""
+                                )
+                                label = (
+                                    f"**Section:** {section_path}\n{text}"
+                                    if section_path
+                                    else text
+                                )
+                                key = f"support_cb_{idx}_{seg_id}_{eid}"
+                                checked = st.session_state.get(key, False)
+                                cb = st.checkbox(label, value=checked, key=key)
+                                if cb:
+                                    support_checked.append(eid)
+                            seg["user_selected_support"] = support_checked
+
+                            st.write("**Contradicting Evidence:**")
+                            contra_checked = []
+                            for i, ev in enumerate(contradiction):
+                                eid = ev["id"]
+                                text = ev.get("text", "")
+                                section_path = (
+                                    ev.get("section_path")
+                                    or ev.get("section_head")
+                                    or ""
+                                )
+                                label = (
+                                    f"**Section:** {section_path}\n{text}"
+                                    if section_path
+                                    else text
+                                )
+                                key = f"contradict_cb_{idx}_{seg_id}_{eid}"
+                                checked = st.session_state.get(key, False)
+                                cb = st.checkbox(label, value=checked, key=key)
+                                if cb:
+                                    contra_checked.append(eid)
+                            seg["user_selected_contradiction"] = contra_checked
+
+                    # Per-row submit
+                    submitted = st.form_submit_button("Submit Assessment")
+                    if submitted:
+                        st.session_state[f"done_row_{idx}"] = True
+                        st.success("Assessment saved!")
+
+            # After the form, show raw JSON per row (unchanged)
+            for idx in sorted(st.session_state["results"].keys()):
+                result = st.session_state["results"].get(idx)
+                if result:
+                    st.markdown("**Raw Result JSON (includes your selections):**")
                     st.json(result)
-                else:
-                    st.write(result)
+        else:
+            # Only show *one* instructional message if no results yet
+            st.info(
+                "Click 'Submit all choices' above to search for candidate cited sentences."
+            )
+    # ==== End Streamlit form for segment evaluation UI ====
 
     if st.session_state.seg_requested and "faiss_started" not in st.session_state:
         # now kick off backend index build in background
@@ -433,6 +542,8 @@ def draw_main():
 
 
 def run_prebuild():
+    """Trigger the backend FAISS prebuild process."""
+    api_url = st.session_state.get("api_url", "http://localhost:8000")
     # (somewhere you collect these from sliders/text inputs)
     max_chunks = st.session_state["max_chunks"]
     faiss_min_score = st.session_state["faiss_min_score"]
@@ -451,7 +562,7 @@ def run_prebuild():
         "api_key": st.session_state["api_key"],
         "base_url": st.session_state["base_url"],
     }
-    resp = requests.post(f"{api_url}/prebuild", json=payload)
+    requests.post(f"{api_url}/prebuild", json=payload)
 
 
 def main():

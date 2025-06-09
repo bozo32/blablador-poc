@@ -1,10 +1,12 @@
+# backend/retriever.py
+
+from backend import utils
 from pathlib import Path
 from typing import Dict, List, Optional
 
 import faiss
 import numpy as np
 
-from . import utils
 from .parser import tei_and_csv_to_documents
 
 
@@ -14,7 +16,7 @@ class Retriever:
         index_path: Path,
         max_sentences: Optional[int] = None,
         min_score: float = 0.20,
-        embed_model: str = "all-MiniLM-L6-v2",  # HF default
+        embed_model: str = "infloat/multilingual-e5-base",  # HF default
         docstore: dict[str, dict] | None = None,
     ):
         self.index_path = index_path.with_suffix(".faiss")
@@ -42,6 +44,7 @@ class Retriever:
         embeddings_list = utils.embed(
             [c["text"] for c in filtered],
             model_name=self.embed_model,
+            mode="passage",
         )
         embeddings = np.array(embeddings_list, dtype="float32")
         faiss.normalize_L2(embeddings)

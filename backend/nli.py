@@ -2,7 +2,8 @@
 
 import logging
 from functools import lru_cache
-from backend.settings import NLI_BATCH_SIZE
+from backend.settings import Settings
+settings = Settings()
 
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, pipeline
 
@@ -101,7 +102,7 @@ def assess(
     input_texts = [f"{text} [SEP] {claim}" for text in passages]
     try:
         results = pipe(
-            input_texts, batch_size=NLI_BATCH_SIZE
+            input_texts, batch_size=settings.NLI_BATCH_SIZE
         )  # optionally set batch_size param
     except Exception as e:
         logging.error(f"[NLI] error during batched pipeline call: {e}")
@@ -115,6 +116,9 @@ def assess(
         elif isinstance(preds, list) and preds and isinstance(preds[0], list):
             preds = preds[0]
         logging.debug(f"[NLI→preds] {preds}")
+
+        # Extract all label: score pairs for this passage
+        class_scores = {p["label"].lower(): p["score"] for p in preds}
 
         # extract scores for entailment & contradiction
         ent = next((p for p in preds if p["label"].lower() == "entailment"), None)
@@ -130,6 +134,7 @@ def assess(
             # Always set chunk_id and type explicitly for consistency:
             ev_dict["chunk_id"] = meta.get("id") or meta.get("chunk_id")
             ev_dict["type"] = meta.get("type")
+            ev_dict["all_scores"] = class_scores
             evidence.append(ev_dict)
 
         if con and con["score"] >= THRESHOLD:
@@ -141,6 +146,7 @@ def assess(
             }
             ev_dict["chunk_id"] = meta.get("id") or meta.get("chunk_id")
             ev_dict["type"] = meta.get("type")
+            ev_dict["all_scores"] = class_scores
             evidence.append(ev_dict)
 
     return evidence

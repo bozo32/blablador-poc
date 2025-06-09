@@ -387,93 +387,172 @@ def draw_main():
                     except BaseException:
                         st.session_state["results"][idx] = response.text
 
-        # --- Results/Assessment UI ---
-        # After the segmentation form
-        if st.session_state.get("results"):
-            # Show results/assessment forms for rows with results
-            for idx in sorted(st.session_state["results"].keys()):
-                result = st.session_state["results"].get(idx)
-                if not (result and isinstance(result, dict)):
-                    continue
+            # --- Results/Assessment UI ---
+            # After the segmentation form
+            if st.session_state.get("results"):
+                # Show results/assessment forms for rows with results
+                for idx in sorted(st.session_state["results"].keys()):
+                    result = st.session_state["results"].get(idx)
+                    if not (result and isinstance(result, dict)):
+                        continue
 
-                st.markdown(f"### Results for Row {idx}")
-                original_sentence = result.get("original_sentence", "")
-                st.markdown(f"**Original sentence:** {original_sentence}")
+                    st.markdown(f"### Results for Row {idx}")
+                    original_sentence = result.get("original_sentence", "")
+                    st.markdown(f"**Original sentence:** {original_sentence}")
 
-                # Per-row form for all segments in this row
-                with st.form(f"assessment_form_row_{idx}"):
-                    segs = result.get("segments", [])
-                    for seg_idx, seg in enumerate(segs):
-                        seg_id = seg.get("segment_id", "")
-                        claim = seg.get("claim", "")
-                        exp_key = f"exp_{idx}_{seg_id}"
+                    # Per-row form for all segments in this row
+                    with st.form(f"assessment_form_row_{idx}"):
+                        segs = result.get("segments", [])
+                        all_troll_pay_items = []
+                        for seg_idx, seg in enumerate(segs):
+                            seg_id = seg.get("segment_id", "")
+                            claim = seg.get("claim", "")
+                            exp_key = f"exp_{idx}_{seg_id}"
 
-                        with st.expander(
-                            f"Row {idx} Segment {seg_id}: {claim}",
-                            expanded=(
-                                seg_idx == 0
-                                and not st.session_state.get(f"done_row_{idx}", False)
-                            ),
-                        ):
-                            evidence = seg.get("evidence", [])
-                            support = [
-                                ev for ev in evidence if ev.get("label") == "entailment"
-                            ]
-                            contradiction = [
-                                ev
-                                for ev in evidence
-                                if ev.get("label") == "contradiction"
-                            ]
+                            with st.expander(
+                                f"Row {idx} Segment {seg_id}: {claim}",
+                                expanded=(
+                                    seg_idx == 0
+                                    and not st.session_state.get(f"done_row_{idx}", False)
+                                ),
+                            ):
+                                evidence = seg.get("evidence", [])
+                                N = settings.NLI_CANDIDATES_SHOWN
+                                support = sorted(
+                                    [ev for ev in evidence if ev.get("label") == "entailment"],
+                                    key=lambda ev: ev.get("score", 0),
+                                    reverse=True
+                                )[:N]
+                                contradiction = sorted(
+                                    [ev for ev in evidence if ev.get("label") == "contradiction"],
+                                    key=lambda ev: ev.get("score", 0),
+                                    reverse=True
+                                )[:N]
 
-                            st.write("**Supporting Evidence:**")
-                            support_checked = []
-                            for i, ev in enumerate(support):
+                                st.write("**Supporting Evidence:**")
+                                support_checked = []
+                                for i, ev in enumerate(support):
+                                    eid = ev["id"]
+                                    text = ev.get("text", "")
+                                    section_path = (
+                                        ev.get("section_path")
+                                        or ev.get("section_head")
+                                        or ""
+                                    )
+                                    label = (
+                                        f"**Section:** {section_path}\n{text}"
+                                        if section_path
+                                        else text
+                                    )
+                                    key = f"support_cb_{idx}_{seg_id}_{eid}"
+                                    checked = st.session_state.get(key, False)
+                                    cb = st.checkbox(label, value=checked, key=key)
+                                    if cb:
+                                        support_checked.append(eid)
+                                seg["user_selected_support"] = support_checked
+
+                                st.write("**Contradicting Evidence:**")
+                                contra_checked = []
+                                for i, ev in enumerate(contradiction):
+                                    eid = ev["id"]
+                                    text = ev.get("text", "")
+                                    section_path = (
+                                        ev.get("section_path")
+                                        or ev.get("section_head")
+                                        or ""
+                                    )
+                                    label = (
+                                        f"**Section:** {section_path}\n{text}"
+                                        if section_path
+                                        else text
+                                    )
+                                    key = f"contradict_cb_{idx}_{seg_id}_{eid}"
+                                    checked = st.session_state.get(key, False)
+                                    cb = st.checkbox(label, value=checked, key=key)
+                                    if cb:
+                                        contra_checked.append(eid)
+                                seg["user_selected_contradiction"] = contra_checked
+
+                                # --- Collect troll pay ambiguous evidence (per segment) ---
+                                troll_pay_items = []
+                                for ev in evidence:
+                                    all_scores = ev.get("all_scores", {})
+                                    label_scores = sorted(all_scores.items(), key=lambda x: -x[1])
+                                    for i, (label1, score1) in enumerate(label_scores):
+                                        if label1 not in {"entailment", "contradiction"}:
+                                            continue
+                                        for j, (label2, score2) in enumerate(label_scores):
+                                            if j == i:
+                                                continue
+                                            if label2 not in {"entailment", "contradiction"}:
+                                                continue
+                                            if abs(score1 - score2) <= settings.TROLL_PAY_MARGIN:
+                                                troll_pay_items.append((seg_id, ev))
+                                                break
+                                        else:
+                                            continue
+                                        break
+                                all_troll_pay_items.extend(troll_pay_items)
+
+                        # After all segments, show one troll-pay expander per row (if any)
+                        if all_troll_pay_items:
+                            # Deduplicate on (seg_id, evidence id)
+                            seen_keys = set()
+                            deduped_troll_pay_items = []
+                            for seg_id, ev in all_troll_pay_items:
                                 eid = ev["id"]
-                                text = ev.get("text", "")
-                                section_path = (
-                                    ev.get("section_path")
-                                    or ev.get("section_head")
-                                    or ""
-                                )
-                                label = (
-                                    f"**Section:** {section_path}\n{text}"
-                                    if section_path
-                                    else text
-                                )
-                                key = f"support_cb_{idx}_{seg_id}_{eid}"
-                                checked = st.session_state.get(key, False)
-                                cb = st.checkbox(label, value=checked, key=key)
-                                if cb:
-                                    support_checked.append(eid)
-                            seg["user_selected_support"] = support_checked
+                                k = (seg_id, eid)
+                                if k not in seen_keys:
+                                    seen_keys.add(k)
+                                    deduped_troll_pay_items.append((seg_id, ev))
+                            # Find the most ambiguous item (lowest margin between top 2 NLI scores)
+                            def ambiguity(ev):
+                                scores = sorted(ev.get("all_scores", {}).values(), reverse=True)
+                                if len(scores) >= 2:
+                                    return abs(scores[0] - scores[1])
+                                return 1.0  # Not ambiguous if only one score
+                            most_ambiguous = None
+                            min_margin = 1.0
+                            for seg_id, ev in deduped_troll_pay_items:
+                                margin = ambiguity(ev)
+                                if margin < min_margin:
+                                    min_margin = margin
+                                    most_ambiguous = (seg_id, ev)
+                            if most_ambiguous:
+                                seg_id, ev = most_ambiguous
+                                with st.expander("🧌 tax! Help us on this ambiguous case", expanded=True):
+                                    st.write(
+                                        "This candidate was difficult for the model to classify. Please help by labeling it:"
+                                    )
+                                    eid = ev["id"]
+                                    text = ev.get("text", "")
+                                    section_path = ev.get("section_path") or ev.get("section_head") or ""
+                                    label = (
+                                        f"**Row {idx} Segment {seg_id}**<br>**Section:** {section_path}<br>{text}"
+                                        if section_path
+                                        else text
+                                    )
+                                    radio_key = f"troll_radio_{idx}_{seg_id}_{eid}"
+                                    prev = st.session_state.get(radio_key, "I dunno")
+                                    choice = st.radio(
+                                        label,
+                                        options=["Entails", "Neutral", "Contradicts", "I dunno"],
+                                        index=["Entails", "Neutral", "Contradicts", "I dunno"].index(prev)
+                                            if prev in ["Entails", "Neutral", "Contradicts", "I dunno"] else 3,
+                                        key=radio_key,
+                                        horizontal=True,
+                                    )
+                                    # Assign to proper segment (optional)
+                                    for seg in segs:
+                                        if seg.get("segment_id", "") == seg_id:
+                                            troll_selected = seg.get("user_selected_trollpay", {})
+                                            troll_selected[eid] = choice
+                                            seg["user_selected_trollpay"] = troll_selected
 
-                            st.write("**Contradicting Evidence:**")
-                            contra_checked = []
-                            for i, ev in enumerate(contradiction):
-                                eid = ev["id"]
-                                text = ev.get("text", "")
-                                section_path = (
-                                    ev.get("section_path")
-                                    or ev.get("section_head")
-                                    or ""
-                                )
-                                label = (
-                                    f"**Section:** {section_path}\n{text}"
-                                    if section_path
-                                    else text
-                                )
-                                key = f"contradict_cb_{idx}_{seg_id}_{eid}"
-                                checked = st.session_state.get(key, False)
-                                cb = st.checkbox(label, value=checked, key=key)
-                                if cb:
-                                    contra_checked.append(eid)
-                            seg["user_selected_contradiction"] = contra_checked
-
-                    # Per-row submit
-                    submitted = st.form_submit_button("Submit Assessment")
-                    if submitted:
-                        st.session_state[f"done_row_{idx}"] = True
-                        st.success("Assessment saved!")
+                        submitted = st.form_submit_button("Submit Assessment")
+                        if submitted:
+                            st.session_state[f"done_row_{idx}"] = True
+                            st.success("Assessment saved!")
 
             # After the form, show raw JSON per row (unchanged)
             for idx in sorted(st.session_state["results"].keys()):

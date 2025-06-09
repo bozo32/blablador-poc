@@ -4,9 +4,21 @@ from pydantic import Field
 from pydantic_settings import BaseSettings
 
 NLI_BATCH_SIZE = 50
+TROLL_PAY_MARGIN = 0.7
+
 
 
 class Settings(BaseSettings):
+    ## max number of entailing / contradicting candidates to show
+    NLI_CANDIDATES_SHOWN: int = Field(3, env="NLI_CANDIDATES_SHOWN")
+    
+    ## for NLI parallel processing
+    NLI_BATCH_SIZE: int = Field(50, env="NLI_BATCH_SIZE")
+    
+    ## margin used to determine what is ambiguous
+    TROLL_PAY_MARGIN: float = Field(0.7, env="TROLL_PAY_MARGIN")
+
+
     # — FastAPI backend URL for the frontend to call
     BACKEND_URL: str = Field(
         "http://localhost:8000",

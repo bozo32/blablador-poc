@@ -138,24 +138,26 @@ async def segment(req: schemas.SentencePayload):
             if score < req.settings.nli_threshold:
                 continue
             evidences.append({
-                "text":  ev.get("text", ""),
-                "score": score,
-                "label": label,
-                **{k: v for k, v in ev.items() if k not in ("text", "score", "label")},
+                "text":    ev.get("text", ""),
+                "score":   score,
+                "label":   label,
+                "section": ev.get("section"),        # pick up new "section"
+                "type":    ev.get("type"),           # keep chunk type if desired
             })
+
         logger.debug(f"[NLI→filtered] {evidences}")
 
-        # 9) If there is at least one piece of evidence, run pick_best_passage
-        texts_for_llm = [e["text"] for e in evidences]
-        if texts_for_llm:
+        # 6) Dual LLM picks: support + contradiction, both over ALL evidences
+        texts = [e["text"] for e in evidences]
+        if texts:
             sup_id, sup_rat = pick_best_passage(
-                seg.claim, texts_for_llm, "support",
+                seg.claim, texts, "support",
                 model_name=req.settings.llm_model,
                 api_key=req.settings.api_key,
                 base_url=req.settings.base_url,
             )
             con_id, con_rat = pick_best_passage(
-                seg.claim, texts_for_llm, "contradict",
+                seg.claim, texts, "contradict",
                 model_name=req.settings.llm_model,
                 api_key=req.settings.api_key,
                 base_url=req.settings.base_url,
@@ -165,12 +167,13 @@ async def segment(req: schemas.SentencePayload):
             sup_rat = con_rat = None
 
         response_segments.append({
-            "segment_id":            seg.segment_id,
-            "claim":                 seg.claim,
-            "evidence":              evidences,
-            "best_support_id":       sup_id,
-            "support_rationale":     sup_rat,
-            "best_contradiction_id": con_id,
+            "segment_id":              seg.segment_id,
+            "claim":                   seg.claim,
+            "supporting":              [e for e in evidences if e["label"] == "entailment"],
+            "contradicting":           [e for e in evidences if e["label"] == "contradiction"],
+            "best_support_id":         sup_id,
+            "support_rationale":       sup_rat,
+            "best_contradiction_id":   con_id,
             "contradiction_rationale": con_rat,
         })
 

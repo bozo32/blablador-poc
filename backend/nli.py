@@ -115,7 +115,7 @@ def assess(
         if ent and ent["score"] >= THRESHOLD:
             evidence.append({
                 "text":       text,
-                "chunk_id":   meta.get("chunk_id"),
+                "section":    meta.get("section_head"),
                 "type":       meta.get("type"),
                 "label":      "entailment",
                 "score":      ent["score"],
@@ -124,7 +124,7 @@ def assess(
         if con and con["score"] >= THRESHOLD:
             evidence.append({
                 "text":       text,
-                "chunk_id":   meta.get("chunk_id"),
+                "section":    meta.get("section_head"),
                 "type":       meta.get("type"),
                 "label":      "contradiction",
                 "score":      con["score"],

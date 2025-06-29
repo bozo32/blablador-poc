@@ -9,7 +9,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend import schemas, utils
 from backend.nli import assess
-from backend.retriever import build_all
+
+# New imports after other backend imports
+from backend.pipeline_registry import get_pipeline
+from backend.settings import Settings
 
 # Configure logging (so that logger.debug/info/etc. actually prints)
 logging.basicConfig(
@@ -17,6 +20,11 @@ logging.basicConfig(
     level=logging.DEBUG,
 )
 logger = logging.getLogger(__name__)
+
+# Setup pipeline via registry and settings
+settings = Settings()
+build_all = get_pipeline(settings)
+print(f"Pipeline mode: {settings.PIPELINE_MODE}")  # Optional: log on startup
 
 app = FastAPI(title="Blablador NLI backend")
 
@@ -49,15 +57,30 @@ async def segment(req: schemas.SentencePayload):
     # 1) If no FAISS index exists yet, build it on the fly
     if not retrievers:
         try:
-            retrievers.update(
-                build_all(
-                    folder=Path(req.folder),
-                    embed_model=req.settings.embed_model,
-                    max_sentences=req.settings.max_sentences,
-                    min_score=req.settings.faiss_min_score,
+            if settings.PIPELINE_MODE == "hybrid":
+                # Build a retriever for each segment (one claim at a time)
+                for seg in req.segments:
+                    retrievers.update(
+                        build_all(
+                            folder=Path(req.folder),
+                            embed_model=req.settings.embed_model,
+                            max_sentences=req.settings.max_sentences,
+                            min_score=req.settings.faiss_min_score,
+                            claim=seg.claim,  # Pass the claim for hybrid pipeline
+                        )
+                    )
+                logging.info("Built retrievers (hybrid, one per claim).")
+            else:
+                # Classic mode: batch build as before
+                retrievers.update(
+                    build_all(
+                        folder=Path(req.folder),
+                        embed_model=req.settings.embed_model,
+                        max_sentences=req.settings.max_sentences,
+                        min_score=req.settings.faiss_min_score,
+                    )
                 )
-            )
-            logging.info("Built FAISS indices on the fly (default).")
+                logging.info("Built FAISS indices on the fly (classic).")
         except Exception as e:
             raise HTTPException(
                 status_code=500, detail=f"Could not build FAISS indices on the fly: {e}"

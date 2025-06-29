@@ -50,6 +50,7 @@ def init_session_state():
         "results": {},
         "started": False,
         "seg_requested": False,
+        "pipeline_mode": getattr(settings, "PIPELINE_MODE", "classic"),
     }
     for key, val in defaults.items():
         st.session_state.setdefault(key, val)
@@ -222,6 +223,14 @@ def handle_upload():
 def draw_sidebar():
     init_session_state()
     with st.sidebar:
+        st.header("Pipeline Mode")
+        mode = st.selectbox(
+            "Choose pipeline",
+            ["classic", "hybrid"],
+            index=0 if st.session_state["pipeline_mode"] == "classic" else 1,
+            help="Classic = fast, Hybrid = exhaustive",
+        )
+        st.session_state["pipeline_mode"] = mode
         st.header("Upload your data")
         st.file_uploader(
             "CSV & TEI files",
@@ -628,9 +637,9 @@ def draw_main():
                                                 "user_selected_trollpay", {}
                                             )
                                             troll_selected[eid] = choice
-                                            seg[
-                                                "user_selected_trollpay"
-                                            ] = troll_selected
+                                            seg["user_selected_trollpay"] = (
+                                                troll_selected
+                                            )
 
                         submitted = st.form_submit_button("Submit Assessment")
                         if submitted:
@@ -651,7 +660,12 @@ def draw_main():
             )
     # ==== End Streamlit form for segment evaluation UI ====
 
-    if st.session_state.seg_requested and "faiss_started" not in st.session_state:
+    # Only prebuild FAISS indices for classic pipeline mode
+    if (
+        st.session_state.seg_requested
+        and "faiss_started" not in st.session_state
+        and st.session_state.get("pipeline_mode", "classic") == "classic"
+    ):
         # now kick off backend index build in background
         with st.spinner("Building FAISS index in background…"):
             api_url = st.session_state.get("api_url", "http://localhost:8000")

@@ -134,6 +134,8 @@ def tei_to_chunks(tei_path: Path) -> List[Dict]:
     # Build sliding windows of 1, 2, and 3 sentences within each paragraph
     for p in tree.xpath(".//tei:text//tei:body//tei:p", namespaces=NS):
         # paragraph identifier
+        # FIXME: Paragraph indexing is implicit; consider using a robust integer idx for cross-ref,
+        # especially if merging with captions/tables. See hybrid.py for context construction.
         p_id = p.get("{http://www.w3.org/XML/1998/namespace}id") or f"p{sent_ctr}"
         # section metadata if available
         ancestor_divs = p.xpath("ancestor::tei:div", namespaces=NS)
@@ -186,6 +188,26 @@ def tei_to_chunks(tei_path: Path) -> List[Dict]:
     print(f"Parsed {len(chunks)} sentence-window chunks from {tei_path.name}")
     return chunks
 
+    # --- FIGURE/TABLE CAPTION HANDLING (for future extension) ---
+    # To support coreference to figures/tables, extract their captions as their own chunks.
+    # Insert these into the chunk list in order with paragraphs.
+    # FIXME: See discussion in hybrid.py: captions need a unique p_id and should be part of the window stream.
+
+    # Example (to be developed):
+    # for fig in tree.xpath(".//tei:figure", namespaces=NS):
+    #     caption_elem = fig.find("tei:head", namespaces=NS)  # or adjust if caption tag is different
+    #     if caption_elem is not None:
+    #         caption_text = _clean("".join(caption_elem.itertext()))
+    #         fig_id = fig.get("{http://www.w3.org/XML/1998/namespace}id") or f"fig{sent_ctr}"
+    #         # Assign a fake p_id for consistency
+    #         meta = {"type": "figure_caption", "p_id": fig_id, "source": str(tei_path)}
+    #         # Optionally use window logic if captions are long/multi-sentence
+    #         chunks.append({
+    #             "text": caption_text,
+    #             "id": fig_id,
+    #             "meta": meta,
+    #         })
+
 
 # ========================================================================= #
 #  Data Integrity & Improvement Options                                      #
@@ -216,7 +238,9 @@ def tei_to_chunks(tei_path: Path) -> List[Dict]:
 #       upstream TEI fixes.                                                  #
 #                                                                            #
 #  These notes outline trade-offs between robustness, completeness, and      #
-#  complexity for evolving the parser as needed.                            #
+#  complexity for evolving the parser as needed.
+#
+#                          #
 # ========================================================================= #
 def parse_chunks(tei_path: Path) -> List[dict]:
     """Parse a TEI file and return a list of chunks with text and metadata."""

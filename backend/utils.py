@@ -14,8 +14,8 @@ from backend.bl_client import BlabladorClient
 
 # testing for parallelism support
 def set_sane_threads():
-    """
-    Sets a sane number of threads for heavy compute libraries.
+    """Sets a sane number of threads for heavy compute libraries.
+
     Uses number of physical cores if possible.
     """
     import os
@@ -48,8 +48,9 @@ def clean_text(text: str) -> str:
 
 
 def read_csv(path: Path | str) -> pd.DataFrame:
-    """
-    Read a CSV file into a pandas DataFrame, ensuring correct path resolution.
+    """Read a CSV file into a pandas DataFrame, ensuring correct path
+    resolution.
+
     Handles edge cases like globally quoted files and nested quoting.
     """
     import csv
@@ -107,9 +108,8 @@ _loaded_models: dict[str, SentenceTransformer] = {}
 
 
 def get_model(model_name: str) -> SentenceTransformer:
-    """
-    Load a SentenceTransformer from local cache if present; otherwise, download to MODEL_CACHE_DIR.
-    """
+    """Load a SentenceTransformer from local cache if present; otherwise,
+    download to MODEL_CACHE_DIR."""
     if model_name in _loaded_models:
         return _loaded_models[model_name]
     try:
@@ -127,9 +127,7 @@ def get_model(model_name: str) -> SentenceTransformer:
 def embed(
     texts: list[str], model_name: str = "all-MiniLM-L6-v2", mode: str = None
 ) -> list[list[float]]:
-    """
-    Embed texts using a local Hugging Face model (as chosen by the user).
-    """
+    """Embed texts using a local Hugging Face model (as chosen by the user)."""
     # Models that require prefix
     models_with_prefix = ["e5", "infloat", "bge"]  # add/adjust as needed
     lower_model = model_name.lower()
@@ -149,8 +147,8 @@ def pick_best_passage(
     api_key: str,
     base_url: str,
 ) -> Tuple[Optional[int], Optional[str]]:
-    """
-    Pick the single best passage by index and produce a one-line rationale.
+    """Pick the single best passage by index and produce a one-line rationale.
+
     Returns (best_index, rationale) or (None, None) on failure.
     """
     # 1) Build a minimal, unambiguous prompt

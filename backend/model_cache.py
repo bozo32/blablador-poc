@@ -9,8 +9,8 @@ CACHE_FILE = Path(__file__).parent / "model_cache.json"
 
 
 def _load_cache() -> dict[ModelCategory, List[str]]:
-    """
-    Return a dict mapping each category to its list of cached models.
+    """Return a dict mapping each category to its list of cached models.
+
     If the file doesn’t exist yet, initialize empty lists.
     """
     if CACHE_FILE.exists():
@@ -23,25 +23,19 @@ def _load_cache() -> dict[ModelCategory, List[str]]:
 
 
 def _save_cache(cache: dict[ModelCategory, List[str]]):
-    """
-    Persist the entire cache dict to disk.
-    """
+    """Persist the entire cache dict to disk."""
     CACHE_FILE.write_text(json.dumps(cache, indent=2))
 
 
 def get_models(category: ModelCategory) -> List[str]:
-    """
-    Retrieve the history list for a given category.
-    """
+    """Retrieve the history list for a given category."""
     cache = _load_cache()
     return cache.get(category, [])
 
 
 def add_model(category: ModelCategory, model: str):
-    """
-    Add a model name to the history for a category (if not already present),
-    then save the updated cache.
-    """
+    """Add a model name to the history for a category (if not already present),
+    then save the updated cache."""
     cache = _load_cache()
     lst = cache.setdefault(category, [])
     if model not in lst:

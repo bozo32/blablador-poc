@@ -1,6 +1,5 @@
 # backend/main.py
 
-from backend import utils
 import logging
 import os
 from pathlib import Path
@@ -11,8 +10,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend import schemas, utils
 from backend.nli import assess
 from backend.retriever import build_all
-from backend.utils import pick_best_passage
-
 
 # Configure logging (so that logger.debug/info/etc. actually prints)
 logging.basicConfig(
@@ -48,9 +45,7 @@ results, retrievers = {}, {}
 # ---------- /segment endpoint ----------
 @app.post("/segment")
 async def segment(req: schemas.SentencePayload):
-    """
-    Process a set of user-generated segments for one CSV row.
-    """
+    """Process a set of user-generated segments for one CSV row."""
     # 1) If no FAISS index exists yet, build it on the fly
     if not retrievers:
         try:
@@ -176,10 +171,31 @@ async def segment(req: schemas.SentencePayload):
             )
         logger.debug(f"[NLI→filtered] {evidences}")
 
+        # ——— Dedupe within each label by overlapping sentence IDs ———
+        deduped = []
+        for lbl in ("entailment", "contradiction"):
+            # get and sort evidences for this label by descending NLI score
+            lbl_evs = sorted(
+                (ev for ev in evidences if ev["label"] == lbl),
+                key=lambda ev: ev["score"],
+                reverse=True,
+            )
+            kept_sent_ids = set()
+            for ev in lbl_evs:
+                sids = ev.get("sent_ids", [])
+                # if any sent_id already kept, skip this chunk
+                if any(sid in kept_sent_ids for sid in sids):
+                    continue
+                # otherwise keep it and mark its sentences as seen
+                deduped.append(ev)
+                kept_sent_ids.update(sids)
+        evidences = deduped
+        logger.debug(f"[NLI→deduped by label] {evidences}")
+
         # 9) If there is at least one piece of evidence, run pick_best_passage
         texts_for_llm = [e["text"] for e in evidences]
         if texts_for_llm:
-            sup_id, sup_rat = pick_best_passage(
+            sup_id, sup_rat = utils.pick_best_passage(
                 seg.claim,
                 texts_for_llm,
                 "support",
@@ -187,7 +203,7 @@ async def segment(req: schemas.SentencePayload):
                 api_key=req.settings.api_key,
                 base_url=req.settings.base_url,
             )
-            con_id, con_rat = pick_best_passage(
+            con_id, con_rat = utils.pick_best_passage(
                 seg.claim,
                 texts_for_llm,
                 "contradict",

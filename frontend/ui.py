@@ -57,11 +57,29 @@ def init_session_state():
 
 # === Helpers ===
 
+SEGMENT_ID_CLAIM_RE = re.compile(r"^\s*(\d+[a-z])\.\s*(.*)$", re.I)
+
+
+def to_segment_dict(seg_line: str) -> dict:
+    """Parse a segment line (e.g., '1a.
+
+    climate change...') into a dict for API.
+    """
+    m = SEGMENT_ID_CLAIM_RE.match(seg_line.strip())
+    if not m:
+        # fallback: assign dummy segment_id, keep claim
+        return {"segment_id": "", "claim": seg_line.strip()}
+    segment_id, claim = m.groups()
+    return {"segment_id": segment_id.strip(), "claim": claim.strip()}
+
 
 def model_selector(
     label: str, session_key: str, choices: list[str], allow_custom: bool = True
 ):
-    """Generic dropdown + Custom... text input helper."""
+    """Generic dropdown + Custom...
+
+    text input helper.
+    """
     current = st.session_state.get(session_key)
     options = choices.copy()
     if allow_custom:
@@ -304,8 +322,14 @@ def draw_main():
         st.error("No CSV file found in the folder.")
         return
     df = utils.read_csv(csv_files[0])
+    # Clean up whitespace for robust row IDs
+    df["tei_file"] = df["tei_file"].astype(str).str.strip()
+    df["tei_xml_id"] = df["tei_xml_id"].astype(str).str.strip()
+    df["row_id"] = df["tei_file"] + "::" + df["tei_xml_id"]
     st.write("Loaded rows:", len(df))
     st.write("Folder path:", folder)
+    # (Optional, but good for debugging:) After building the DataFrame, add:
+    st.write("All DataFrame row_id values:", list(df["row_id"]))
 
     # ==== Begin Streamlit form for segment evaluation UI ====
     if st.session_state.seg_requested:
@@ -313,28 +337,31 @@ def draw_main():
         if not st.session_state.get("seg_cache"):
             st.session_state["seg_cache"] = {}
             with st.spinner("Segmenting sentences…"):
-                for idx, row in df.iterrows():
-                    st.session_state["seg_cache"][idx] = seg_via_llm(
-                        row["tei_sentence"],
-                        idx,
-                        st.session_state["selected_model"],
+                for i, row in enumerate(df.itertuples(index=False), 1):
+                    row_id = row.row_id.strip()
+                    segments = seg_via_llm(
+                        row.tei_sentence, i, st.session_state["selected_model"]
                     )
-
+                    st.session_state["seg_cache"][row_id] = segments
         # Now, use a Streamlit form with one expander per sentence/segment.
         with st.form("sentence_segment_evaluation_form"):
-            for idx, row in df.iterrows():
-                expanded = True if idx == df.index[0] else False
+            for i, row in enumerate(df.itertuples(index=False), 1):
+                row_id = row.row_id
+                row_id = row_id.strip()
+                expanded = True if i == 1 else False
                 with st.expander(
-                    f"Row {idx}: {row['tei_sentence']}",
+                    f"Row {row_id}: {row.tei_sentence}",
                     expanded=expanded,
                 ):
                     seg_text = st.text_area(
-                        f"Candidate segments (edit if needed) - Row {idx}",
-                        "\n".join(st.session_state.get("seg_cache", {}).get(idx, [])),
-                        key=f"ta-{idx}",
+                        f"Candidate segments (edit if needed) - Row {row_id}",
+                        "\n".join(
+                            st.session_state.get("seg_cache", {}).get(row_id, [])
+                        ),
+                        key=f"ta-{row_id}",
                         height=120,
                     )
-                    st.session_state[f"edited-{idx}"] = [
+                    st.session_state[f"edited-{row_id}"] = [
                         ln.strip() for ln in seg_text.splitlines() if ln.strip()
                     ]
             submitted = st.form_submit_button("Submit all choices")
@@ -343,30 +370,30 @@ def draw_main():
         if submitted:
             api_url = st.session_state.get("api_url", "http://localhost:8000")
             with st.spinner("Running citation-support for all rows…"):
-                for idx, row in df.iterrows():
-                    segments_list = []
-                    for i, seg_text in enumerate(
-                        st.session_state.get(f"edited-{idx}", [])
-                    ):
-                        segments_list.append(
-                            {
-                                "segment_id": f"{idx}{chr(97 + i)}",
-                                "claim": seg_text,
-                            }
-                        )
+                for i, row in enumerate(df.itertuples(index=False), 1):
+                    row_id = row.row_id.strip()
+                    segments = seg_via_llm(
+                        row.tei_sentence, i, st.session_state["selected_model"]
+                    )
+                    st.session_state["seg_cache"][row_id] = segments
 
                     # Coerce possible NaN → "" for the 'tei_target' field
-                    tid = row.get("tei_target", "")
+                    tid = getattr(row, "tei_target", "")
                     if pd.isna(tid):
                         tid = ""
 
                     payload = {
                         "folder": st.session_state["data_dir"],
-                        "row_id": idx,
-                        "citing_title": row.get("Cited Author", ""),
+                        "row_id": row_id,
+                        "citing_title": getattr(row, "cited_author", ""),
                         "citing_id": tid,
-                        "original_sentence": row["tei_sentence"],
-                        "segments": segments_list,
+                        "original_sentence": row.tei_sentence,
+                        "segments": [
+                            to_segment_dict(seg)
+                            for seg in st.session_state.get(
+                                f"edited-{row_id}", segments
+                            )
+                        ],
                         "settings": {
                             "embed_model": st.session_state["embed_model"],
                             "max_sentences": st.session_state["max_sentences"],
@@ -380,53 +407,62 @@ def draw_main():
                             "reranker_top_k": st.session_state.get("reranker_top_k"),
                         },
                     }
-                    # Remove unused variable resp; just assign to results directly
                     try:
                         response = requests.post(f"{api_url}/segment", json=payload)
-                        st.session_state["results"][idx] = response.json()
+                        st.session_state["results"][row_id] = response.json()
                     except BaseException:
-                        st.session_state["results"][idx] = response.text
+                        st.session_state["results"][row_id] = response.text
 
             # --- Results/Assessment UI ---
             # After the segmentation form
             if st.session_state.get("results"):
                 # Show results/assessment forms for rows with results
-                for idx in sorted(st.session_state["results"].keys()):
-                    result = st.session_state["results"].get(idx)
+                for row_id in sorted(st.session_state["results"].keys()):
+                    result = st.session_state["results"].get(row_id)
                     if not (result and isinstance(result, dict)):
                         continue
 
-                    st.markdown(f"### Results for Row {idx}")
+                    st.markdown(f"### Results for Row {row_id}")
                     original_sentence = result.get("original_sentence", "")
                     st.markdown(f"**Original sentence:** {original_sentence}")
 
                     # Per-row form for all segments in this row
-                    with st.form(f"assessment_form_row_{idx}"):
+                    with st.form(f"assessment_form_row_{row_id}"):
                         segs = result.get("segments", [])
                         all_troll_pay_items = []
                         for seg_idx, seg in enumerate(segs):
                             seg_id = seg.get("segment_id", "")
                             claim = seg.get("claim", "")
-                            exp_key = f"exp_{idx}_{seg_id}"
+                            f"exp_{row_id}_{seg_id}"
 
                             with st.expander(
-                                f"Row {idx} Segment {seg_id}: {claim}",
+                                f"Row {row_id} Segment {seg_id}: {claim}",
                                 expanded=(
                                     seg_idx == 0
-                                    and not st.session_state.get(f"done_row_{idx}", False)
+                                    and not st.session_state.get(
+                                        f"done_row_{row_id}", False
+                                    )
                                 ),
                             ):
                                 evidence = seg.get("evidence", [])
                                 N = settings.NLI_CANDIDATES_SHOWN
                                 support = sorted(
-                                    [ev for ev in evidence if ev.get("label") == "entailment"],
+                                    [
+                                        ev
+                                        for ev in evidence
+                                        if ev.get("label") == "entailment"
+                                    ],
                                     key=lambda ev: ev.get("score", 0),
-                                    reverse=True
+                                    reverse=True,
                                 )[:N]
                                 contradiction = sorted(
-                                    [ev for ev in evidence if ev.get("label") == "contradiction"],
+                                    [
+                                        ev
+                                        for ev in evidence
+                                        if ev.get("label") == "contradiction"
+                                    ],
                                     key=lambda ev: ev.get("score", 0),
-                                    reverse=True
+                                    reverse=True,
                                 )[:N]
 
                                 st.write("**Supporting Evidence:**")
@@ -444,7 +480,7 @@ def draw_main():
                                         if section_path
                                         else text
                                     )
-                                    key = f"support_cb_{idx}_{seg_id}_{eid}"
+                                    key = f"support_cb_{row_id}_{seg_id}_{eid}"
                                     checked = st.session_state.get(key, False)
                                     cb = st.checkbox(label, value=checked, key=key)
                                     if cb:
@@ -466,7 +502,7 @@ def draw_main():
                                         if section_path
                                         else text
                                     )
-                                    key = f"contradict_cb_{idx}_{seg_id}_{eid}"
+                                    key = f"contradict_cb_{row_id}_{seg_id}_{eid}"
                                     checked = st.session_state.get(key, False)
                                     cb = st.checkbox(label, value=checked, key=key)
                                     if cb:
@@ -477,16 +513,29 @@ def draw_main():
                                 troll_pay_items = []
                                 for ev in evidence:
                                     all_scores = ev.get("all_scores", {})
-                                    label_scores = sorted(all_scores.items(), key=lambda x: -x[1])
+                                    label_scores = sorted(
+                                        all_scores.items(), key=lambda x: -x[1]
+                                    )
                                     for i, (label1, score1) in enumerate(label_scores):
-                                        if label1 not in {"entailment", "contradiction"}:
+                                        if label1 not in {
+                                            "entailment",
+                                            "contradiction",
+                                        }:
                                             continue
-                                        for j, (label2, score2) in enumerate(label_scores):
+                                        for j, (label2, score2) in enumerate(
+                                            label_scores
+                                        ):
                                             if j == i:
                                                 continue
-                                            if label2 not in {"entailment", "contradiction"}:
+                                            if label2 not in {
+                                                "entailment",
+                                                "contradiction",
+                                            }:
                                                 continue
-                                            if abs(score1 - score2) <= settings.TROLL_PAY_MARGIN:
+                                            if (
+                                                abs(score1 - score2)
+                                                <= settings.TROLL_PAY_MARGIN
+                                            ):
                                                 troll_pay_items.append((seg_id, ev))
                                                 break
                                         else:
@@ -505,12 +554,16 @@ def draw_main():
                                 if k not in seen_keys:
                                     seen_keys.add(k)
                                     deduped_troll_pay_items.append((seg_id, ev))
+
                             # Find the most ambiguous item (lowest margin between top 2 NLI scores)
                             def ambiguity(ev):
-                                scores = sorted(ev.get("all_scores", {}).values(), reverse=True)
+                                scores = sorted(
+                                    ev.get("all_scores", {}).values(), reverse=True
+                                )
                                 if len(scores) >= 2:
                                     return abs(scores[0] - scores[1])
                                 return 1.0  # Not ambiguous if only one score
+
                             most_ambiguous = None
                             min_margin = 1.0
                             for seg_id, ev in deduped_troll_pay_items:
@@ -520,43 +573,74 @@ def draw_main():
                                     most_ambiguous = (seg_id, ev)
                             if most_ambiguous:
                                 seg_id, ev = most_ambiguous
-                                with st.expander("🧌 tax! Help us on this ambiguous case", expanded=True):
+                                with st.expander(
+                                    "🧌 tax! Help us on this ambiguous case",
+                                    expanded=True,
+                                ):
                                     st.write(
                                         "This candidate was difficult for the model to classify. Please help by labeling it:"
                                     )
                                     eid = ev["id"]
                                     text = ev.get("text", "")
-                                    section_path = ev.get("section_path") or ev.get("section_head") or ""
+                                    section_path = (
+                                        ev.get("section_path")
+                                        or ev.get("section_head")
+                                        or ""
+                                    )
                                     label = (
-                                        f"**Row {idx} Segment {seg_id}**<br>**Section:** {section_path}<br>{text}"
+                                        f"**Row {row_id} Segment {seg_id}**<br>**Section:** {section_path}<br>{text}"
                                         if section_path
                                         else text
                                     )
-                                    radio_key = f"troll_radio_{idx}_{seg_id}_{eid}"
+                                    radio_key = f"troll_radio_{row_id}_{seg_id}_{eid}"
                                     prev = st.session_state.get(radio_key, "I dunno")
                                     choice = st.radio(
                                         label,
-                                        options=["Entails", "Neutral", "Contradicts", "I dunno"],
-                                        index=["Entails", "Neutral", "Contradicts", "I dunno"].index(prev)
-                                            if prev in ["Entails", "Neutral", "Contradicts", "I dunno"] else 3,
+                                        options=[
+                                            "Entails",
+                                            "Neutral",
+                                            "Contradicts",
+                                            "I dunno",
+                                        ],
+                                        index=(
+                                            [
+                                                "Entails",
+                                                "Neutral",
+                                                "Contradicts",
+                                                "I dunno",
+                                            ].index(prev)
+                                            if prev
+                                            in [
+                                                "Entails",
+                                                "Neutral",
+                                                "Contradicts",
+                                                "I dunno",
+                                            ]
+                                            else 3
+                                        ),
                                         key=radio_key,
                                         horizontal=True,
                                     )
                                     # Assign to proper segment (optional)
                                     for seg in segs:
                                         if seg.get("segment_id", "") == seg_id:
-                                            troll_selected = seg.get("user_selected_trollpay", {})
+                                            troll_selected = seg.get(
+                                                "user_selected_trollpay", {}
+                                            )
                                             troll_selected[eid] = choice
-                                            seg["user_selected_trollpay"] = troll_selected
+                                            seg[
+                                                "user_selected_trollpay"
+                                            ] = troll_selected
 
                         submitted = st.form_submit_button("Submit Assessment")
                         if submitted:
-                            st.session_state[f"done_row_{idx}"] = True
+                            st.session_state[f"done_row_{row_id}"] = True
                             st.success("Assessment saved!")
 
             # After the form, show raw JSON per row (unchanged)
-            for idx in sorted(st.session_state["results"].keys()):
-                result = st.session_state["results"].get(idx)
+            for row_id in sorted(st.session_state["results"].keys()):
+                row_id.strip()
+                result = st.session_state["results"].get(row_id)
                 if result:
                     st.markdown("**Raw Result JSON (includes your selections):**")
                     st.json(result)
@@ -608,7 +692,10 @@ def draw_main():
 
     # ------------------------
     # offer download once all rows are done
-    if all(st.session_state.get(f"done-{i}", False) for i in df.index):
+    if all(
+        st.session_state.get(f"done_row_{row_id.strip()}", False)
+        for row_id in df["row_id"]
+    ):
         import json
 
         results_json = json.dumps(st.session_state["results"], indent=2)

@@ -1,4 +1,4 @@
-﻿Cited Author,Cited Year,Cited DOI,TEI File,TEI xml:id,tei_target,code,tei_sentence
+﻿cited_author,cited_year,cited_doi,tei_file,TEI xml:id,tei_target,code,tei_sentence
 Alae-Carew,2020,10.1088/1748-9326/ab5cc0,Lal Bhardwaj-DOI-10.3390_foods13060877.tei.xml,b22,***#b22***,reported,"Similarly, Alae-Carew et al. ***#b22***"">[24] reported 50% less availability of water and use of saline water (3-4dS m-1) significantly reduces yield and nutritional quality of fruits.</ns0:s>"
 Alae-Carew,2020,10.1088/1748-9326/ab5cc0,Duc-DOI-10.11594_jtls.14.01.10.tei.xml,b4,***#b4***,real,"However, climate change, like changes in temperature, rainfall patterns, and extreme weather events poses a significant risk to peanut cultivation ***#b4***"">[5].</ns0:s>"
 Alae-Carew,2020,10.1088/1748-9326/ab5cc0,Valasi-DOI-10.3390_appliedchem1010006.tei.xml,b25,***#b25***,real,"The protein content depends on the harvest period, the temperature, and the rain rate #b24"">[24]***#b25***"">[25]#b26"">[26], a fact which is confirmed in the present study.</ns0:s>"

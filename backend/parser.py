@@ -50,9 +50,8 @@ def _section_path_from_paragraph(p_elem, div_meta_map):
 
 
 def tei_and_csv_to_documents(folder: Path, csv_path: str) -> list[dict]:
-    """
-    Load TEI-XML chunks + CSV citing sentences into one list of {'text','meta'} dicts.
-    """
+    """Load TEI-XML chunks + CSV citing sentences into one list of
+    {'text','meta'} dicts."""
     tei_docs = []
     for xml_file in folder.glob("*.xml"):
         chunks = tei_to_chunks(xml_file)
@@ -61,18 +60,20 @@ def tei_and_csv_to_documents(folder: Path, csv_path: str) -> list[dict]:
     df = read_csv(csv_path)
     df = df[df["tei_sentence"].notnull()]
     # Build docs from CSV citing sentences, including author and year for retriever keys
-    # Ensure Cited Year is an integer
-    df["Cited Year"] = df["Cited Year"].astype(int)
+    # Ensure cited_year is an integer
+    df["cited_year"] = df["cited_year"].astype(int)
     citing_docs = []
     for _, row in df.iterrows():
-        doc_id = row["TEI File"]
+        doc_id = row["tei_file"]
+        row_id = row["tei_file"] + "::" + row["tei_xml_id"]
         citing_docs.append(
             {
                 "id": doc_id,
+                "row_id": row_id,
                 "text": row["tei_sentence"],
-                "author": row["Cited Author"],
-                "year": row["Cited Year"],
-                "tei_file": row["TEI File"],
+                "author": row["cited_author"],
+                "year": row["cited_year"],
+                "tei_file": row["tei_file"],
                 "meta": {"id": doc_id},
             }
         )
@@ -218,9 +219,7 @@ def tei_to_chunks(tei_path: Path) -> List[Dict]:
 #  complexity for evolving the parser as needed.                            #
 # ========================================================================= #
 def parse_chunks(tei_path: Path) -> List[dict]:
-    """
-    Parse a TEI file and return a list of chunks with text and metadata.
-    """
+    """Parse a TEI file and return a list of chunks with text and metadata."""
     if not tei_path.exists():
         raise FileNotFoundError(f"TEI file not found: {tei_path}")
 
@@ -253,9 +252,10 @@ def parse_chunks(tei_path: Path) -> List[dict]:
 #   Figure caption sentence splitter
 # --------------------------------------------------------------------------- #
 def figure_caption_sentence(text: str, counter: int) -> list[dict]:
-    """
-    Split a figure caption into sentence-level chunks for indexing.
-    Each sentence is returned as a dict with 'text' and 'meta':{'type':'figure', 'fig_id':counter}.
+    """Split a figure caption into sentence-level chunks for indexing.
+
+    Each sentence is returned as a dict with 'text' and
+    'meta':{'type':'figure', 'fig_id':counter}.
     """
     # naive sentence split on period followed by space; can be refined
     sentences = [s.strip() for s in text.split(". ") if s.strip()]

@@ -3,6 +3,7 @@
 import logging
 from functools import lru_cache
 from backend.settings import Settings
+
 settings = Settings()
 
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, pipeline
@@ -17,8 +18,9 @@ THRESHOLD = 0.0
 
 @lru_cache(maxsize=None)
 def get_nli_pipeline(model_name: str):
-    """
-    Dynamically load any Hugging Face sequence-classification model as an NLI pipeline.
+    """Dynamically load any Hugging Face sequence-classification model as an
+    NLI pipeline.
+
     Cached to avoid reloading.
     """
     # Load tokenizer and model from Hugging Face
@@ -89,8 +91,8 @@ Always produce valid JSON with the described structure.
 def assess(
     claim: str, passages: list[str], metadatas: list[dict], nli_model: str = None
 ) -> list[dict]:
-    """
-    Always runs a HF sequence-classification model for NLI.
+    """Always runs a HF sequence-classification model for NLI.
+
     Accepts any HF checkpoint string via `nli_model`.
     Returns a list of { quote, chunk_id, type, label, score } dicts,
     keeping only entailment & contradiction above THRESHOLD.

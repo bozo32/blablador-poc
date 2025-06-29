@@ -92,7 +92,7 @@ class CitedPaperResult(BaseModel):
 
 class SegmentRequest(BaseModel):
     folder: str
-    row: int
+    row_id: str
     citing_title: str
     citing_id: str
     original_sentence: str
@@ -102,7 +102,7 @@ class SegmentRequest(BaseModel):
 
 class SentencePayload(BaseModel):
     folder: str
-    row_id: int
+    row_id: str
     citing_title: str
     citing_id: str
     original_sentence: str

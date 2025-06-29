@@ -19,7 +19,8 @@ def tei_to_chunks(xml_path: Path) -> list[dict]:
 
 
 def tei_and_csv_to_documents(folder: Path, csv_path: str) -> list[dict]:
-    """Combine TEI XML chunks and CSV citing sentences into one unified document list."""
+    """Combine TEI XML chunks and CSV citing sentences into one unified
+    document list."""
     from .utils import read_csv
 
     docs: list[dict] = []
@@ -29,7 +30,8 @@ def tei_and_csv_to_documents(folder: Path, csv_path: str) -> list[dict]:
     # 2) CSV citing sentences
     df = read_csv(csv_path)
     for idx, row in df.iterrows():
-        meta = {"type": "citing", "csv_row": int(idx)}
+        row_id = row["tei_file"] + "::" + row["tei_xml_id"]
+        meta = {"type": "citing", "csv_row": int(idx), "row_id": row_id}
         if "citing_title" in row:
             meta["citing_title"] = row["citing_title"]
         if "citing_id" in row:
@@ -44,9 +46,7 @@ class BlabladorClient:
         self.base_url = base_url
 
     def completion(self, prompt, model=None, temperature=0.0, max_tokens=512):
-        """
-        Call the Blablador `/v1/completions` endpoint.
-        """
+        """Call the Blablador `/v1/completions` endpoint."""
         # if no model explicitly given, defer to environment or legacy
         model = model or os.getenv("LLM_MODEL") or "gpt-3.5-turbo"
 
@@ -78,9 +78,8 @@ class BlabladorClient:
 
 
 def embed_documents(docs, model, api_key, base_url):
-    """
-    Embed a list of document dicts by batching inputs to avoid service errors.
-    """
+    """Embed a list of document dicts by batching inputs to avoid service
+    errors."""
 
     # Prepare the full list of texts
     texts = [doc["text"] for doc in docs]
@@ -120,10 +119,8 @@ def completion(
     api_key=None,
     base_url=None,
 ):
-    """
-    Back-compat wrapper so modules can import and call
-        from backend.bl_client import completion
-    """
+    """Back-compat wrapper so modules can import and call from
+    backend.bl_client import completion."""
     client = BlabladorClient(
         api_key=api_key,
         base_url=base_url,

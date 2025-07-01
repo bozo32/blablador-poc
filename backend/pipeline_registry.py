@@ -1,6 +1,6 @@
 # backend/pipeline_registry.py
 
-from backend import retriever, nli
+from backend import retriever
 from backend.settings import Settings
 
 

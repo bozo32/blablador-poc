@@ -105,17 +105,17 @@ class Settings(BaseSettings):
     HYBRID_ENABLE_COREF: bool = Field(
         True, env="HYBRID_ENABLE_COREF", description="Enable coreference patching"
     )
-    
+
     HYBRID_COREF_MODEL: str = Field(
-    "biu-nlp/f-coref",  # Default to the well-maintained HF f-coref model
+        "biu-nlp/f-coref",  # Default to the well-maintained HF f-coref model
         env="HYBRID_COREF_MODEL",
-        description="HuggingFace repo or local path for f-coref model (default: biu-nlp/f-coref)"
+        description="HuggingFace repo or local path for f-coref model (default: biu-nlp/f-coref)",
     )
 
     HYBRID_COREF_DEVICE: str = Field(
         "cpu",  # or 'cuda' if you want GPU (and have one)
         env="HYBRID_COREF_DEVICE",
-        description="Device for f-coref model inference (cpu/cuda)"
+        description="Device for f-coref model inference (cpu/cuda)",
     )
 
     HYBRID_RERANK_MODEL: str = Field(

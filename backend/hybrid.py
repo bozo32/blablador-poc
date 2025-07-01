@@ -2,7 +2,6 @@
 
 
 from typing import Any, Dict
-import numpy as np
 from backend.settings import Settings
 
 
@@ -62,23 +61,29 @@ class HybridPipeline:
             win_size = w["meta"].get("window_size")
             # Standard window
             if win_size == window_size:
-                windows.append({
-                    "text": w["text"],
-                    "tei_ids": sent_ids,
-                    "window_id": w.get("id"),
-                    "meta": w.get("meta", {}),
-                })
-            # For paragraphs too short for window_size, keep largest window covering all sentences
-            elif para_max_len[p_id] < window_size and len(sent_ids) == para_max_len[p_id]:
-                # Only include one "full paragraph" window per short para
-                key = (p_id, tuple(sorted(sent_ids)))
-                if key not in seen_full_para:
-                    windows.append({
+                windows.append(
+                    {
                         "text": w["text"],
                         "tei_ids": sent_ids,
                         "window_id": w.get("id"),
                         "meta": w.get("meta", {}),
-                    })
+                    }
+                )
+            # For paragraphs too short for window_size, keep largest window covering all sentences
+            elif (
+                para_max_len[p_id] < window_size and len(sent_ids) == para_max_len[p_id]
+            ):
+                # Only include one "full paragraph" window per short para
+                key = (p_id, tuple(sorted(sent_ids)))
+                if key not in seen_full_para:
+                    windows.append(
+                        {
+                            "text": w["text"],
+                            "tei_ids": sent_ids,
+                            "window_id": w.get("id"),
+                            "meta": w.get("meta", {}),
+                        }
+                    )
                     seen_full_para.add(key)
 
         print(
@@ -166,18 +171,25 @@ class HybridPipeline:
             # -- PATCH: fastcoref integration --
             try:
                 from fastcoref import FCoref
-                coref_model_path = getattr(settings, "HYBRID_COREF_MODEL", "biu-nlp/f-coref")
-                coref_model = FCoref(model_name=coref_model_path, device="cpu")  # adjust device as needed
+
+                coref_model_path = getattr(
+                    settings, "HYBRID_COREF_MODEL", "biu-nlp/f-coref"
+                )
+                coref_model = FCoref(
+                    model_name=coref_model_path, device="cpu"
+                )  # adjust device as needed
 
                 coref_windows = []
                 for w in filtered_windows:
-                    text = w['text']
+                    text = w["text"]
                     try:
                         preds = coref_model.predict(texts=[text], max_length=512)
                         clusters = []
                         patched = text
                         if preds and preds.get_clusters(0):
-                            cluster_list = preds.get_clusters(as_strings=True)[0]  # List[List[str]]
+                            cluster_list = preds.get_clusters(as_strings=True)[
+                                0
+                            ]  # List[List[str]]
                             clusters = cluster_list
                             # Simple patching: replace each pronoun with main mention in cluster
                             # (for demonstration, could be smarter)
@@ -185,32 +197,44 @@ class HybridPipeline:
                                 main = cluster[0]
                                 for mention in cluster[1:]:
                                     if mention != main and mention in patched:
-                                        patched = patched.replace(mention, f"{main} [{mention}]", 1)
+                                        patched = patched.replace(
+                                            mention, f"{main} [{mention}]", 1
+                                        )
                         w["coref_clusters"] = clusters
                         w["coref_patched"] = patched
                         coref_windows.append(w)
                     except Exception as e:
-                        print(f"[HYBRID][STEP 3] Coref failed for window: {w.get('window_id', '')}: {e}")
+                        print(
+                            f"[HYBRID][STEP 3] Coref failed for window: {w.get('window_id', '')}: {e}"
+                        )
                         w["coref_clusters"] = []
                         w["coref_patched"] = text
                         coref_windows.append(w)
-                print(f"[HYBRID][STEP 3] f-coref patch complete: {len(coref_windows)} windows.")
+                print(
+                    f"[HYBRID][STEP 3] f-coref patch complete: {len(coref_windows)} windows."
+                )
             except Exception as e:
                 print("[HYBRID][STEP 3] Failed to load or run FastCoref:", e)
                 coref_windows = filtered_windows
         else:
             coref_windows = filtered_windows
             print("[HYBRID][STEP 3] Coreference patching skipped.")
-                        
+
         # --- [STEP 4] ColBERT/SPLADE reranking ---
-        print(f"[HYBRID][STEP 4] Reranking windows using {settings.HYBRID_RERANK_MODEL}...")
+        print(
+            f"[HYBRID][STEP 4] Reranking windows using {settings.HYBRID_RERANK_MODEL}..."
+        )
 
         rerank_model = getattr(settings, "HYBRID_RERANK_MODEL", "none").lower()
         if rerank_model in ("none", "", "pass", "skip"):
-            print("[HYBRID][STEP 4] Reranking skipped for POC (pass-through, no ColBERT/SPLADE).")
+            print(
+                "[HYBRID][STEP 4] Reranking skipped for POC (pass-through, no ColBERT/SPLADE)."
+            )
             reranked_windows = coref_windows
         else:
-            print(f"[HYBRID][STEP 4] Rerank model '{rerank_model}' not implemented in this POC. Passing windows unchanged.")
+            print(
+                f"[HYBRID][STEP 4] Rerank model '{rerank_model}' not implemented in this POC. Passing windows unchanged."
+            )
             reranked_windows = coref_windows
 
         print(f"[HYBRID][STEP 4] Reranking complete: {len(reranked_windows)} windows.")

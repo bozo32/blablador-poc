@@ -1,6 +1,6 @@
 from typing import List, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, validator
 
 
 class Evidence(BaseModel):
@@ -61,7 +61,7 @@ class Settings(BaseModel):
         10, ge=1, description="How many of the FAISS candidates to keep after reranking"
     )
 
-    @field_validator("max_sentences", "faiss_min_score", "nli_threshold", mode="before")
+    @validator("max_sentences", "faiss_min_score", "nli_threshold", pre=True)
     def check_not_nan(cls, v):
         import math
 
@@ -120,7 +120,7 @@ class PrebuildRequest(BaseModel):
     max_chunks: int = 256
     faiss_min_score: float = 0.2
 
-    @field_validator("max_chunks", "faiss_min_score", mode="before")
+    @validator("max_chunks", "faiss_min_score", pre=True)
     def check_not_nan_prebuild(cls, v):
         import math
 

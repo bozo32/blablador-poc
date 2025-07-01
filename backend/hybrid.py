@@ -2,6 +2,7 @@
 
 
 from typing import Any, Dict
+import numpy as np
 from backend.settings import Settings
 
 
@@ -44,17 +45,41 @@ class HybridPipeline:
         # Parse all sliding windows (sizes 1, 2, 3) from TEI
         all_windows = tei_to_chunks(tei_path)
 
-        # Keep only those windows of the configured size
-        windows = [
-            {
-                "text": w["text"],
-                "tei_ids": w["meta"].get("sent_ids", []),
-                "window_id": w.get("id"),
-                "meta": w.get("meta", {}),
-            }
-            for w in all_windows
-            if w["meta"].get("window_size") == window_size
-        ]
+        # Build a mapping of paragraph ID to the max number of sentences in that paragraph
+        para_max_len = {}
+        for w in all_windows:
+            p_id = w["meta"].get("p_id")
+            sent_ids = w["meta"].get("sent_ids", [])
+            para_max_len.setdefault(p_id, 0)
+            para_max_len[p_id] = max(para_max_len[p_id], len(sent_ids))
+
+        # Collect the standard windows, and also collect for short paras
+        windows = []
+        seen_full_para = set()
+        for w in all_windows:
+            p_id = w["meta"].get("p_id")
+            sent_ids = w["meta"].get("sent_ids", [])
+            win_size = w["meta"].get("window_size")
+            # Standard window
+            if win_size == window_size:
+                windows.append({
+                    "text": w["text"],
+                    "tei_ids": sent_ids,
+                    "window_id": w.get("id"),
+                    "meta": w.get("meta", {}),
+                })
+            # For paragraphs too short for window_size, keep largest window covering all sentences
+            elif para_max_len[p_id] < window_size and len(sent_ids) == para_max_len[p_id]:
+                # Only include one "full paragraph" window per short para
+                key = (p_id, tuple(sorted(sent_ids)))
+                if key not in seen_full_para:
+                    windows.append({
+                        "text": w["text"],
+                        "tei_ids": sent_ids,
+                        "window_id": w.get("id"),
+                        "meta": w.get("meta", {}),
+                    })
+                    seen_full_para.add(key)
 
         print(
             f"[HYBRID][STEP 1] Complete: {len(windows)} windows generated of size {window_size}."
@@ -135,145 +160,58 @@ class HybridPipeline:
         if filtered_windows:
             print(f"[HYBRID][STEP 2] Sample filtered window: {filtered_windows[0]}")
 
-        # --- [STEP 3] Coreference patching (with adjacent paragraph context) ---
-        # FIXME: Paragraph indexing is string-based (p_id); robust integer indexing
-        # (or a global document order field) may be required if captions/figures are included.
-        # See parser.py for discussion.
+        # --- [STEP 3] Coreference patching (FastCoref/f-coref model) ---
         if settings.HYBRID_ENABLE_COREF:
-            print(
-                "[HYBRID][STEP 3] Applying coreference resolution/patch (paragraph + adjacent)..."
-            )
+            print("[HYBRID][STEP 3] Applying f-coref coreference (FastCoref direct)...")
+            # -- PATCH: fastcoref integration --
             try:
-                import spacy
-                import spacy_coref
+                from fastcoref import FCoref
+                coref_model_path = getattr(settings, "HYBRID_COREF_MODEL", "biu-nlp/f-coref")
+                coref_model = FCoref(model_name=coref_model_path, device="cpu")  # adjust device as needed
 
-                nlp = spacy.load("en_core_web_sm")
-                nlp.add_pipe("coref")
                 coref_windows = []
-                from collections import defaultdict
-
-                para_to_windows = defaultdict(list)
                 for w in filtered_windows:
-                    para_to_windows[w["meta"]["p_id"]].append(w)
-                para_ids = [w["meta"]["p_id"] for w in filtered_windows]
-                seen = set()
-                ordered_para_ids = []
-                for pid in para_ids:
-                    if pid not in seen:
-                        ordered_para_ids.append(pid)
-                        seen.add(pid)
-                for i, p_id in enumerate(ordered_para_ids):
-                    prev_p_id = ordered_para_ids[i - 1] if i > 0 else None
-                    prev_text = ""
-                    if prev_p_id:
-                        prev_texts = [w["text"] for w in para_to_windows[prev_p_id]]
-                        prev_text = " ".join(prev_texts)
-                    for w in para_to_windows[p_id]:
-                        context_text = (prev_text + " " if prev_text else "") + w[
-                            "text"
-                        ]
-                        doc = nlp(context_text)
-                        clusters = [
-                            {
-                                "main": cluster.main.text,
-                                "mentions": [span.text for span in cluster.mentions],
-                            }
-                            for cluster in doc._.coref_clusters
-                        ]
-                        patched_text = w["text"]
-                        doc_win = nlp(w["text"])
-                        for token in doc_win:
-                            if token.pos_ == "PRON" and token._.in_coref:
-                                for cluster in doc._.coref_clusters:
-                                    if token.text in [
-                                        span.text for span in cluster.mentions
-                                    ]:
-                                        referent = cluster.main.text
-                                        patched_text = patched_text.replace(
-                                            token.text, f"{referent} [{token.text}]", 1
-                                        )
-                                        break
-                        w["coref_patched"] = patched_text
+                    text = w['text']
+                    try:
+                        preds = coref_model.predict(texts=[text], max_length=512)
+                        clusters = []
+                        patched = text
+                        if preds and preds.get_clusters(0):
+                            cluster_list = preds.get_clusters(as_strings=True)[0]  # List[List[str]]
+                            clusters = cluster_list
+                            # Simple patching: replace each pronoun with main mention in cluster
+                            # (for demonstration, could be smarter)
+                            for cluster in cluster_list:
+                                main = cluster[0]
+                                for mention in cluster[1:]:
+                                    if mention != main and mention in patched:
+                                        patched = patched.replace(mention, f"{main} [{mention}]", 1)
                         w["coref_clusters"] = clusters
-                        w["coref_context"] = {
-                            "prev_text": prev_text,
-                            "context_used": context_text,
-                        }
+                        w["coref_patched"] = patched
                         coref_windows.append(w)
-                print(
-                    f"[HYBRID][STEP 3] Coref patching complete: {len(coref_windows)} windows."
-                )
+                    except Exception as e:
+                        print(f"[HYBRID][STEP 3] Coref failed for window: {w.get('window_id', '')}: {e}")
+                        w["coref_clusters"] = []
+                        w["coref_patched"] = text
+                        coref_windows.append(w)
+                print(f"[HYBRID][STEP 3] f-coref patch complete: {len(coref_windows)} windows.")
             except Exception as e:
-                import traceback
-
-                print("=== EXCEPTION DURING STEP 3 (Coref) ===")
-                traceback.print_exc()
-                raise
+                print("[HYBRID][STEP 3] Failed to load or run FastCoref:", e)
+                coref_windows = filtered_windows
         else:
             coref_windows = filtered_windows
             print("[HYBRID][STEP 3] Coreference patching skipped.")
-
+                        
         # --- [STEP 4] ColBERT/SPLADE reranking ---
-        print(
-            f"[HYBRID][STEP 4] Reranking windows using {settings.HYBRID_RERANK_MODEL}..."
-        )
+        print(f"[HYBRID][STEP 4] Reranking windows using {settings.HYBRID_RERANK_MODEL}...")
 
-        rerank_model = settings.HYBRID_RERANK_MODEL.lower()
-        rerank_top_k = getattr(settings, "HYBRID_RERANK_TOP_K", 20)
-        rerank_percentile = getattr(settings, "HYBRID_RERANK_PERCENTILE", None)
-        claim = kwargs.get("claim", None)
-
-        reranked_windows = []
-        scores = []
-
-        if rerank_model == "colbert":
-            print("[HYBRID][STEP 4] Loading ColBERT model...")
-            # TODO: import your ColBERT runner here
-            # from colbert_runner import run_colbert_rerank
-            # reranked, token_scores = run_colbert_rerank(claim, coref_windows, settings)
-            # For now, placeholder logic:
-            print("[HYBRID][STEP 4][TODO] ColBERT rerank not yet implemented.")
-            reranked = coref_windows
-            token_scores = [{} for _ in reranked]
-        elif rerank_model == "splade":
-            print("[HYBRID][STEP 4] Loading SPLADE model...")
-            # TODO: import and run SPLADE here
-            # from splade_runner import run_splade_rerank
-            # reranked, token_scores = run_splade_rerank(claim, coref_windows, settings)
-            # For now, placeholder logic:
-            print("[HYBRID][STEP 4][TODO] SPLADE rerank not yet implemented.")
-            reranked = coref_windows
-            token_scores = [{} for _ in reranked]
+        rerank_model = getattr(settings, "HYBRID_RERANK_MODEL", "none").lower()
+        if rerank_model in ("none", "", "pass", "skip"):
+            print("[HYBRID][STEP 4] Reranking skipped for POC (pass-through, no ColBERT/SPLADE).")
+            reranked_windows = coref_windows
         else:
-            print(
-                f"[HYBRID][STEP 4] Unknown rerank model: {rerank_model}. Passing windows unchanged."
-            )
-            reranked = coref_windows
-            token_scores = [{} for _ in reranked]
-
-        # Attach scores (empty if not implemented) to each window for downstream audit
-        for w, ts in zip(reranked, token_scores):
-            w["_rerank_token_scores"] = ts
-            # Could also include an overall window score here if desired
-            scores.append(ts.get("window_score", 0.0))
-
-        # Filter top-k or by percentile if specified
-        if rerank_percentile is not None:
-            # Cutoff by percentile
-            threshold = np.percentile(scores, rerank_percentile)
-            reranked_windows = [w for w, s in zip(reranked, scores) if s >= threshold]
-        elif rerank_top_k:
-            reranked_windows = sorted(
-                reranked,
-                key=lambda w: w.get("_rerank_token_scores", {}).get(
-                    "window_score", 0.0
-                ),
-                reverse=True,
-            )[:rerank_top_k]
-        else:
-            reranked_windows = reranked
-
-        print(f"[HYBRID][STEP 4] Reranking complete: {len(reranked_windows)} windows.")
+            print(f"[HYBRID][STEP 4] Rerank model '{rerank_model}' not implemented in this POC. Passing windows unchanged.")
+            reranked_windows = coref_windows
 
         print(f"[HYBRID][STEP 4] Reranking complete: {len(reranked_windows)} windows.")
 

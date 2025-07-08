@@ -19,8 +19,9 @@ if str(PROJECT_ROOT) not in sys.path:
 from backend import utils
 from backend.bl_client import BlabladorClient
 from backend.model_cache import add_model, get_models
-from backend.settings import Settings
+from backend.settings import AppSettings
 from backend.utils import list_local_models
+from typing import List
 
 
 # Third-party
@@ -29,7 +30,7 @@ from backend.utils import list_local_models
 # Local application
 
 # === Settings & State Initialization ===
-settings = Settings()
+settings = AppSettings()
 
 
 def init_session_state():
@@ -218,7 +219,25 @@ def handle_upload():
 
 
 # === UI Drawing ===
-
+def color_tokens(text: str, token_scores: List[float], color_pos="green", color_neg="red"):
+    """Color words according to token salience."""
+    tokens = text.split()
+    colored = []
+    for token, score in zip(tokens, token_scores):
+        # Clamp/normalize score as needed, e.g., [-1, 1]
+        if score > 0:
+            color = color_pos
+        elif score < 0:
+            color = color_neg
+        else:
+            color = "black"
+        # Make the intensity proportional to abs(score)
+        intensity = min(1.0, abs(score))
+        alpha = 0.4 + 0.6 * intensity  # Range [0.4, 1.0]
+        span = f'<span style="color:{color};opacity:{alpha};">{token}</span>'
+        colored.append(span)
+    # Join back, preserving spaces
+    return " ".join(colored)
 
 def draw_sidebar():
     init_session_state()
@@ -229,6 +248,8 @@ def draw_sidebar():
             ["classic", "hybrid"],
             index=0 if st.session_state["pipeline_mode"] == "classic" else 1,
             help="Classic = fast, Hybrid = exhaustive",
+            key="pipeline_mode_selectbox"
+
         )
         st.session_state["pipeline_mode"] = mode
         st.header("Upload your data")
@@ -262,6 +283,7 @@ def draw_sidebar():
             "selected_model",
             st.session_state.available_models,
             allow_custom=False,
+
         )
 
         st.header("Embedding Model")
@@ -355,8 +377,7 @@ def draw_main():
         # Now, use a Streamlit form with one expander per sentence/segment.
         with st.form("sentence_segment_evaluation_form"):
             for i, row in enumerate(df.itertuples(index=False), 1):
-                row_id = row.row_id
-                row_id = row_id.strip()
+                row_id = row.row_id.strip()
                 expanded = True if i == 1 else False
                 with st.expander(
                     f"Row {row_id}: {row.tei_sentence}",
@@ -414,6 +435,7 @@ def draw_main():
                             "base_url": st.session_state["api_base"],
                             "reranker_model": st.session_state.get("reranker_model"),
                             "reranker_top_k": st.session_state.get("reranker_top_k"),
+                            "pipeline_mode": st.session_state["pipeline_mode"],
                         },
                     }
                     try:
@@ -478,20 +500,25 @@ def draw_main():
                                 support_checked = []
                                 for i, ev in enumerate(support):
                                     eid = ev["id"]
+                                    salience = ev.get("token_scores")
                                     text = ev.get("text", "")
-                                    section_path = (
-                                        ev.get("section_path")
-                                        or ev.get("section_head")
-                                        or ""
-                                    )
-                                    label = (
-                                        f"**Section:** {section_path}\n{text}"
-                                        if section_path
-                                        else text
-                                    )
+                                    # Compose a two‑line HTML block: Location header + coloured text
+                                    section_path = ev.get("section_path") or ev.get("section_head") or ""
+                                    if salience and settings.SHOW_SALIENCE:
+                                        coloured_text = color_tokens(text, salience)
+                                    else:
+                                        coloured_text = text
+                                    if section_path:
+                                        html_block = (
+                                            f"<div><strong>Location:</strong> {section_path}</div>"
+                                            f"<div>{coloured_text}</div>"
+                                        )
+                                    else:
+                                        html_block = coloured_text
+                                    st.markdown(html_block, unsafe_allow_html=True)
                                     key = f"support_cb_{row_id}_{seg_id}_{eid}"
                                     checked = st.session_state.get(key, False)
-                                    cb = st.checkbox(label, value=checked, key=key)
+                                    cb = st.checkbox("Select", value=checked, key=key)
                                     if cb:
                                         support_checked.append(eid)
                                 seg["user_selected_support"] = support_checked
@@ -500,20 +527,25 @@ def draw_main():
                                 contra_checked = []
                                 for i, ev in enumerate(contradiction):
                                     eid = ev["id"]
+                                    salience = ev.get("token_scores")
                                     text = ev.get("text", "")
-                                    section_path = (
-                                        ev.get("section_path")
-                                        or ev.get("section_head")
-                                        or ""
-                                    )
-                                    label = (
-                                        f"**Section:** {section_path}\n{text}"
-                                        if section_path
-                                        else text
-                                    )
+                                    # Compose a two‑line HTML block: Location header + coloured text
+                                    section_path = ev.get("section_path") or ev.get("section_head") or ""
+                                    if salience and settings.SHOW_SALIENCE:
+                                        coloured_text = color_tokens(text, salience)
+                                    else:
+                                        coloured_text = text
+                                    if section_path:
+                                        html_block = (
+                                            f"<div><strong>Location:</strong> {section_path}</div>"
+                                            f"<div>{coloured_text}</div>"
+                                        )
+                                    else:
+                                        html_block = coloured_text
+                                    st.markdown(html_block, unsafe_allow_html=True)
                                     key = f"contradict_cb_{row_id}_{seg_id}_{eid}"
                                     checked = st.session_state.get(key, False)
-                                    cb = st.checkbox(label, value=checked, key=key)
+                                    cb = st.checkbox("Select", value=checked, key=key)
                                     if cb:
                                         contra_checked.append(eid)
                                 seg["user_selected_contradiction"] = contra_checked
@@ -648,7 +680,6 @@ def draw_main():
 
             # After the form, show raw JSON per row (unchanged)
             for row_id in sorted(st.session_state["results"].keys()):
-                row_id.strip()
                 result = st.session_state["results"].get(row_id)
                 if result:
                     st.markdown("**Raw Result JSON (includes your selections):**")
@@ -752,3 +783,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

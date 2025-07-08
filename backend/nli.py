@@ -1,10 +1,12 @@
+import os
+os.environ["TRANSFORMERS_CACHE"] = str(os.path.expanduser("~/.cache/huggingface"))
+
 # backend/nli.py
 
 import logging
 from functools import lru_cache
-from backend.settings import Settings
+from backend.settings import settings as app_settings
 
-settings = Settings()
 
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, pipeline
 
@@ -13,7 +15,7 @@ logging.basicConfig(
 )
 
 
-THRESHOLD = 0.0
+THRESHOLD = 0.3
 
 
 @lru_cache(maxsize=None)
@@ -24,8 +26,8 @@ def get_nli_pipeline(model_name: str):
     Cached to avoid reloading.
     """
     # Load tokenizer and model from Hugging Face
-    tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True)
-    model = AutoModelForSequenceClassification.from_pretrained(model_name)
+    tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True, cache_dir=os.environ["TRANSFORMERS_CACHE"])
+    model = AutoModelForSequenceClassification.from_pretrained(model_name, cache_dir=os.environ["TRANSFORMERS_CACHE"])
     # Return a text-classification pipeline configured for NLI
     return pipeline(
         "text-classification", model=model, tokenizer=tokenizer, return_all_scores=True
@@ -36,42 +38,6 @@ def predict_nli(premise: str, hypothesis: str):
     nli_pipeline = get_nli_pipeline()
     result = nli_pipeline(f"{premise} [SEP] {hypothesis}", top_k=None)
     return result
-
-
-# -----------------------------------------------------------------------------
-# Local NLI model registry: defer loading until needed
-# -----------------------------------------------------------------------------
-
-# Map model names to HuggingFace repo paths
-_LOCAL_NLI_PATHS = {
-    "deberta-base": "cross-encoder/nli-deberta-v3-base",
-    "deberta-large": "microsoft/deberta-v3-large",
-}
-
-_LOCAL_NLI_MODELS: dict[str, any] = {}
-
-
-def get_local_nli_pipeline(name: str):
-    from transformers import (
-        AutoModelForSequenceClassification,
-        AutoTokenizer,
-    )
-    from transformers import pipeline as hf_pipeline
-
-    if name not in _LOCAL_NLI_PATHS:
-        raise KeyError(f"No local NLI model configured for '{name}'")
-    if name not in _LOCAL_NLI_MODELS[name]:
-        path = _LOCAL_NLI_PATHS[name]
-        tok = AutoTokenizer.from_pretrained(path, use_fast=False)
-        model = AutoModelForSequenceClassification.from_pretrained(path)
-        _LOCAL_NLI_MODELS[name] = hf_pipeline(
-            "text-classification",
-            model=model,
-            tokenizer=tok,
-            return_all_scores=True,
-            device=-1,
-        )
-    return _LOCAL_NLI_MODELS[name]
 
 
 # A system prompt that fixes the model’s role and constraints:
@@ -104,7 +70,7 @@ def assess(
     input_texts = [f"{text} [SEP] {claim}" for text in passages]
     try:
         results = pipe(
-            input_texts, batch_size=settings.NLI_BATCH_SIZE
+            input_texts, batch_size=app_settings.NLI_BATCH_SIZE
         )  # optionally set batch_size param
     except Exception as e:
         logging.error(f"[NLI] error during batched pipeline call: {e}")

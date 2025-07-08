@@ -1,14 +1,15 @@
 # backend/settings.py
 
 from pydantic import Field
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings as PydanticBaseSettings 
 from typing import Literal, List
+from pathlib import Path
 
 NLI_BATCH_SIZE = 50
 TROLL_PAY_MARGIN = 0.7
 
 
-class Settings(BaseSettings):
+class AppSettings(PydanticBaseSettings):
     ## selection for which mode the script will run, classic (nli) or hybrid
     PIPELINE_MODE: Literal["classic", "hybrid"] = Field("classic", env="PIPELINE_MODE")
 
@@ -83,23 +84,16 @@ class Settings(BaseSettings):
         env="HYBRID_PARAGRAPH_WINDOW_OVERLAP",
         description="Window overlap fraction for long paragraphs",
     )
-
-    HYBRID_USE_SBERT: bool = Field(
-        True, env="HYBRID_USE_SBERT", description="Enable SBERT filtering"
-    )
-    HYBRID_USE_BM25: bool = Field(
-        True, env="HYBRID_USE_BM25", description="Enable BM25 filtering"
-    )
     HYBRID_FILTER_LOGIC: str = Field(
-        "both",
+        "none",
         env="HYBRID_FILTER_LOGIC",
-        description="Which filters to apply: 'sbert', 'bm25', or 'both'",
+        description="Which filters to apply: 'sbert', 'bm25', 'none' or 'both'",
     )
     HYBRID_SBERT_THRESHOLD: float = Field(
-        0.10, env="HYBRID_SBERT_THRESHOLD", description="SBERT cosine threshold"
+        0.40, env="HYBRID_SBERT_THRESHOLD", description="SBERT cosine threshold"
     )
     HYBRID_BM25_THRESHOLD: float = Field(
-        0.20, env="HYBRID_BM25_THRESHOLD", description="BM25 threshold"
+        0.00, env="HYBRID_BM25_THRESHOLD", description="BM25 threshold"
     )
 
     HYBRID_ENABLE_COREF: bool = Field(
@@ -124,7 +118,7 @@ class Settings(BaseSettings):
         description="Which reranker: 'ColBERT' or 'SPLADE'",
     )
     HYBRID_RERANK_TOP_K: int = Field(
-        20, env="HYBRID_RERANK_TOP_K", description="Top-k windows after reranking"
+        10, env="HYBRID_RERANK_TOP_K", description="Top-k windows after reranking"
     )
     HYBRID_MASK_DISCOURSE: bool = Field(
         True, env="HYBRID_MASK_DISCOURSE", description="Mask discourse markers"
@@ -165,10 +159,52 @@ class Settings(BaseSettings):
         description="Default color for other tokens",
     )
     HYBRID_AUDIT_MODE: bool = Field(
-        False, env="HYBRID_AUDIT_MODE", description="Enable audit/debug output"
+        True, env="HYBRID_AUDIT_MODE", description="Enable audit/debug output"
+    )
+
+        # ---  Retrieval cut-off settings  ------------------------------------
+    RETRIEVAL_K: int = Field(
+        1500, env="HYBRID_FAISS_K"
+    )          # max hits per claim
+    
+    RETRIEVAL_TAU: float = Field(
+        0.90, env="HYBRID_TAU"
+    )
+                    # keep ≥ τ·best
+    RETRIEVAL_MAX: int = Field(
+        60, env="HYBRID_MAX_CANDIDATES"
+    )  # safety cap
+
+    # --- ColBERT -----------------------------------------------------------------
+    COLBERT_MODE: str = Field("external", env="COLBERT_MODE")  # "internal" | "external" | "off"
+    COLBERT_API_URL: str = Field("http://localhost:7001", env="COLBERT_API_URL")
+    COLBERT_ROOT: Path = Field(
+        Path(__file__).parent.parent / "data" / "colbert",
+        env="COLBERT_ROOT",
+        description="Where ColBERT indexes are stored",
+    )
+    COLBERT_INDEX_PATH: Path = Field(
+    Path(__file__).parent.parent / "data" / "experiments" / "default" / "indexes" / "default",
+    env="COLBERT_INDEX_PATH",
+    description="Where ColBERT index files are actually stored"
+    )
+    COLBERT_DIM: int = Field(128, env="COLBERT_DIM")
+    COLBERT_MAXLEN: int = Field(180, env="COLBERT_MAXLEN")
+    COLBERT_TOP_K: int = Field(20, env="COLBERT_TOP_K")
+    SHOW_SALIENCE: bool = Field(
+        True,
+        env="SHOW_SALIENCE",
+        description="Show ColBERT token-salience colouring in the UI",
     )
 
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
         case_sensitive = False
+
+
+# ---------------------------------------------------------------------------
+#  Canonical, application‑wide settings object
+# ---------------------------------------------------------------------------
+settings = AppSettings()
+

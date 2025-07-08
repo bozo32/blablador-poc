@@ -1,0 +1,21 @@
+name: colbert-server
+channels:
+  - conda-forge
+  - pytorch
+dependencies:
+  - python=3.10
+  - pytorch>=2.1
+  - torchvision
+  - torchaudio
+  - numpy
+  - scipy
+  - pandas
+  - tqdm
+  - faiss-cpu  # <- install conda-forge's faiss-cpu
+  - pip
+  - pip:
+      - transformers==4.33.2
+      - fastapi
+      - uvicorn
+      - python-multipart
+      - aiofiles

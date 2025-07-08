@@ -1,10 +1,10 @@
 # backend/pipeline_registry.py
 
 from backend import retriever
-from backend.settings import Settings
+from backend.settings import AppSettings
 
 
-def get_pipeline(cfg: Settings):
+def get_pipeline(cfg: AppSettings):
     """
     Return the build_all function for the desired pipeline mode.
     """

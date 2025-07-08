@@ -32,12 +32,25 @@ class Retriever:
     def search(
         self, vectors: List[List[float]], k: int
     ) -> tuple[List[List[str]], List[float]]:
+        # Return empty results if the index has not been built
+        if self.index is None or not self.id_list:
+            empty_ids = [[] for _ in vectors]
+            empty_scores = [[] for _ in vectors]
+            return empty_ids, empty_scores
         arr = np.array(vectors, dtype="float32")
         D, I = self.index.search(arr, k)
         id_batches = [[self.id_list[pos] for pos in batch] for batch in I]
         return id_batches, D.tolist()
 
     def build(self, docs: List[Dict]) -> None:
+        # --- guard: no documents to index ---
+        if not docs:
+            import logging
+            logging.warning("Retriever.build called with 0 docs; skipping index build")
+            self.index = None
+            self.chunks = []
+            self.id_list = []
+            return
         self._docs = docs
         filtered = docs[: self.max_sentences] if self.max_sentences else docs
         # *** Local embedding ***

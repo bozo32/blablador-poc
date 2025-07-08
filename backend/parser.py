@@ -159,6 +159,8 @@ def tei_to_chunks(tei_path: Path) -> List[Dict]:
             for i in range(len(texts) - w + 1):
                 window_text = " ".join(texts[i : i + w])
                 window_id = f"{p_id}_w{w}_{i+1}"
+                parent3_idx = max(0, i - (3 - w))          # maps 1- & 2-windows to a 3-window
+                parent3_id  = f"{p_id}_w3_{parent3_idx+1}"
                 meta = {
                     "id": window_id,
                     "source": str(tei_path),
@@ -166,6 +168,7 @@ def tei_to_chunks(tei_path: Path) -> List[Dict]:
                     "p_id": p_id,
                     "window_size": w,
                     "sent_ids": ids[i : i + w],
+                    "parent3": parent3_id,
                 }
                 if section_info:
                     meta.update(

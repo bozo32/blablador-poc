@@ -1,7 +1,6 @@
 from typing import List, Optional
 
-from pydantic import BaseModel, Field, validator
-
+from pydantic import BaseModel, Field, field_validator
 
 class Evidence(BaseModel):
     text: str
@@ -24,7 +23,10 @@ class Segment(BaseModel):
     claim: str
 
 
-class Settings(BaseModel):
+class RequestSettings(BaseModel):
+    pipeline_mode: Optional[str] = Field(
+        None, description="Pipeline mode: 'classic' or 'hybrid'"
+    )
     embed_model: Optional[str] = Field(
         None, description="Embedding model alias or HF path"
     )
@@ -61,7 +63,7 @@ class Settings(BaseModel):
         10, ge=1, description="How many of the FAISS candidates to keep after reranking"
     )
 
-    @validator("max_sentences", "faiss_min_score", "nli_threshold", pre=True)
+    @field_validator("max_sentences", "faiss_min_score", "nli_threshold")
     def check_not_nan(cls, v):
         import math
 
@@ -97,7 +99,7 @@ class SegmentRequest(BaseModel):
     citing_id: str
     original_sentence: str
     segments: List[Segment]
-    settings: Settings
+    settings: RequestSettings
 
 
 class SentencePayload(BaseModel):
@@ -108,7 +110,7 @@ class SentencePayload(BaseModel):
     original_sentence: str
     segments: List[Segment]
     # Make settings required so we never have to guard against None downstream
-    settings: Settings = Field(
+    settings: RequestSettings = Field(
         ...,  # required
         description="Runtime settings for embedding, FAISS, NLI, and LLM models",
     )
@@ -120,7 +122,7 @@ class PrebuildRequest(BaseModel):
     max_chunks: int = 256
     faiss_min_score: float = 0.2
 
-    @validator("max_chunks", "faiss_min_score", pre=True)
+    @field_validator("max_chunks", "faiss_min_score")
     def check_not_nan_prebuild(cls, v):
         import math
 

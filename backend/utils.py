@@ -1,5 +1,6 @@
 # backend/utils.py
 
+import requests
 import json
 import logging
 import re
@@ -10,6 +11,10 @@ import pandas as pd
 from sentence_transformers import CrossEncoder, SentenceTransformer
 
 from backend.bl_client import BlabladorClient
+
+from functools import lru_cache
+import io
+import hashlib
 
 
 # testing for parallelism support
@@ -204,6 +209,16 @@ def pick_best_passage(
     )
     return 0, "no rationale"
 
+def make_retriever_key(row_id: str, segment_id: str | None = None) -> str:
+    """
+    Always returns row_id::segment_id if segment_id given,
+    otherwise just row_id.
+    """
+    return f"{row_id}::{segment_id}" if segment_id else row_id
+
+@lru_cache(maxsize=4)  # adjust as needed
+def get_cross_encoder(model_name: str) -> CrossEncoder:
+    return CrossEncoder(model_name)
 
 def rerank(
     query: str, candidates: list[dict], model_name: str, top_k: int
@@ -212,17 +227,132 @@ def rerank(
     candidates: list of dicts with keys 'text' plus any metadata.
     Returns the same dicts with an added 'rerank_score', sorted and sliced to top_k.
     """
-    # 1) Load (or cache) the cross-encoder
-    model = CrossEncoder(model_name)
-    # 2) Score each (query, passage)
+    model = get_cross_encoder(model_name)
     pairs = [(query, c["text"]) for c in candidates]
     scores = model.predict(pairs).tolist()
-    # 3) Attach and sort
     for c, s in zip(candidates, scores):
         c["rerank_score"] = float(s)
     candidates.sort(key=lambda c: c["rerank_score"], reverse=True)
-    # 4) Return top_k
     return candidates[:top_k]
+
+def filter_and_snap(
+    ids: list[str],
+    scores: list[float],
+    windows: list[dict],
+    tau: float,
+    cap: int,
+) -> list[dict]:
+    """
+    1) Keep any hit with score ≥ tau·best, up to 'cap' items.
+    2) Snap each kept window to its parent3_id, dedupe, taking highest score.
+    Returns list of windows, each with added 'faiss_score'.
+    """
+    # 1. pair & sort
+    hits = sorted(
+        [(i, s) for i, s in zip(ids, scores) if i != -1],
+        key=lambda x: x[1],
+        reverse=True,
+    )
+    if not hits:
+        return []
+    best = hits[0][1]
+    kept = [(i, s) for i, s in hits if s >= best * tau][:cap]
+
+    # 2. snap → dedupe
+    snap: dict[str, float] = {}
+    for idx_i, score in kept:
+        w = windows[idx_i]
+        p3 = w["meta"]["parent3"]
+        snap[p3] = max(snap.get(p3, -1), score)
+
+    # 3. materialize windows
+    out = []
+    for pid, sc in sorted(snap.items(), key=lambda x: x[1], reverse=True):
+        w = next(w for w in windows if w["window_id"] == pid)
+        w2 = w.copy()
+        w2["faiss_score"] = sc
+        out.append(w2)
+    return out
+
+
+def sbert_rerank(
+    windows: list[dict], claim: str, model_name: str
+) -> list[dict]:
+    """Attach '_sbert_score' to each window and return them sorted descending."""
+    from sentence_transformers import SentenceTransformer, util
+    model = SentenceTransformer(model_name)
+    q_emb = model.encode([claim], convert_to_tensor=True)
+    p_emb = model.encode([w["text"] for w in windows], convert_to_tensor=True)
+    sims = util.pytorch_cos_sim(q_emb, p_emb)[0].cpu().tolist()
+    for w, s in zip(windows, sims):
+        w["_sbert_score"] = s
+    return sorted(windows, key=lambda w: w["_sbert_score"], reverse=True)
+
+
+def bm25_rerank(
+    windows: list[dict], claim: str
+) -> list[dict]:
+    """Attach '_bm25_score' to each window and return them sorted descending."""
+    from rank_bm25 import BM25Okapi
+    import spacy
+    nlp = spacy.blank("en")
+    tok_corpus = [[tok.text for tok in nlp(w["text"])] for w in windows]
+    bm = BM25Okapi(tok_corpus)
+    tok_query = [tok.text for tok in nlp(claim)]
+    scores = bm.get_scores(tok_query)
+    for w, s in zip(windows, scores):
+        w["_bm25_score"] = s
+    return sorted(windows, key=lambda w: w["_bm25_score"], reverse=True)
+
+# ---- ColBERT wrappers ----------------------------------------------
+
+
+
+# --------------------------------------------------------------------
+#  ColBERT collection → /build mini‑cache
+#  We hash the TSV payload; each unique (hash, api_url) pair is sent
+#  to /build only once per interpreter session.
+# --------------------------------------------------------------------
+@lru_cache(maxsize=32)
+def _ensure_index(tsv_sha1: str, api_url: str, tsv_bytes: bytes) -> None:
+    r = requests.post(
+        f"{api_url}/build",
+        files={"tsv": ("collection.tsv", io.BytesIO(tsv_bytes), "text/tsv")},
+        timeout=600,
+    )
+    r.raise_for_status()
+
+
+def colbert_api_rerank(query: str,
+                       windows: list[dict],
+                       api_url: str,
+                       k: int = 20) -> list[dict]:
+
+    # 1) Build collection.tsv in-memory
+    tsv_lines = []
+    for i, w in enumerate(windows):
+        clean_text = w['text'].replace('\n', ' ')
+        tsv_lines.append(f"{i}\t{clean_text}")
+
+    # 2) POST /build  (cached on SHA‑1 of TSV)
+    tsv_bytes = "\n".join(tsv_lines).encode("utf-8")
+    sha1 = hashlib.sha1(tsv_bytes).hexdigest()
+    _ensure_index(sha1, api_url, tsv_bytes)
+
+    # 3) /search
+    r = requests.post(f"{api_url}/search",
+                      json={"query": query, "k": k})
+    r.raise_for_status()
+    hits = r.json()             # [{text, score, token_scores}, …]
+
+    out = []
+    for h in hits:
+        idx = next(i for i, w in enumerate(windows) if w["text"] == h["text"])
+        w = windows[idx]
+        w["colbert_score"] = h["score"]
+        w["token_scores"] = h.get("token_scores")
+        out.append(w)
+    return out
 
 
 __all__ = [
@@ -233,4 +363,9 @@ __all__ = [
     "get_model",
     "pick_best_passage",
     "rerank",
+    "filter_and_snap",
+    "sbert_rerank",
+    "bm25_rerank",
+    # "_index_id",  # removed if not needed
+    # "get_searcher",  # removed if not needed
 ]

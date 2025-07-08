@@ -1,8 +1,13 @@
 # backend/hybrid.py
 
-
+import requests
 from typing import Any, Dict
-from backend.settings import Settings
+from backend.settings import AppSettings
+from pathlib import Path
+from backend.retriever import Retriever
+from backend.utils import get_model
+from backend import nli
+
 
 
 class HybridPipeline:
@@ -12,7 +17,7 @@ class HybridPipeline:
         embed_model,
         max_sentences,
         min_score,
-        settings: Settings = None,  # accept explicit or global settings
+        settings: AppSettings = None,  # accept explicit or global settings
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -21,14 +26,11 @@ class HybridPipeline:
         See development steps for details on each segment.
         """
         if settings is None:
-            from backend.settings import Settings as _Settings
-
-            settings = _Settings()
+            settings = AppSettings()
 
         # --- [STEP 1] TEI segmentation and windowing ---
         print("[HYBRID][STEP 1] Segmenting TEI and generating windows...")
         import os
-        from pathlib import Path
         from backend.parser import tei_to_chunks
 
         # FIXME: parser.py should eventually flag or filter citation-only or junk <s> elements,
@@ -92,80 +94,118 @@ class HybridPipeline:
         if windows:
             print(f"[HYBRID][STEP 1] First window sample: {windows[0]}")
 
-        # --- [STEP 2] First-pass SBERT/BM25 filtering ---
-        print("[HYBRID][STEP 2] Running first-pass SBERT/BM25 filtering...")
+        # --- [STEP 2] Embed ALL windows ➜ FAISS ➜ τ-filter ➜ snap to 3-sentence ---
+        print("[HYBRID][STEP 2] Building in-memory FAISS index...")
 
-        claim = kwargs.get("claim", None)
-        if not claim or not isinstance(claim, str):
-            raise ValueError(
-                "You must provide a claim (string) as 'claim=...' in kwargs to build_all."
-            )
+        import numpy as np, faiss
 
-        # Config
-        use_sbert = getattr(settings, "HYBRID_USE_SBERT", True)
-        use_bm25 = getattr(settings, "HYBRID_USE_BM25", True)
-        filter_logic = getattr(settings, "HYBRID_FILTER_LOGIC", "both")
-        sbert_threshold = getattr(settings, "HYBRID_SBERT_THRESHOLD", 0.10)
-        bm25_threshold = getattr(settings, "HYBRID_BM25_THRESHOLD", 0.20)
-        sbert_model_name = getattr(
-            settings, "SBERT_MODEL_NAME", "all-MiniLM-L6-v2"
-        )  # update if you want to pick this from settings
-        from sentence_transformers import SentenceTransformer, util
-        from rank_bm25 import BM25Okapi
+        claim = kwargs.get("claim")
+        if not isinstance(claim, str) or not claim:
+            raise ValueError("build_all requires claim=... (str)")
 
-        # SBERT scoring
-        if use_sbert or filter_logic in ("both", "sbert"):
-            print("[HYBRID][STEP 2] Loading SBERT model...")
-            sbert_model = SentenceTransformer(sbert_model_name)
-            window_texts = [w["text"] for w in windows]
-            claim_embedding = sbert_model.encode([claim], convert_to_tensor=True)
-            window_embeddings = sbert_model.encode(window_texts, convert_to_tensor=True)
-            cosine_scores = (
-                util.pytorch_cos_sim(claim_embedding, window_embeddings)[0]
-                .cpu()
-                .tolist()
-            )
+        embed_model_name = embed_model or getattr(settings, "EMBED_MODEL", "all-MiniLM-L6-v2")
+        embedder = get_model(embed_model_name)
+
+        # 2-1  embed passages
+        p_vecs = embedder.encode([w["text"] for w in windows], show_progress_bar=False)
+        p_vecs = np.asarray(p_vecs, dtype="float32"); faiss.normalize_L2(p_vecs)
+
+        index = faiss.IndexFlatIP(p_vecs.shape[1]); index.add(p_vecs)
+
+        # 2-2  embed query
+        q_vec  = embedder.encode([claim], show_progress_bar=False)
+        q_vec  = np.asarray(q_vec, dtype="float32"); faiss.normalize_L2(q_vec)
+
+        K   = getattr(settings, "RETRIEVAL_K", 1500)
+        tau = getattr(settings, "RETRIEVAL_TAU", 0.80)
+        cap = getattr(settings, "RETRIEVAL_MAX", 200)
+
+        D, I = index.search(q_vec, K)
+        hits = [(int(i), float(s)) for i, s in zip(I[0], D[0]) if i != -1]
+        hits.sort(key=lambda t: t[1], reverse=True)
+
+        best = hits[0][1]
+        kept = [(i,s) for i,s in hits if s >= best * tau]
+        if len(kept) > cap:
+            kept = kept[:cap]
+        print(f"[HYBRID][STEP 2] τ-filter kept {len(kept)} / {len(hits)} windows")
+
+        # Build a quick lookup so we can safely resolve parent3 IDs
+        id2win: dict[str, dict] = {w["window_id"]: w for w in windows}
+
+        # 2‑3  snap every kept hit to its parent 3‑sentence window (if it exists)
+        snap: dict[str, float] = {}
+        for idx_i, score in kept:
+            orig_win = windows[idx_i]
+            # prefer the explicit parent3; fall back to the original window ID
+            p3_id = orig_win["meta"].get("parent3") or orig_win["window_id"]
+            if p3_id not in id2win:
+                # parent3 window might not exist for 1‑sentence paras – fall back
+                p3_id = orig_win["window_id"]
+            # keep only the highest‑score hit per parent window
+            if score > snap.get(p3_id, -1.0):
+                snap[p3_id] = score
+
+        filtered_windows = [
+            {**id2win[p3_id], "faiss_score": sc}
+            for p3_id, sc in sorted(snap.items(), key=lambda x: x[1], reverse=True)
+        ]
+        print(f"[HYBRID][STEP 2] Unique 3‑sentence windows: {len(filtered_windows)}")
+        
+
+        # ------------------------------------------------------------------ #
+        #   [STEP 3]  OPTIONAL RERANK -- SBERT or BM25 or BOTH (existing cfg)
+        # ------------------------------------------------------------------ #
+        filter_logic = getattr(settings, "HYBRID_FILTER_LOGIC", "none").lower()
+        use_sbert = filter_logic in ("sbert", "both")
+        use_bm25  = filter_logic in ("bm25", "both")
+
+        if use_sbert or use_bm25:
+            print(f"[HYBRID][STEP 3] Reranking with {filter_logic.upper()} ...")
+            # ---------- SBERT cosine ----------
+            if use_sbert:
+                # embedder from STEP 2 is still in scope
+                import torch
+                claim_emb   = embedder.encode([claim], convert_to_tensor=True)
+                win_embs    = embedder.encode(
+                    [w["text"] for w in filtered_windows], convert_to_tensor=True
+                )
+
+                sims = torch.nn.functional.cosine_similarity(
+                    claim_emb.repeat(win_embs.size(0), 1),
+                    win_embs,
+                ).cpu().tolist()
+                for w, s in zip(filtered_windows, sims):
+                    w["_sbert_score"] = s
+            # ---------- BM25  ----------
+            if use_bm25:
+                from rank_bm25 import BM25Okapi
+                import spacy, textwrap
+                # cheaper tokenizer than spaCy if you prefer
+                nlp = spacy.blank("en")
+                corpus_tok = [[tok.text for tok in nlp(w["text"])] for w in filtered_windows]
+                bm25 = BM25Okapi(corpus_tok)
+                claim_tok = [tok.text for tok in nlp(claim)]
+                bm_scores = bm25.get_scores(claim_tok)
+                for w, s in zip(filtered_windows, bm_scores):
+                    w["_bm25_score"] = s
+            # ---------- sort  ----------
+            def _combined_key(w):
+                # three cases: sbert only, bm25 only, both
+                if use_sbert and use_bm25:
+                    return (w.get("_sbert_score", 0.0) + w.get("_bm25_score", 0.0)) / 2
+                elif use_sbert:
+                    return w.get("_sbert_score", 0.0)
+                else:  # bm25 only
+                    return w.get("_bm25_score", 0.0)
+
+            filtered_windows.sort(key=_combined_key, reverse=True)
+            print(f"[HYBRID][STEP 3] Rerank complete. Top sample: {_combined_key(filtered_windows[0]):.3f}")
         else:
-            cosine_scores = [0.0 for _ in windows]
-
-        # BM25 scoring
-        if use_bm25 or filter_logic in ("both", "bm25"):
-            print("[HYBRID][STEP 2] Running BM25 ranking...")
-            import spacy
-
-            nlp = spacy.load("en_core_web_sm")
-
-            window_tokens = [[tok.text for tok in nlp(w["text"])] for w in windows]
-            bm25 = BM25Okapi(window_tokens)
-            claim_tokens = [tok.text for tok in nlp(claim)]
-            bm25_scores = bm25.get_scores(claim_tokens)
-        else:
-            bm25_scores = [0.0 for _ in windows]
-
-        # Filtering logic: keep windows above either threshold
-        filtered_windows = []
-        for i, w in enumerate(windows):
-            w["_sbert_score"] = cosine_scores[i]
-            w["_bm25_score"] = bm25_scores[i]
-            pass_sbert = cosine_scores[i] >= sbert_threshold if use_sbert else False
-            pass_bm25 = bm25_scores[i] >= bm25_threshold if use_bm25 else False
-            keep = False
-            if filter_logic == "both":
-                keep = pass_sbert or pass_bm25
-            elif filter_logic == "sbert":
-                keep = pass_sbert
-            elif filter_logic == "bm25":
-                keep = pass_bm25
-            if keep:
-                filtered_windows.append(w)
-
-        print(
-            f"[HYBRID][STEP 2] Filtering complete: {len(filtered_windows)} windows retained out of {len(windows)}."
-        )
-        if filtered_windows:
-            print(f"[HYBRID][STEP 2] Sample filtered window: {filtered_windows[0]}")
-
-        # --- [STEP 3] Coreference patching (FastCoref/f-coref model) ---
+            print("[HYBRID][STEP 3] Reranking skipped (HYBRID_FILTER_LOGIC='none').")
+        # ------------------------------------------------------------------ #
+            
+        # --- [STEP 4] Coreference patching (FastCoref/f-coref model) ---
         if settings.HYBRID_ENABLE_COREF:
             print("[HYBRID][STEP 3] Applying f-coref coreference (FastCoref direct)...")
             # -- PATCH: fastcoref integration --
@@ -176,30 +216,34 @@ class HybridPipeline:
                     settings, "HYBRID_COREF_MODEL", "biu-nlp/f-coref"
                 )
                 coref_model = FCoref(
-                    model_name=coref_model_path, device="cpu"
+                    model_name_or_path=coref_model_path, device="cpu"
                 )  # adjust device as needed
 
                 coref_windows = []
                 for w in filtered_windows:
                     text = w["text"]
                     try:
-                        preds = coref_model.predict(texts=[text], max_length=512)
-                        clusters = []
+                        preds = coref_model.predict(texts=[text])
+                        # Extract clusters from the CorefResult object
+                        if isinstance(preds, list) and preds:
+                            coref_res = preds[0]
+                        elif hasattr(preds, "get_clusters"):
+                            coref_res = preds
+                        else:
+                            coref_res = None
+                        # Retrieve cluster lists as strings
+                        if coref_res:
+                            cluster_list = coref_res.get_clusters(as_strings=True)
+                        else:
+                            cluster_list = []
+                        clusters = cluster_list or []
                         patched = text
-                        if preds and preds.get_clusters(0):
-                            cluster_list = preds.get_clusters(as_strings=True)[
-                                0
-                            ]  # List[List[str]]
-                            clusters = cluster_list
-                            # Simple patching: replace each pronoun with main mention in cluster
-                            # (for demonstration, could be smarter)
-                            for cluster in cluster_list:
-                                main = cluster[0]
-                                for mention in cluster[1:]:
-                                    if mention != main and mention in patched:
-                                        patched = patched.replace(
-                                            mention, f"{main} [{mention}]", 1
-                                        )
+                        # Simple patching: replace each pronoun with the main mention
+                        for cluster in cluster_list:
+                            main = cluster[0]
+                            for mention in cluster[1:]:
+                                if mention != main and mention in patched:
+                                    patched = patched.replace(mention, f"{main} [{mention}]", 1)
                         w["coref_clusters"] = clusters
                         w["coref_patched"] = patched
                         coref_windows.append(w)
@@ -220,51 +264,91 @@ class HybridPipeline:
             coref_windows = filtered_windows
             print("[HYBRID][STEP 3] Coreference patching skipped.")
 
-        # --- [STEP 4] ColBERT/SPLADE reranking ---
-        print(
-            f"[HYBRID][STEP 4] Reranking windows using {settings.HYBRID_RERANK_MODEL}..."
-        )
-
-        rerank_model = getattr(settings, "HYBRID_RERANK_MODEL", "none").lower()
-        if rerank_model in ("none", "", "pass", "skip"):
-            print(
-                "[HYBRID][STEP 4] Reranking skipped for POC (pass-through, no ColBERT/SPLADE)."
-            )
+        # --- [STEP 5] ColBERT reranking ---------------------------------------------
+        mode = settings.COLBERT_MODE.lower()
+        if mode == "off":
             reranked_windows = coref_windows
-        else:
-            print(
-                f"[HYBRID][STEP 4] Rerank model '{rerank_model}' not implemented in this POC. Passing windows unchanged."
-            )
-            reranked_windows = coref_windows
+        elif mode == "internal":
+            # (keep your existing internal ColBERT code block here)
+            ...
+            reranked_windows = reranked_internal
+        elif mode == "external":
+            from backend.utils import colbert_api_rerank
+            try:
+                reranked_windows = colbert_api_rerank(
+                    claim, coref_windows,
+                    settings.COLBERT_API_URL,
+                    settings.COLBERT_TOP_K,
+                )
+                print(f"[HYBRID][STEP 4] External ColBERT returned {len(reranked_windows)} wins.")
+            except requests.RequestException as e:
+                print(f"[HYBRID][STEP 4] ColBERT API failed → {e}.  Using coref_windows.")
+                reranked_windows = coref_windows
 
-        print(f"[HYBRID][STEP 4] Reranking complete: {len(reranked_windows)} windows.")
+        print(f"[HYBRID][DEBUG] Reranked windows: {reranked_windows[:3]}")
+        print(f"[HYBRID][DEBUG] Claim: {claim}")
+        passages = [w.get("coref_patched", w["text"]) for w in reranked_windows]
+        # Build metadatas list, carrying ColBERT salience forward
+        metadatas = []
+        for w in reranked_windows:
+            m = dict(w.get("meta", {}))          # copy original meta
+            if "token_scores" in w:              # preserve salience
+                m["token_scores"] = w["token_scores"]
+            metadatas.append(m)
+        print(f"[HYBRID][DEBUG] Passages: {passages[:3]}")
+        print(f"[HYBRID][DEBUG] Metadatas: {metadatas[:3]}")
 
         # --- [STEP 5] Cross-encoder + NLI assessment ---
+
+
+        # Prepare all required variables
+        nli_model = getattr(settings, "NLI_MODEL", None)
+        # claim, passages, metadatas already defined above
+
         print("[HYBRID][STEP 5] Running cross-encoder NLI on top-k windows...")
 
-        from backend import nli
+        try:
+            nli_results = nli.assess(claim, passages, metadatas, nli_model=nli_model)
+            print(f"[HYBRID][STEP 5] NLI assessment complete: {len(nli_results)} results.")
+        except Exception as e:
+            import traceback
+            print("[HYBRID][ERROR] Exception in NLI step:", e)
+            print(traceback.format_exc())
+            raise
+        # --- [STEP 6] Build and return a Retriever (classic interface) ---
+        print("[HYBRID][STEP 6] Building Retriever for hybrid windows...")
 
-        nli_model = getattr(settings, "NLI_MODEL", None)
-        claim = kwargs.get("claim", None)
-        passages = [w.get("coref_patched", w["text"]) for w in reranked_windows]
-        metadatas = [w.get("meta", {}) for w in reranked_windows]
 
-        nli_results = nli.assess(claim, passages, metadatas, nli_model=nli_model)
-        print(f"[HYBRID][STEP 5] NLI assessment complete: {len(nli_results)} results.")
+        chunks = []
+        for w in reranked_windows:
+            meta = dict(w.get("meta", {}))
+            meta["id"] = w.get("window_id") or meta.get("id")
+            # Optionally include other meta fields here as needed
+            if "coref_clusters" in w:
+                meta["coref_clusters"] = w["coref_clusters"]
+            if "_sbert_score" in w:
+                meta["_sbert_score"] = w["_sbert_score"]
+            if "_bm25_score" in w:
+                meta["_bm25_score"] = w["_bm25_score"]
+            if "token_scores" in w:
+                meta["token_scores"] = w["token_scores"]
+            chunks.append({
+                "text": w.get("coref_patched", w["text"]),
+                "meta": meta,
+            })
 
-        # --- [STEP 6] Result JSON, audit mode, and output ---
-        print("[HYBRID][STEP 6] Packaging results and audit trail...")
-        result = {
-            "pipeline_mode": "hybrid",
-            "settings": {
-                k: getattr(settings, k)
-                for k in dir(settings)
-                if k.startswith("HYBRID_")
-            },
-            "windows": nli_results,
-        }
-        if settings.HYBRID_AUDIT_MODE:
-            # Optionally include intermediate results for debugging
+        retr = Retriever(
+            index_path=Path(folder) / "hybrid_default",
+            max_sentences=max_sentences,
+            min_score=min_score,
+            embed_model=embed_model,
+        )
+        retr.build(chunks)
+        print(f"[HYBRID][STEP 6] Retriever built with {len(chunks)} windows.")
+
+        result = {"default": retr}
+
+        if getattr(settings, "HYBRID_AUDIT_MODE", False):
             result["audit"] = {
                 "segmentation": windows,
                 "filtered": filtered_windows,
@@ -275,5 +359,5 @@ class HybridPipeline:
         else:
             print("[HYBRID][STEP 6] Audit trail not requested.")
 
-        print("[HYBRID] Pipeline complete.")
         return result
+    

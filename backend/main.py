@@ -1,7 +1,12 @@
 # backend/main.py
 
-import logging
 import os
+os.environ["TRANSFORMERS_CACHE"] = str(os.path.expanduser("~/.cache/huggingface"))
+
+# Set threading env vars *before* numpy/torch
+from backend import utils
+utils.set_sane_threads()
+import logging
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -10,9 +15,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend import schemas, utils
 from backend.nli import assess
 
+try:
+    from transformers import AdamW
+except ImportError:
+    import torch
+    import transformers
+    transformers.AdamW = torch.optim.AdamW
+
 # New imports after other backend imports
 from backend.pipeline_registry import get_pipeline
-from backend.settings import Settings
+from backend.settings import settings as app_settings #global default settings
 
 # Configure logging (so that logger.debug/info/etc. actually prints)
 logging.basicConfig(
@@ -22,11 +34,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Setup pipeline via registry and settings
-settings = Settings()
-build_all = get_pipeline(settings)
-print(f"Pipeline mode: {settings.PIPELINE_MODE}")  # Optional: log on startup
+build_all = get_pipeline(app_settings)
+print(f"Pipeline mode: {app_settings.PIPELINE_MODE}")  # Optional: log on startup
 
 app = FastAPI(title="Blablador NLI backend")
+
 
 CSV_PATH = Path(os.environ.get("CSV_PATH", "source.csv")).resolve()
 SOURCE_DIR = Path(os.environ.get("SOURCE_DIR", CSV_PATH.parent / "source")).resolve()
@@ -54,47 +66,63 @@ results, retrievers = {}, {}
 @app.post("/segment")
 async def segment(req: schemas.SentencePayload):
     """Process a set of user-generated segments for one CSV row."""
-    # 1) If no FAISS index exists yet, build it on the fly
-    if not retrievers:
-        try:
-            if settings.PIPELINE_MODE == "hybrid":
-                # Build a retriever for each segment (one claim at a time)
-                for seg in req.segments:
-                    retrievers.update(
-                        build_all(
-                            folder=Path(req.folder),
-                            embed_model=req.settings.embed_model,
-                            max_sentences=req.settings.max_sentences,
-                            min_score=req.settings.faiss_min_score,
-                            claim=seg.claim,  # Pass the claim for hybrid pipeline
-                        )
+    # Read the UI’s choice (nested under req.settings), or fall back to ENV/app default
+    pipeline_mode = (
+        getattr(req.settings, "pipeline_mode", None)
+        or os.environ.get("DEFAULT_PIPELINE_MODE")
+        or getattr(app_settings, "DEFAULT_PIPELINE_MODE", "classic")
+    )
+    # Re-bind build_all to the pipeline implementation for this request
+    cfg = app_settings.model_copy(deep=True)
+    cfg.PIPELINE_MODE = pipeline_mode
+    build_all = get_pipeline(cfg)
+
+    # 1) Make sure a retriever exists for every (row_id, segment_id) we’re about to query
+    try:
+        for seg in req.segments:
+            key = utils.make_retriever_key(req.row_id, seg.segment_id)
+            if key in retrievers:
+                # already cached – nothing to do
+                continue
+
+            if pipeline_mode == "hybrid":
+                # --- one FAISS index *per segment* ---
+                row_key = utils.make_retriever_key(req.row_id)
+                if row_key not in retrievers:
+                    raw_dict = build_all(
+                        folder=Path(req.folder),
+                        embed_model=req.settings.embed_model,
+                        max_sentences=req.settings.max_sentences,
+                        min_score=req.settings.faiss_min_score,
+                        claim="; ".join(s.claim for s in req.segments)
                     )
-                logging.info("Built retrievers (hybrid, one per claim).")
+                    retrievers[row_key] = next(iter(raw_dict.values()))
+                retrievers[key] = retrievers[row_key]
+                logging.info(f"[BUILD] hybrid index for {key}")
             else:
-                # Classic mode: batch build as before
-                retrievers.update(
-                    build_all(
+                # --- classic: one shared index for the whole row ---
+                # Build it **once** (first segment) and reuse for the rest
+                row_key = utils.make_retriever_key(req.row_id)  # no segment_id
+                if row_key not in retrievers:
+                    raw_dict = build_all(
                         folder=Path(req.folder),
                         embed_model=req.settings.embed_model,
                         max_sentences=req.settings.max_sentences,
                         min_score=req.settings.faiss_min_score,
                     )
-                )
-                logging.info("Built FAISS indices on the fly (classic).")
-        except Exception as e:
-            raise HTTPException(
-                status_code=500, detail=f"Could not build FAISS indices on the fly: {e}"
-            )
+                    retrievers[row_key] = (
+                        raw_dict.get("default") or next(iter(raw_dict.values()))
+                    )
+                    logging.info(f"[BUILD] classic index for {row_key}")
 
-    # 2) Pick the per-paper retriever (or fall back to "default")
-    key = f"{req.citing_title}-{req.settings.data_dir or 'default'}"
-    retr = retrievers.get(key) or retrievers.get("default")
-    if retr is None:
+                # Register the same retriever under this segment’s full key
+                retrievers[key] = retrievers[row_key]
+
+    except Exception as e:
         raise HTTPException(
             status_code=500,
-            detail=f"No FAISS index found for key={key} and no default index available",
+            detail=f"Could not build FAISS indices: {e}",
         )
-
     # 3) Embed all submitted “segments” locally (via sentence-transformers)
     seg_texts = [seg.claim for seg in req.segments]
     logger.debug(f"[EMBED] embedding segments: {seg_texts}")
@@ -112,6 +140,15 @@ async def segment(req: schemas.SentencePayload):
     for seg, vec in zip(req.segments, seg_vecs):
         logger.debug(f"[SEGMENT]={seg.segment_id} claim={seg.claim!r}")
 
+        # Retrieve the appropriate retriever for this segment
+        key = f"{req.row_id}::{seg.segment_id}"
+        retr = retrievers.get(key)
+        if retr is None:
+            raise HTTPException(
+                status_code=500,
+                detail=f"No FAISS index found for key={key}"
+            )
+
         # 4) FAISS search (top-k candidates)
         k_cap = req.settings.max_sentences or len(retr.chunks)
         ids, scores = retr.search([vec], k=k_cap)
@@ -128,8 +165,7 @@ async def segment(req: schemas.SentencePayload):
         logger.debug(f"[FAISS→filtered] {filtered}")
 
         # ——— 5.5) Rerank the FAISS candidates if requested ———
-        if req.settings.reranker_model:
-            # build candidate dicts
+        if req.settings.reranker_model and filtered:
             candidates = [
                 {
                     "id": doc_id,
@@ -145,9 +181,23 @@ async def segment(req: schemas.SentencePayload):
                 model_name=req.settings.reranker_model,
                 top_k=req.settings.reranker_top_k,
             )
-            # replace filtered list (preserving original FAISS score)
             filtered = [(c["id"], c["faiss_score"]) for c in reranked]
-        # ————————————————————————————————
+        elif not filtered:
+            logger.debug(f"[RERANK] Skipping rerank: no FAISS candidates to rerank")
+            # >>> ADD THIS BLOCK <<<
+            logger.debug(f"[EVIDENCE] No candidates after retrieval+rerank; skipping NLI for segment {seg.segment_id!r}")
+            response_segments.append(
+                {
+                    "segment_id": seg.segment_id,
+                    "claim": seg.claim,
+                    "evidence": [],
+                    "best_support_id": None,
+                    "support_rationale": None,
+                    "best_contradiction_id": None,
+                    "contradiction_rationale": None,
+                }
+            )
+            continue  # move to next segment
 
         # 6) Assemble texts and metadata for NLI
         texts, metadatas = [], []
@@ -262,6 +312,10 @@ async def segment(req: schemas.SentencePayload):
 @app.post("/prebuild")
 def prebuild(req: schemas.PrebuildRequest):
     import math
+
+    pipeline_mode = getattr(req, "pipeline_mode", None)
+    if not pipeline_mode:
+        pipeline_mode = os.environ.get("DEFAULT_PIPELINE_MODE") or getattr(app_settings, "DEFAULT_PIPELINE_MODE", None)
 
     try:
         # 1) Validate numeric fields

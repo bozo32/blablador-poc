@@ -1,51 +1,35 @@
 import os
+os.environ["TRANSFORMERS_CACHE"] = str(os.path.expanduser("~/.cache/huggingface"))
+
+from backend import utils
+utils.set_sane_threads()
+
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict
+from backend import utils
 
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
+    pipeline as hf_pipeline,
 )
-from transformers import pipeline as hf_pipeline
 
-from backend import utils
-
-utils.set_sane_threads()
-
-_LOCAL_NLI_PATHS = {
-    "roberta-large-mnli": "roberta-large-mnli",
-    "facebook/bart-large-mnli": "facebook/bart-large-mnli",
-    # add other model names and paths as needed
-}
-
-_LOCAL_NLI_MODELS: Dict[str, Any] = {}
-
-
-def get_local_nli_pipeline(model_name: str, batch_size: int = 32):
-    tokenizer = AutoTokenizer.from_pretrained(
-        _LOCAL_NLI_PATHS[model_name], use_fast=False
-    )
-    model = AutoModelForSequenceClassification.from_pretrained(
-        _LOCAL_NLI_PATHS[model_name]
-    )
-    return hf_pipeline(
-        "text-classification",
-        model=model,
-        tokenizer=tokenizer,
-        device=-1,  # CPU
-        batch_size=batch_size,  # batch many inferences at once
-    )
+try:
+    from transformers import AdamW
+except ImportError:
+    import torch
+    import transformers
+    transformers.AdamW = torch.optim.AdamW
 
 
 def assess(model_name: str, premise: str, hypothesis: str):
-    if model_name in _LOCAL_NLI_PATHS:
-        classifier = get_local_nli_pipeline(model_name)
-        result = classifier(f"{premise} </s></s> {hypothesis}")
-        return result
-    # existing logic for other models
-    # ...
+    from backend.nli import get_nli_pipeline
+
+    pipeline = get_nli_pipeline(model_name)
+    result = pipeline(f"{premise} </s></s> {hypothesis}")
+    return result
 
 
 if __name__ == "__main__":
@@ -80,7 +64,7 @@ if __name__ == "__main__":
     # Prebuild is now triggered later from UI after user uploads folder
     # Preprocess citations
 
-    # Launch backend and frontend
+    # Launch backend, frontend, and ColBERT server
     backend_cmd = [
         "uvicorn",
         "backend.main:app",
@@ -91,6 +75,15 @@ if __name__ == "__main__":
         "--reload",
         "--log-level",
         "debug",
+    ]
+    # --- Launch ColBERT in a *separate* conda env so we don't fight over
+    #     torch / transformers versions.  Let users pick the env via
+    #     COLBERT_CONDA_ENV; default = "colbert-server" (see environment.yml).
+    colbert_env = os.environ.get("COLBERT_CONDA_ENV", "colbert-server")
+    colbert_cmd = [
+        "conda", "run", "-n", colbert_env,
+        "uvicorn", "colbert_server.colbert:app",
+        "--host", "localhost", "--port", "7001",
     ]
     # pass arguments to ui.py _after_ the `--` separator so Streamlit doesn't
     # try to parse them.

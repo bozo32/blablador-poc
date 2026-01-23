@@ -37,6 +37,18 @@ class AppSettings(PydanticBaseSettings):
         description="Base URL of the Blablador API",
     )
 
+    # — GROBID extraction defaults
+    GROBID_URL: str = Field(
+        "http://localhost:8070",
+        env="GROBID_URL",
+        description="Base URL for the GROBID service",
+    )
+    GROBID_TIMEOUT: int = Field(
+        120,
+        env="GROBID_TIMEOUT",
+        description="Timeout (seconds) for GROBID extraction requests",
+    )
+
     # — Embedding/Retrieval defaults
     EMBED_MODEL: str = Field(
         "intfloat/multilingual-e5-base",

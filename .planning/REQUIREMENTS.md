@@ -81,12 +81,36 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
+| ING-01 | Phase 1 | Pending |
+| ING-02 | Phase 1 | Pending |
+| ING-03 | Phase 1 | Pending |
+| ING-04 | Phase 1 | Pending |
+| ING-05 | Phase 1 | Pending |
+| NAV-01 | Phase 2 | Pending |
+| NAV-02 | Phase 2 | Pending |
+| NAV-03 | Phase 2 | Pending |
+| CLM-01 | Phase 3 | Pending |
+| CLM-02 | Phase 3 | Pending |
+| EVD-01 | Phase 4 | Pending |
+| EVD-02 | Phase 4 | Pending |
+| EVD-03 | Phase 4 | Pending |
+| EVD-04 | Phase 5 | Pending |
+| EVD-05 | Phase 5 | Pending |
+| EVD-06 | Phase 5 | Pending |
+| EVD-07 | Phase 6 | Pending |
+| EVD-08 | Phase 6 | Pending |
+| VAL-01 | Phase 7 | Pending |
+| VAL-02 | Phase 7 | Pending |
+| VAL-03 | Phase 7 | Pending |
+| VAL-04 | Phase 7 | Pending |
+| WS-01 | Phase 8 | Pending |
+| WS-02 | Phase 8 | Pending |
 
 **Coverage:**
 - v1 requirements: 24 total
-- Mapped to phases: 0
-- Unmapped: 24 ⚠️
+- Mapped to phases: 24
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-01-23*
-*Last updated: 2026-01-23 after initial definition*
+*Last updated: 2026-01-23 after roadmap creation*

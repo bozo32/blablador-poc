@@ -32,7 +32,12 @@ Decimal phases appear between their surrounding integers in numeric order.
   2. User can view extracted metadata (title, authors, year) for the uploaded PDF.
   3. User can view in-text citations and bibliography entries extracted from the PDF.
   4. User can see resolved reference identifiers with confidence when available.
-**Plans**: TBD
+**Plans**: 4 plans
+Plans:
+- [x] 01-01-PLAN.md — Local ingestion storage and upload API
+- [ ] 01-02-PLAN.md — GROBID extraction and metadata/citation parsing
+- [ ] 01-03-PLAN.md — Reference resolution via Crossref
+- [ ] 01-04-PLAN.md — Streamlit ingestion UI
 
 ### Phase 2: Citation Context Navigation
 **Goal**: Users can navigate citation context and follow cited works for validation.
@@ -109,7 +114,7 @@ Phases execute in numeric order: 2 → 2.1 → 2.2 → 3 → 3.1 → 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Ingestion + Extraction | 0/TBD | Not started | - |
+| 1. Ingestion + Extraction | 1/4 | In progress | - |
 | 2. Citation Context Navigation | 0/TBD | Not started | - |
 | 3. Claim Selection + Editing | 0/TBD | Not started | - |
 | 4. Evidence Attachment | 0/TBD | Not started | - |

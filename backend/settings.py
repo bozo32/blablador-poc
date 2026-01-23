@@ -1,7 +1,7 @@
 # backend/settings.py
 
 from pydantic import Field
-from pydantic_settings import BaseSettings as PydanticBaseSettings 
+from pydantic_settings import BaseSettings as PydanticBaseSettings
 from typing import Literal, List
 from pathlib import Path
 
@@ -10,16 +10,16 @@ TROLL_PAY_MARGIN = 0.7
 
 
 class AppSettings(PydanticBaseSettings):
-    ## selection for which mode the script will run, classic (nli) or hybrid
+    # selection for which mode the script will run, classic (nli) or hybrid
     PIPELINE_MODE: Literal["classic", "hybrid"] = Field("classic", env="PIPELINE_MODE")
 
-    ## max number of entailing / contradicting candidates to show
+    # max number of entailing / contradicting candidates to show
     NLI_CANDIDATES_SHOWN: int = Field(3, env="NLI_CANDIDATES_SHOWN")
 
-    ## for NLI parallel processing
+    # for NLI parallel processing
     NLI_BATCH_SIZE: int = Field(50, env="NLI_BATCH_SIZE")
 
-    ## margin used to determine what is ambiguous
+    # margin used to determine what is ambiguous
     TROLL_PAY_MARGIN: float = Field(0.7, env="TROLL_PAY_MARGIN")
 
     # — FastAPI backend URL for the frontend to call
@@ -103,7 +103,7 @@ class AppSettings(PydanticBaseSettings):
     HYBRID_COREF_MODEL: str = Field(
         "biu-nlp/f-coref",  # Default to the well-maintained HF f-coref model
         env="HYBRID_COREF_MODEL",
-        description="HuggingFace repo or local path for f-coref model (default: biu-nlp/f-coref)",
+        description="HuggingFace repo or local path for f-coref model",
     )
 
     HYBRID_COREF_DEVICE: str = Field(
@@ -162,21 +162,17 @@ class AppSettings(PydanticBaseSettings):
         True, env="HYBRID_AUDIT_MODE", description="Enable audit/debug output"
     )
 
-        # ---  Retrieval cut-off settings  ------------------------------------
-    RETRIEVAL_K: int = Field(
-        1500, env="HYBRID_FAISS_K"
-    )          # max hits per claim
-    
-    RETRIEVAL_TAU: float = Field(
-        0.90, env="HYBRID_TAU"
-    )
-                    # keep ≥ τ·best
-    RETRIEVAL_MAX: int = Field(
-        60, env="HYBRID_MAX_CANDIDATES"
-    )  # safety cap
+    # ---  Retrieval cut-off settings  ------------------------------------
+    RETRIEVAL_K: int = Field(1500, env="HYBRID_FAISS_K")  # max hits per claim
+
+    RETRIEVAL_TAU: float = Field(0.90, env="HYBRID_TAU")
+    # keep ≥ τ·best
+    RETRIEVAL_MAX: int = Field(60, env="HYBRID_MAX_CANDIDATES")  # safety cap
 
     # --- ColBERT -----------------------------------------------------------------
-    COLBERT_MODE: str = Field("external", env="COLBERT_MODE")  # "internal" | "external" | "off"
+    COLBERT_MODE: str = Field(
+        "external", env="COLBERT_MODE"
+    )  # "internal" | "external" | "off"
     COLBERT_API_URL: str = Field("http://localhost:7001", env="COLBERT_API_URL")
     COLBERT_ROOT: Path = Field(
         Path(__file__).parent.parent / "data" / "colbert",
@@ -184,9 +180,19 @@ class AppSettings(PydanticBaseSettings):
         description="Where ColBERT indexes are stored",
     )
     COLBERT_INDEX_PATH: Path = Field(
-    Path(__file__).parent.parent / "data" / "experiments" / "default" / "indexes" / "default",
-    env="COLBERT_INDEX_PATH",
-    description="Where ColBERT index files are actually stored"
+        Path(__file__).parent.parent
+        / "data"
+        / "experiments"
+        / "default"
+        / "indexes"
+        / "default",
+        env="COLBERT_INDEX_PATH",
+        description="Where ColBERT index files are actually stored",
+    )
+    INGESTION_DIR: Path = Field(
+        Path(__file__).parent.parent / "data" / "ingestion",
+        env="INGESTION_DIR",
+        description="Root directory for local ingestion storage",
     )
     COLBERT_DIM: int = Field(128, env="COLBERT_DIM")
     COLBERT_MAXLEN: int = Field(180, env="COLBERT_MAXLEN")
@@ -198,6 +204,8 @@ class AppSettings(PydanticBaseSettings):
     )
 
     class Config:
+        """Pydantic settings configuration."""
+
         env_file = ".env"
         env_file_encoding = "utf-8"
         case_sensitive = False
@@ -207,4 +215,3 @@ class AppSettings(PydanticBaseSettings):
 #  Canonical, application‑wide settings object
 # ---------------------------------------------------------------------------
 settings = AppSettings()
-

@@ -21,6 +21,13 @@ from backend.bl_client import BlabladorClient
 from backend.model_cache import add_model, get_models
 from backend.settings import AppSettings
 from backend.utils import list_local_models
+from frontend.ingestion_api import (
+    get_document,
+    list_documents,
+    trigger_extraction,
+    trigger_resolution,
+    upload_pdf,
+)
 from typing import List
 
 
@@ -52,6 +59,10 @@ def init_session_state():
         "started": False,
         "seg_requested": False,
         "pipeline_mode": getattr(settings, "PIPELINE_MODE", "classic"),
+        "ingested_docs": [],
+        "selected_doc_id": None,
+        "active_document": None,
+        "uploaded_pdfs": [],
     }
     for key, val in defaults.items():
         st.session_state.setdefault(key, val)
@@ -78,10 +89,7 @@ def to_segment_dict(seg_line: str) -> dict:
 def model_selector(
     label: str, session_key: str, choices: list[str], allow_custom: bool = True
 ):
-    """Generic dropdown + Custom...
-
-    text input helper.
-    """
+    """Return dropdown with optional custom input."""
     current = st.session_state.get(session_key)
     options = choices.copy()
     if allow_custom:
@@ -145,35 +153,37 @@ def reset_segmentation():
 
 
 # Constants for segmentation helper
-SEGMENT_PROMPT_TEMPLATE = """You are an expert at breaking sentences into standalone proposition segments.
-For example, given a sentence A and B cause 1 and 2 you generate 4 segments:
-    A causes 1
-    A causes 2
-    B causes 1
-    B causes 2
-You only work with the words provided in the prompting sentence
-For example, given the sentence A causes B, you generate:
-    A causes B
-You stop segmenting when you run out of words in the original sentence.
-You always keep modifiers (adjectives or adverbs) with what they modify (nouns or verbs). For example
-immersion in cold water or snow causes hypothermia
-becomes
-    cold water causes hypothermia
-    snow causes hypothermia
-
-Some citing sentences directly mention the source.
-They may take variants on the form '(author name) found that A causes 1.'.
-In such cases drop the direct mention of the source so that the sentence becomes:
-    A causes 1
-
- **Do not output any explanation, commentary, or extra text. Only list the segments generated from the original sentence. Your output must end after the last segment.**
-
-List each segment on its own line, numbered {row_idx}a, {row_idx}b, etc., continuing alphabetically.
-
-Sentence:
-{sentence}
-Segments:
-"""
+SEGMENT_PROMPT_TEMPLATE = (
+    "You are an expert at breaking sentences into standalone proposition segments.\n"
+    "For example, given a sentence A and B cause 1 and 2 you generate 4 segments:\n"
+    "    A causes 1\n"
+    "    A causes 2\n"
+    "    B causes 1\n"
+    "    B causes 2\n"
+    "You only work with the words provided in the prompting sentence\n"
+    "For example, given the sentence A causes B, you generate:\n"
+    "    A causes B\n"
+    "You stop segmenting when you run out of words in the original sentence.\n"
+    "You always keep modifiers (adjectives or adverbs) with what they modify "
+    "(nouns or verbs). For example\n"
+    "immersion in cold water or snow causes hypothermia\n"
+    "becomes\n"
+    "    cold water causes hypothermia\n"
+    "    snow causes hypothermia\n\n"
+    "Some citing sentences directly mention the source.\n"
+    "They may take variants on the form '(author name) found that A causes 1.'.\n"
+    "In such cases drop the direct mention of the source so that "
+    "the sentence becomes:\n"
+    "    A causes 1\n\n"
+    "Do not output any explanation, commentary, or extra text. "
+    "Only list the segments generated from the original sentence. "
+    "Your output must end after the last segment.\n\n"
+    "List each segment on its own line, numbered {row_idx}a, {row_idx}b, etc., "
+    "continuing alphabetically.\n\n"
+    "Sentence:\n"
+    "{sentence}\n"
+    "Segments:\n"
+)
 
 SEG_RE = re.compile(r"^\s*\d+[a-z]\.", re.I)
 
@@ -218,8 +228,66 @@ def handle_upload():
     st.success(f"Loaded {len(files)} files")
 
 
+def refresh_ingested_docs(show_error: bool = True) -> list[dict]:
+    api_url = st.session_state.get("api_url", "http://localhost:8000")
+    try:
+        documents = list_documents(api_url)
+    except RuntimeError as exc:
+        if show_error:
+            st.error(f"Failed to load ingested PDFs: {exc}")
+        return []
+    st.session_state["ingested_docs"] = documents
+    doc_ids = [doc.get("id") for doc in documents if doc.get("id")]
+    current = st.session_state.get("selected_doc_id")
+    if doc_ids and current not in doc_ids:
+        st.session_state["selected_doc_id"] = doc_ids[0]
+    return documents
+
+
+def load_selected_document(show_error: bool = True) -> dict | None:
+    doc_id = st.session_state.get("selected_doc_id")
+    if not doc_id:
+        st.session_state["active_document"] = None
+        return None
+    api_url = st.session_state.get("api_url", "http://localhost:8000")
+    try:
+        document = get_document(api_url, doc_id)
+    except RuntimeError as exc:
+        if show_error:
+            st.error(f"Failed to load document details: {exc}")
+        return None
+    st.session_state["active_document"] = document
+    return document
+
+
+def handle_pdf_upload():
+    files = st.session_state.get("uploaded_pdfs") or []
+    if not files:
+        return
+    api_url = st.session_state.get("api_url", "http://localhost:8000")
+    uploaded = []
+    with st.spinner("Uploading PDFs..."):
+        for file in files:
+            try:
+                uploaded_doc = upload_pdf(api_url, file)
+            except RuntimeError as exc:
+                st.error(f"Upload failed for {getattr(file, 'name', 'file')}: {exc}")
+                continue
+            if uploaded_doc:
+                uploaded.append(uploaded_doc)
+    if uploaded:
+        refresh_ingested_docs(show_error=False)
+        last_doc = uploaded[-1]
+        if last_doc.get("id"):
+            st.session_state["selected_doc_id"] = last_doc["id"]
+            st.session_state["active_document"] = last_doc
+        st.success(f"Uploaded {len(uploaded)} PDF(s).")
+
+
 # === UI Drawing ===
-def color_tokens(text: str, token_scores: List[float], color_pos="green", color_neg="red"):
+def color_tokens(
+    text: str, token_scores: List[float], color_pos="green", color_neg="red"
+):
     """Color words according to token salience."""
     tokens = text.split()
     colored = []
@@ -239,6 +307,7 @@ def color_tokens(text: str, token_scores: List[float], color_pos="green", color_
     # Join back, preserving spaces
     return " ".join(colored)
 
+
 def draw_sidebar():
     init_session_state()
     with st.sidebar:
@@ -248,10 +317,42 @@ def draw_sidebar():
             ["classic", "hybrid"],
             index=0 if st.session_state["pipeline_mode"] == "classic" else 1,
             help="Classic = fast, Hybrid = exhaustive",
-            key="pipeline_mode_selectbox"
-
+            key="pipeline_mode_selectbox",
         )
         st.session_state["pipeline_mode"] = mode
+        st.header("PDF Ingestion")
+        st.file_uploader(
+            "PDF files",
+            type=["pdf"],
+            accept_multiple_files=True,
+            key="uploaded_pdfs",
+            on_change=handle_pdf_upload,
+        )
+        if st.button("Refresh ingested PDFs"):
+            refresh_ingested_docs()
+        docs = st.session_state.get("ingested_docs") or []
+        if docs:
+            doc_ids = [doc.get("id") for doc in docs if doc.get("id")]
+            current = st.session_state.get("selected_doc_id")
+            if doc_ids and current not in doc_ids:
+                st.session_state["selected_doc_id"] = doc_ids[0]
+            if doc_ids:
+                st.selectbox(
+                    "Active document",
+                    doc_ids,
+                    format_func=lambda doc_id: next(
+                        (
+                            f"{doc.get('filename')} ({doc_id[:8]})"
+                            for doc in docs
+                            if doc.get("id") == doc_id
+                        ),
+                        doc_id,
+                    ),
+                    key="selected_doc_id",
+                    on_change=load_selected_document,
+                )
+        else:
+            st.caption("No PDFs ingested yet.")
         st.header("Upload your data")
         st.file_uploader(
             "CSV & TEI files",
@@ -283,7 +384,6 @@ def draw_sidebar():
             "selected_model",
             st.session_state.available_models,
             allow_custom=False,
-
         )
 
         st.header("Embedding Model")
@@ -339,12 +439,106 @@ def draw_sidebar():
         )
 
 
+def draw_ingestion_panel():
+    st.subheader("PDF Ingestion")
+    docs = st.session_state.get("ingested_docs")
+    if docs is None:
+        docs = refresh_ingested_docs(show_error=False)
+    if not docs:
+        st.info("Upload a PDF from the sidebar to begin.")
+        return
+    doc_id = st.session_state.get("selected_doc_id")
+    if not doc_id:
+        st.info("Select a PDF to view details.")
+        return
+    document = st.session_state.get("active_document")
+    if not document or document.get("id") != doc_id:
+        document = load_selected_document(show_error=False)
+    if not document:
+        st.info("Select a PDF to view details.")
+        return
+
+    col_action, col_status = st.columns([1, 3])
+    with col_action:
+        if st.button("Run Extraction"):
+            api_url = st.session_state.get("api_url", "http://localhost:8000")
+            with st.spinner("Running extraction..."):
+                try:
+                    trigger_extraction(api_url, doc_id)
+                    document = load_selected_document(show_error=False)
+                    st.success("Extraction complete.")
+                except RuntimeError as exc:
+                    st.error(f"Extraction failed: {exc}")
+        if st.button("Resolve References"):
+            api_url = st.session_state.get("api_url", "http://localhost:8000")
+            with st.spinner("Resolving references..."):
+                try:
+                    trigger_resolution(api_url, doc_id)
+                    document = load_selected_document(show_error=False)
+                    st.success("Resolution complete.")
+                except RuntimeError as exc:
+                    st.error(f"Resolution failed: {exc}")
+    with col_status:
+        st.write(
+            {
+                "Filename": document.get("filename"),
+                "Uploaded": document.get("uploaded_at"),
+                "Status": document.get("status"),
+                "Size (bytes)": document.get("size_bytes"),
+            }
+        )
+
+    extraction = document.get("extraction") or {}
+    extraction_data = extraction.get("data") or {}
+    resolution = document.get("resolution") or {}
+    resolution_data = resolution.get("data") or []
+
+    with st.expander("Metadata", expanded=True):
+        metadata = extraction_data.get("metadata") or {}
+        if metadata:
+            st.table(metadata.items())
+        else:
+            st.info(
+                "No metadata available yet. Run extraction to populate this section."
+            )
+
+    with st.expander("Citations"):
+        citations = extraction_data.get("citations") or []
+        if citations:
+            st.dataframe(
+                pd.DataFrame(citations),
+                use_container_width=True,
+            )
+        else:
+            st.info("No citations extracted yet.")
+
+    with st.expander("Bibliography"):
+        references = extraction_data.get("references") or []
+        if references:
+            st.dataframe(
+                pd.DataFrame(references),
+                use_container_width=True,
+            )
+        else:
+            st.info("No bibliography entries extracted yet.")
+
+    with st.expander("Resolution Results"):
+        if resolution_data:
+            st.dataframe(
+                pd.DataFrame(resolution_data),
+                use_container_width=True,
+            )
+        else:
+            st.info("No resolved references yet. Run resolution after extraction.")
+
+
 def draw_main():
+    st.title("Citation-Support Checker")
+    draw_ingestion_panel()
+    st.divider()
     if not st.session_state.started:
         st.info("Configure settings then click Start segmentation.")
         return
-
-    st.title("Citation-Support Checker")
     import glob
 
     folder = st.session_state.get("data_dir", "")
@@ -502,15 +696,20 @@ def draw_main():
                                     eid = ev["id"]
                                     salience = ev.get("token_scores")
                                     text = ev.get("text", "")
-                                    # Compose a two‑line HTML block: Location header + coloured text
-                                    section_path = ev.get("section_path") or ev.get("section_head") or ""
+                                    # Compose a two-line HTML block.
+                                    section_path = (
+                                        ev.get("section_path")
+                                        or ev.get("section_head")
+                                        or ""
+                                    )
                                     if salience and settings.SHOW_SALIENCE:
                                         coloured_text = color_tokens(text, salience)
                                     else:
                                         coloured_text = text
                                     if section_path:
                                         html_block = (
-                                            f"<div><strong>Location:</strong> {section_path}</div>"
+                                            "<div><strong>Location:</strong> "
+                                            f"{section_path}</div>"
                                             f"<div>{coloured_text}</div>"
                                         )
                                     else:
@@ -529,15 +728,20 @@ def draw_main():
                                     eid = ev["id"]
                                     salience = ev.get("token_scores")
                                     text = ev.get("text", "")
-                                    # Compose a two‑line HTML block: Location header + coloured text
-                                    section_path = ev.get("section_path") or ev.get("section_head") or ""
+                                    # Compose a two-line HTML block.
+                                    section_path = (
+                                        ev.get("section_path")
+                                        or ev.get("section_head")
+                                        or ""
+                                    )
                                     if salience and settings.SHOW_SALIENCE:
                                         coloured_text = color_tokens(text, salience)
                                     else:
                                         coloured_text = text
                                     if section_path:
                                         html_block = (
-                                            f"<div><strong>Location:</strong> {section_path}</div>"
+                                            "<div><strong>Location:</strong> "
+                                            f"{section_path}</div>"
                                             f"<div>{coloured_text}</div>"
                                         )
                                     else:
@@ -550,7 +754,7 @@ def draw_main():
                                         contra_checked.append(eid)
                                 seg["user_selected_contradiction"] = contra_checked
 
-                                # --- Collect troll pay ambiguous evidence (per segment) ---
+                                # --- Collect troll pay evidence per segment ---
                                 troll_pay_items = []
                                 for ev in evidence:
                                     all_scores = ev.get("all_scores", {})
@@ -584,7 +788,7 @@ def draw_main():
                                         break
                                 all_troll_pay_items.extend(troll_pay_items)
 
-                        # After all segments, show one troll-pay expander per row (if any)
+                        # After all segments, show one troll-pay expander per row.
                         if all_troll_pay_items:
                             # Deduplicate on (seg_id, evidence id)
                             seen_keys = set()
@@ -596,7 +800,7 @@ def draw_main():
                                     seen_keys.add(k)
                                     deduped_troll_pay_items.append((seg_id, ev))
 
-                            # Find the most ambiguous item (lowest margin between top 2 NLI scores)
+                            # Find the most ambiguous item by smallest score margin.
                             def ambiguity(ev):
                                 scores = sorted(
                                     ev.get("all_scores", {}).values(), reverse=True
@@ -619,7 +823,8 @@ def draw_main():
                                     expanded=True,
                                 ):
                                     st.write(
-                                        "This candidate was difficult for the model to classify. Please help by labeling it:"
+                                        "This candidate was difficult for the model "
+                                        "to classify. Please help by labeling it:"
                                     )
                                     eid = ev["id"]
                                     text = ev.get("text", "")
@@ -629,7 +834,8 @@ def draw_main():
                                         or ""
                                     )
                                     label = (
-                                        f"**Row {row_id} Segment {seg_id}**<br>**Section:** {section_path}<br>{text}"
+                                        f"**Row {row_id} Segment {seg_id}**<br>"
+                                        f"**Section:** {section_path}<br>{text}"
                                         if section_path
                                         else text
                                     )
@@ -669,9 +875,9 @@ def draw_main():
                                                 "user_selected_trollpay", {}
                                             )
                                             troll_selected[eid] = choice
-                                            seg["user_selected_trollpay"] = (
-                                                troll_selected
-                                            )
+                                            seg[
+                                                "user_selected_trollpay"
+                                            ] = troll_selected
 
                         submitted = st.form_submit_button("Submit Assessment")
                         if submitted:
@@ -687,7 +893,8 @@ def draw_main():
         else:
             # Only show *one* instructional message if no results yet
             st.info(
-                "Click 'Submit all choices' above to search for candidate cited sentences."
+                "Click 'Submit all choices' above to search for candidate cited "
+                "sentences."
             )
     # ==== End Streamlit form for segment evaluation UI ====
 
@@ -729,7 +936,9 @@ def draw_main():
                 except Exception:
                     err_body = e.response.text
                 st.error(
-                    f"Failed to start backend indexing (HTTP {e.response.status_code}): {e}\nResponse body:\n{err_body}"
+                    "Failed to start backend indexing "
+                    f"(HTTP {e.response.status_code}): {e}\n"
+                    f"Response body:\n{err_body}"
                 )
             except Exception as e:
                 st.error(f"Failed to start backend indexing: {e}")
@@ -783,4 +992,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

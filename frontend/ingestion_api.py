@@ -61,3 +61,41 @@ def trigger_resolution(api_url: str, doc_id: str) -> dict:
     except requests.RequestException as exc:
         raise RuntimeError(f"Failed to reach ingestion API at {url}") from exc
     return _parse_response(response) or {}
+
+
+def get_citation_context(
+    api_url: str,
+    doc_id: str,
+    citation_index: int,
+    target_id: str | None = None,
+) -> dict:
+    url = f"{api_url.rstrip('/')}/ingest/{doc_id}/citation-context"
+    params = {"citation_index": citation_index}
+    if target_id:
+        params["target_id"] = target_id
+    try:
+        response = requests.get(url, params=params, timeout=DEFAULT_TIMEOUT)
+    except requests.RequestException as exc:
+        raise RuntimeError(f"Failed to reach ingestion API at {url}") from exc
+    return _parse_response(response) or {}
+
+
+def get_citation_graph(
+    api_url: str,
+    doc_id: str,
+    target_id: str | None,
+    depth: int,
+    max_nodes: int,
+) -> dict:
+    url = f"{api_url.rstrip('/')}/ingest/{doc_id}/citation-graph"
+    params = {
+        "depth": depth,
+        "max_nodes": max_nodes,
+    }
+    if target_id:
+        params["target_id"] = target_id
+    try:
+        response = requests.get(url, params=params, timeout=DEFAULT_TIMEOUT)
+    except requests.RequestException as exc:
+        raise RuntimeError(f"Failed to reach ingestion API at {url}") from exc
+    return _parse_response(response) or {}

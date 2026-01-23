@@ -19,6 +19,7 @@ dependencies:
       - requests
       - sentence-transformers
       - streamlit
+      - graphviz
       - torch            # pip gets you best CUDA versioning if relevant
       - transformers
       - tqdm

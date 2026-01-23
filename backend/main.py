@@ -14,7 +14,14 @@ from pathlib import Path
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend import extraction, grobid_client, schemas, utils
+from backend import (
+    citation_context,
+    citation_graph,
+    extraction,
+    grobid_client,
+    schemas,
+    utils,
+)
 from backend.nli import assess
 
 try:
@@ -33,6 +40,7 @@ from backend.ingestion_store import (
     create_ingested_document,
     get_document_source_path,
     get_ingested_document,
+    get_tei_xml,
     list_ingested_documents,
     store_extraction,
     store_resolution,
@@ -165,6 +173,101 @@ def get_ingested_resolution(doc_id: str):
     if not resolution or not resolution.get("data"):
         raise HTTPException(status_code=404, detail="Resolution data not found")
     return resolution
+
+
+@app.get(
+    "/ingest/{doc_id}/citation-context",
+    response_model=schemas.CitationContextResponse,
+)
+def get_citation_context(
+    doc_id: str,
+    citation_index: int = 0,
+    target_id: str | None = None,
+):
+    document = get_ingested_document(doc_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    try:
+        tei_xml = get_tei_xml(doc_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    context = citation_context.get_citation_context(tei_xml, citation_index, target_id)
+    if context is None:
+        return {"document_id": doc_id, "context": None}
+
+    lookup_id = target_id or context.get("target_id")
+    reference_entry = None
+    resolution_entry = None
+    if lookup_id:
+        extraction_data = (document.get("extraction") or {}).get("data") or {}
+        references = extraction_data.get("references") or []
+        reference_entry = next(
+            (ref for ref in references if ref.get("id") == lookup_id),
+            None,
+        )
+        resolution_data = (document.get("resolution") or {}).get("data") or []
+        resolution_entry = next(
+            (ref for ref in resolution_data if ref.get("reference_id") == lookup_id),
+            None,
+        )
+
+    return {
+        "document_id": doc_id,
+        "context": {
+            **context,
+            "citation_index": citation_index,
+            "reference": reference_entry,
+            "resolution": resolution_entry,
+        },
+    }
+
+
+@app.get(
+    "/ingest/{doc_id}/citation-graph",
+    response_model=schemas.CitationGraphResponse,
+)
+def get_citation_graph(
+    doc_id: str,
+    target_id: str | None = None,
+    doi: str | None = None,
+    depth: int = 1,
+    max_nodes: int = 10,
+):
+    document = get_ingested_document(doc_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    doi_value = doi
+    if doi_value is None and target_id:
+        resolution_data = (document.get("resolution") or {}).get("data") or []
+        for entry in resolution_data:
+            if entry.get("reference_id") == target_id and entry.get("doi"):
+                doi_value = entry.get("doi")
+                break
+
+    if doi_value is None and target_id:
+        extraction_data = (document.get("extraction") or {}).get("data") or {}
+        references = extraction_data.get("references") or []
+        for entry in references:
+            if entry.get("id") == target_id and entry.get("doi"):
+                doi_value = entry.get("doi")
+                break
+
+    if not doi_value:
+        raise HTTPException(status_code=404, detail="DOI not found for citation")
+
+    try:
+        graph = citation_graph.build_citation_graph(
+            doi_value,
+            depth=depth,
+            max_nodes=max_nodes,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    return {"document_id": doc_id, **graph}
 
 
 # ---------- /segment endpoint ----------

@@ -175,6 +175,50 @@ class ResolutionResponse(BaseModel):
     resolution: ResolutionResult
 
 
+class CitationContextReference(BaseModel):
+    id: Optional[str] = None
+    raw_reference: Optional[str] = None
+    doi: Optional[str] = None
+    url: Optional[str] = None
+
+
+class CitationContextPayload(BaseModel):
+    citation_index: int
+    target_id: Optional[str] = None
+    callout: Optional[str] = None
+    sentence: Optional[str] = None
+    previous_sentence: Optional[str] = None
+    next_sentence: Optional[str] = None
+    reference: Optional[CitationContextReference] = None
+    resolution: Optional[ResolvedReference] = None
+
+
+class CitationContextResponse(BaseModel):
+    document_id: str
+    context: Optional[CitationContextPayload] = None
+
+
+class CitationGraphNode(BaseModel):
+    id: str
+    label: str
+    kind: str
+    doi: Optional[str] = None
+    year: Optional[int] = None
+
+
+class CitationGraphEdge(BaseModel):
+    source: str
+    target: str
+    relation: str
+
+
+class CitationGraphResponse(BaseModel):
+    document_id: str
+    root_id: str
+    nodes: List[CitationGraphNode]
+    edges: List[CitationGraphEdge]
+
+
 class IngestedDocument(BaseModel):
     id: str
     filename: str

@@ -1,5 +1,5 @@
 # colbert_server/colbert.py
-# start with uvicorn colbert_server.colbert:app --host 0.0.0.0 --port 7001 --reload
+# start w uvicorn colbert_server.colbert:app --host 0.0.0.0 --port 7001 --reload
 
 import os
 import sys

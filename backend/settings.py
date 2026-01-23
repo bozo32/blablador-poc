@@ -49,6 +49,17 @@ class AppSettings(PydanticBaseSettings):
         description="Timeout (seconds) for GROBID extraction requests",
     )
 
+    CROSSREF_MAILTO: str = Field(
+        "",
+        env="CROSSREF_MAILTO",
+        description="Contact email for Crossref REST API requests",
+    )
+    CROSSREF_API_URL: str = Field(
+        "https://api.crossref.org/works",
+        env="CROSSREF_API_URL",
+        description="Base URL for Crossref REST API",
+    )
+
     # — Embedding/Retrieval defaults
     EMBED_MODEL: str = Field(
         "intfloat/multilingual-e5-base",

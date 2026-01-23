@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -137,7 +137,8 @@ class PrebuildRequest(BaseModel):
 class IngestionStage(BaseModel):
     status: str
     extracted_at: Optional[str] = None
-    data: Optional[dict] = None
+    resolved_at: Optional[str] = None
+    data: Optional[Any] = None
     payload: Optional[dict] = None
 
 
@@ -150,6 +151,28 @@ class ExtractionResult(BaseModel):
 class ExtractionResponse(BaseModel):
     document_id: str
     extraction: ExtractionResult
+
+
+class ResolvedReference(BaseModel):
+    reference_id: str
+    raw: str
+    doi: Optional[str] = None
+    title: Optional[str] = None
+    publisher: Optional[str] = None
+    year: Optional[str] = None
+    source: Optional[str] = None
+    confidence: Optional[float] = None
+
+
+class ResolutionResult(BaseModel):
+    status: str
+    resolved_at: Optional[str] = None
+    data: Optional[List[ResolvedReference]] = None
+
+
+class ResolutionResponse(BaseModel):
+    document_id: str
+    resolution: ResolutionResult
 
 
 class IngestedDocument(BaseModel):

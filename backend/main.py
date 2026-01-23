@@ -14,7 +14,7 @@ from pathlib import Path
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend import schemas, utils
+from backend import extraction, grobid_client, schemas, utils
 from backend.nli import assess
 
 try:
@@ -30,8 +30,10 @@ from backend.pipeline_registry import get_pipeline
 from backend.settings import settings as app_settings  # global default settings
 from backend.ingestion_store import (
     create_ingested_document,
+    get_document_source_path,
     get_ingested_document,
     list_ingested_documents,
+    store_extraction,
 )
 
 # Configure logging (so that logger.debug/info/etc. actually prints)
@@ -98,6 +100,32 @@ def get_ingest_document(doc_id: str):
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found")
     return document
+
+
+@app.post("/ingest/{doc_id}/extract", response_model=schemas.ExtractionResponse)
+def extract_ingested_document(doc_id: str):
+    document = get_ingested_document(doc_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    try:
+        pdf_path = get_document_source_path(doc_id)
+        tei_xml = grobid_client.extract_tei(pdf_path)
+        extraction_payload = extraction.parse_tei(tei_xml)
+        stored = store_extraction(doc_id, tei_xml, extraction_payload)
+    except Exception as exc:
+        logger.exception("Extraction failed for document %s", doc_id)
+        raise HTTPException(status_code=500, detail=f"Extraction failed: {exc}")
+
+    return {"document_id": doc_id, "extraction": stored.get("extraction")}
+
+
+@app.get("/ingest/{doc_id}/extraction", response_model=schemas.ExtractionResult)
+def get_ingested_extraction(doc_id: str):
+    document = get_ingested_document(doc_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return document.get("extraction")
 
 
 # ---------- /segment endpoint ----------

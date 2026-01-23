@@ -26,7 +26,15 @@ def _metadata_path(ingestion_dir: Path, doc_id: str) -> Path:
 
 
 def _default_stage() -> Dict[str, Any]:
-    return {"status": "pending", "payload": None}
+    return {"status": "pending", "extracted_at": None, "data": None}
+
+
+def _extraction_dir(ingestion_dir: Path, doc_id: str) -> Path:
+    return _document_dir(ingestion_dir, doc_id) / "extraction"
+
+
+def _tei_path(ingestion_dir: Path, doc_id: str) -> Path:
+    return _extraction_dir(ingestion_dir, doc_id) / "tei.xml"
 
 
 def create_ingested_document(
@@ -90,6 +98,40 @@ def list_ingested_documents(
 
     documents.sort(key=lambda item: item.get("uploaded_at", ""), reverse=True)
     return documents
+
+
+def get_document_source_path(doc_id: str, ingestion_dir: Optional[Path] = None) -> Path:
+    target_dir = ingestion_dir or DEFAULT_INGESTION_DIR
+    source_path = _document_dir(target_dir, doc_id) / "source.pdf"
+    if not source_path.exists():
+        raise FileNotFoundError(f"Source PDF not found for document {doc_id}")
+    return source_path
+
+
+def store_extraction(
+    doc_id: str,
+    tei_xml: str,
+    extraction_data: Dict[str, Any],
+    ingestion_dir: Optional[Path] = None,
+) -> Dict[str, Any]:
+    target_dir = ingestion_dir or DEFAULT_INGESTION_DIR
+    doc_dir = _document_dir(target_dir, doc_id)
+    if not doc_dir.exists():
+        raise FileNotFoundError(f"Document {doc_id} not found")
+
+    extraction_dir = _extraction_dir(target_dir, doc_id)
+    extraction_dir.mkdir(parents=True, exist_ok=True)
+    _tei_path(target_dir, doc_id).write_text(tei_xml, encoding="utf-8")
+
+    extracted_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    extraction_payload = {
+        "status": "complete",
+        "extracted_at": extracted_at,
+        "data": extraction_data,
+    }
+    return update_ingested_document(
+        doc_id, {"extraction": extraction_payload}, target_dir
+    )
 
 
 def update_ingested_document(

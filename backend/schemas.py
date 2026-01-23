@@ -136,7 +136,20 @@ class PrebuildRequest(BaseModel):
 
 class IngestionStage(BaseModel):
     status: str
+    extracted_at: Optional[str] = None
+    data: Optional[dict] = None
     payload: Optional[dict] = None
+
+
+class ExtractionResult(BaseModel):
+    status: str
+    extracted_at: Optional[str] = None
+    data: Optional[dict] = None
+
+
+class ExtractionResponse(BaseModel):
+    document_id: str
+    extraction: ExtractionResult
 
 
 class IngestedDocument(BaseModel):

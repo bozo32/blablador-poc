@@ -12,7 +12,7 @@ OS-ERIN delivers an end-to-end citation validation workflow, starting with relia
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Ingestion + Extraction** - PDFs ingested, parsed, and references normalized.
+- [x] **Phase 1: Ingestion + Extraction** - PDFs ingested, parsed, and references normalized.
 - [ ] **Phase 2: Citation Context Navigation** - Citation callouts and trees are navigable.
 - [ ] **Phase 3: Claim Selection + Editing** - Claims are extracted and editable for review.
 - [ ] **Phase 4: Evidence Attachment** - Cited PDFs are attached and parsed for evidence search.
@@ -37,7 +37,7 @@ Plans:
 - [x] 01-01-PLAN.md — Local ingestion storage and upload API
 - [x] 01-02-PLAN.md — GROBID extraction and metadata/citation parsing
 - [x] 01-03-PLAN.md — Reference resolution via Crossref
-- [ ] 01-04-PLAN.md — Streamlit ingestion UI
+- [x] 01-04-PLAN.md — Streamlit ingestion UI
 
 ### Phase 2: Citation Context Navigation
 **Goal**: Users can navigate citation context and follow cited works for validation.
@@ -114,7 +114,7 @@ Phases execute in numeric order: 2 → 2.1 → 2.2 → 3 → 3.1 → 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Ingestion + Extraction | 3/4 | In progress | - |
+| 1. Ingestion + Extraction | 4/4 | Complete | 2026-01-23 |
 | 2. Citation Context Navigation | 0/TBD | Not started | - |
 | 3. Claim Selection + Editing | 0/TBD | Not started | - |
 | 4. Evidence Attachment | 0/TBD | Not started | - |

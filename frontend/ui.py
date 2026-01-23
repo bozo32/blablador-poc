@@ -1,6 +1,7 @@
 # frontend/ui.py
 
 # === Imports ===
+import json
 import os
 import pathlib
 import re
@@ -283,6 +284,18 @@ def handle_pdf_upload():
         st.success(f"Uploaded {len(uploaded)} PDF(s).")
 
 
+def stringify_value(value: object) -> str | int | float | bool | None:
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=True)
+    return value
+
+
+def normalize_records(records: list[dict]) -> list[dict]:
+    return [
+        {key: stringify_value(val) for key, val in record.items()} for record in records
+    ]
+
+
 # === UI Drawing ===
 def color_tokens(
     text: str, token_scores: List[float], color_pos="green", color_neg="red"
@@ -495,7 +508,11 @@ def draw_ingestion_panel():
     with st.expander("Metadata", expanded=True):
         metadata = extraction_data.get("metadata") or {}
         if metadata:
-            st.table(metadata.items())
+            rows = [
+                {"Field": key, "Value": stringify_value(value)}
+                for key, value in metadata.items()
+            ]
+            st.dataframe(pd.DataFrame(rows), use_container_width=True)
         else:
             st.info(
                 "No metadata available yet. Run extraction to populate this section."
@@ -505,7 +522,7 @@ def draw_ingestion_panel():
         citations = extraction_data.get("citations") or []
         if citations:
             st.dataframe(
-                pd.DataFrame(citations),
+                pd.DataFrame(normalize_records(citations)),
                 use_container_width=True,
             )
         else:
@@ -515,7 +532,7 @@ def draw_ingestion_panel():
         references = extraction_data.get("references") or []
         if references:
             st.dataframe(
-                pd.DataFrame(references),
+                pd.DataFrame(normalize_records(references)),
                 use_container_width=True,
             )
         else:
@@ -524,7 +541,7 @@ def draw_ingestion_panel():
     with st.expander("Resolution Results"):
         if resolution_data:
             st.dataframe(
-                pd.DataFrame(resolution_data),
+                pd.DataFrame(normalize_records(resolution_data)),
                 use_container_width=True,
             )
         else:

@@ -66,6 +66,17 @@ class AppSettings(PydanticBaseSettings):
         description="Base URL for Crossref REST API",
     )
 
+    OPENALEX_API_URL: str = Field(
+        "https://api.openalex.org/works",
+        env="OPENALEX_API_URL",
+        description="Base URL for OpenAlex Works API",
+    )
+    OPENALEX_API_KEY: str = Field(
+        "",
+        env="OPENALEX_API_KEY",
+        description="OpenAlex API key for citation graph expansion",
+    )
+
     # — Embedding/Retrieval defaults
     EMBED_MODEL: str = Field(
         "intfloat/multilingual-e5-base",

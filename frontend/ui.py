@@ -62,7 +62,6 @@ def init_session_state():
         "ingested_docs": [],
         "selected_doc_id": None,
         "active_document": None,
-        "uploaded_pdfs": [],
     }
     for key, val in defaults.items():
         st.session_state.setdefault(key, val)

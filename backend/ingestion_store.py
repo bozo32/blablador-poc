@@ -37,6 +37,16 @@ def _tei_path(ingestion_dir: Path, doc_id: str) -> Path:
     return _extraction_dir(ingestion_dir, doc_id) / "tei.xml"
 
 
+def get_tei_xml(doc_id: str, ingestion_dir: Optional[Path] = None) -> str:
+    target_dir = ingestion_dir or DEFAULT_INGESTION_DIR
+    tei_path = _tei_path(target_dir, doc_id)
+    if not tei_path.exists():
+        raise FileNotFoundError(
+            f"TEI XML not found for document {doc_id}. Run extraction first."
+        )
+    return tei_path.read_text(encoding="utf-8", errors="ignore")
+
+
 def create_ingested_document(
     file_bytes: bytes,
     filename: str,

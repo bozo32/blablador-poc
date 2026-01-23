@@ -1,30 +1,38 @@
 # backend/main.py
 
 import os
+
 os.environ["TRANSFORMERS_CACHE"] = str(os.path.expanduser("~/.cache/huggingface"))
 
 # Set threading env vars *before* numpy/torch
 from backend import utils
+
 utils.set_sane_threads()
 import logging
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend import schemas, utils
 from backend.nli import assess
 
 try:
-    from transformers import AdamW
+    from transformers import AdamW  # noqa: F401
 except ImportError:
     import torch
     import transformers
+
     transformers.AdamW = torch.optim.AdamW
 
 # New imports after other backend imports
 from backend.pipeline_registry import get_pipeline
-from backend.settings import settings as app_settings #global default settings
+from backend.settings import settings as app_settings  # global default settings
+from backend.ingestion_store import (
+    create_ingested_document,
+    get_ingested_document,
+    list_ingested_documents,
+)
 
 # Configure logging (so that logger.debug/info/etc. actually prints)
 logging.basicConfig(
@@ -62,6 +70,36 @@ app.add_middleware(
 results, retrievers = {}, {}
 
 
+def _is_pdf_upload(file: UploadFile) -> bool:
+    filename = (file.filename or "").lower()
+    content_type = (file.content_type or "").lower()
+    return filename.endswith(".pdf") and content_type == "application/pdf"
+
+
+@app.post("/ingest", response_model=schemas.IngestUploadResponse)
+async def ingest_document(file: UploadFile = File(...)):
+    if not _is_pdf_upload(file):
+        raise HTTPException(status_code=400, detail="Only PDF uploads are supported")
+
+    file_bytes = await file.read()
+    metadata = create_ingested_document(file_bytes, file.filename or "document.pdf")
+    return {"document": metadata}
+
+
+@app.get("/ingest", response_model=schemas.IngestListResponse)
+def list_ingest_documents():
+    documents = list_ingested_documents()
+    return {"documents": documents}
+
+
+@app.get("/ingest/{doc_id}", response_model=schemas.IngestedDocument)
+def get_ingest_document(doc_id: str):
+    document = get_ingested_document(doc_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return document
+
+
 # ---------- /segment endpoint ----------
 @app.post("/segment")
 async def segment(req: schemas.SentencePayload):
@@ -77,7 +115,8 @@ async def segment(req: schemas.SentencePayload):
     cfg.PIPELINE_MODE = pipeline_mode
     build_all = get_pipeline(cfg)
 
-    # 1) Make sure a retriever exists for every (row_id, segment_id) we’re about to query
+    # 1) Make sure a retriever exists for every (row_id, segment_id)
+    # we are about to query
     try:
         for seg in req.segments:
             key = utils.make_retriever_key(req.row_id, seg.segment_id)
@@ -94,7 +133,7 @@ async def segment(req: schemas.SentencePayload):
                         embed_model=req.settings.embed_model,
                         max_sentences=req.settings.max_sentences,
                         min_score=req.settings.faiss_min_score,
-                        claim="; ".join(s.claim for s in req.segments)
+                        claim="; ".join(s.claim for s in req.segments),
                     )
                     retrievers[row_key] = next(iter(raw_dict.values()))
                 retrievers[key] = retrievers[row_key]
@@ -110,8 +149,8 @@ async def segment(req: schemas.SentencePayload):
                         max_sentences=req.settings.max_sentences,
                         min_score=req.settings.faiss_min_score,
                     )
-                    retrievers[row_key] = (
-                        raw_dict.get("default") or next(iter(raw_dict.values()))
+                    retrievers[row_key] = raw_dict.get("default") or next(
+                        iter(raw_dict.values())
                     )
                     logging.info(f"[BUILD] classic index for {row_key}")
 
@@ -133,7 +172,9 @@ async def segment(req: schemas.SentencePayload):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Local embedding failed: {e}")
     logger.debug(
-        f"[EMBED] returned {len(seg_vecs)} vectors; example vec[0]={seg_vecs[0] if seg_vecs else None}"
+        "[EMBED] returned %s vectors; example vec[0]=%s",
+        len(seg_vecs),
+        seg_vecs[0] if seg_vecs else None,
     )
 
     response_segments = []
@@ -145,8 +186,7 @@ async def segment(req: schemas.SentencePayload):
         retr = retrievers.get(key)
         if retr is None:
             raise HTTPException(
-                status_code=500,
-                detail=f"No FAISS index found for key={key}"
+                status_code=500, detail=f"No FAISS index found for key={key}"
             )
 
         # 4) FAISS search (top-k candidates)
@@ -183,9 +223,13 @@ async def segment(req: schemas.SentencePayload):
             )
             filtered = [(c["id"], c["faiss_score"]) for c in reranked]
         elif not filtered:
-            logger.debug(f"[RERANK] Skipping rerank: no FAISS candidates to rerank")
+            logger.debug("[RERANK] Skipping rerank: no FAISS candidates to rerank")
             # >>> ADD THIS BLOCK <<<
-            logger.debug(f"[EVIDENCE] No candidates after retrieval+rerank; skipping NLI for segment {seg.segment_id!r}")
+            logger.debug(
+                "[EVIDENCE] No candidates after retrieval+rerank; "
+                "skipping NLI for segment %r",
+                seg.segment_id,
+            )
             response_segments.append(
                 {
                     "segment_id": seg.segment_id,
@@ -315,7 +359,9 @@ def prebuild(req: schemas.PrebuildRequest):
 
     pipeline_mode = getattr(req, "pipeline_mode", None)
     if not pipeline_mode:
-        pipeline_mode = os.environ.get("DEFAULT_PIPELINE_MODE") or getattr(app_settings, "DEFAULT_PIPELINE_MODE", None)
+        pipeline_mode = os.environ.get("DEFAULT_PIPELINE_MODE") or getattr(
+            app_settings, "DEFAULT_PIPELINE_MODE", None
+        )
 
     try:
         # 1) Validate numeric fields

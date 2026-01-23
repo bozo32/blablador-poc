@@ -10,6 +10,7 @@ Complete these items for the integration to function. Claude automated everythin
 
 | Status | Variable | Source | Add to |
 |--------|----------|--------|--------|
+| [ ] | `GROBID_URL` | Local GROBID service base URL (example: http://localhost:8070) | `.env` |
 | [ ] | `CROSSREF_MAILTO` | Email address required by Crossref REST API | `.env` |
 
 ## Verification
@@ -17,10 +18,12 @@ Complete these items for the integration to function. Claude automated everythin
 After completing setup, verify with:
 
 ```bash
+curl http://localhost:8070/api/isalive
 grep CROSSREF_MAILTO .env
 ```
 
 Expected results:
+- Response contains `true` when GROBID is running.
 - `CROSSREF_MAILTO` is present in `.env`
 
 ---

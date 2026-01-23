@@ -2,6 +2,7 @@ from typing import List, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
+
 class Evidence(BaseModel):
     text: str
     location: str
@@ -57,7 +58,7 @@ class RequestSettings(BaseModel):
     )
     reranker_model: Optional[str] = Field(
         None,
-        description="HF path for cross-encoder reranker (e.g. 'cross-encoder/mmarco-mMiniLMv2-L12-H384-v1')",
+        description="HF path for cross-encoder reranker",
     )
     reranker_top_k: int = Field(
         10, ge=1, description="How many of the FAISS candidates to keep after reranking"
@@ -131,3 +132,27 @@ class PrebuildRequest(BaseModel):
         if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
             raise ValueError("Field must not be NaN or infinite")
         return v
+
+
+class IngestionStage(BaseModel):
+    status: str
+    payload: Optional[dict] = None
+
+
+class IngestedDocument(BaseModel):
+    id: str
+    filename: str
+    size_bytes: int
+    sha256: str
+    uploaded_at: str
+    status: str
+    extraction: IngestionStage
+    resolution: IngestionStage
+
+
+class IngestListResponse(BaseModel):
+    documents: List[IngestedDocument]
+
+
+class IngestUploadResponse(BaseModel):
+    document: IngestedDocument

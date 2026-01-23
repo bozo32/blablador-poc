@@ -2,6 +2,7 @@
 
 from pydantic import Field
 from pydantic_settings import BaseSettings as PydanticBaseSettings
+from pydantic_settings import SettingsConfigDict
 from typing import Literal, List
 from pathlib import Path
 
@@ -10,6 +11,11 @@ TROLL_PAY_MARGIN = 0.7
 
 
 class AppSettings(PydanticBaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=Path(__file__).resolve().parent.parent / ".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+    )
     # selection for which mode the script will run, classic (nli) or hybrid
     PIPELINE_MODE: Literal["classic", "hybrid"] = Field("classic", env="PIPELINE_MODE")
 
@@ -225,13 +231,6 @@ class AppSettings(PydanticBaseSettings):
         env="SHOW_SALIENCE",
         description="Show ColBERT token-salience colouring in the UI",
     )
-
-    class Config:
-        """Pydantic settings configuration."""
-
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = False
 
 
 # ---------------------------------------------------------------------------

@@ -25,8 +25,8 @@ def _metadata_path(ingestion_dir: Path, doc_id: str) -> Path:
     return _document_dir(ingestion_dir, doc_id) / "metadata.json"
 
 
-def _default_stage() -> Dict[str, Any]:
-    return {"status": "pending", "extracted_at": None, "data": None}
+def _default_stage(timestamp_key: str) -> Dict[str, Any]:
+    return {"status": "pending", timestamp_key: None, "data": None}
 
 
 def _extraction_dir(ingestion_dir: Path, doc_id: str) -> Path:
@@ -60,8 +60,8 @@ def create_ingested_document(
         "sha256": sha256,
         "uploaded_at": uploaded_at,
         "status": "uploaded",
-        "extraction": _default_stage(),
-        "resolution": _default_stage(),
+        "extraction": _default_stage("extracted_at"),
+        "resolution": _default_stage("resolved_at"),
     }
 
     _metadata_path(target_dir, doc_id).write_text(
@@ -131,6 +131,23 @@ def store_extraction(
     }
     return update_ingested_document(
         doc_id, {"extraction": extraction_payload}, target_dir
+    )
+
+
+def store_resolution(
+    doc_id: str,
+    resolution_data: Dict[str, Any],
+    ingestion_dir: Optional[Path] = None,
+) -> Dict[str, Any]:
+    target_dir = ingestion_dir or DEFAULT_INGESTION_DIR
+    resolved_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    resolution_payload = {
+        "status": "complete",
+        "resolved_at": resolved_at,
+        "data": resolution_data,
+    }
+    return update_ingested_document(
+        doc_id, {"resolution": resolution_payload}, target_dir
     )
 
 

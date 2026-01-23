@@ -27,6 +27,7 @@ except ImportError:
 
 # New imports after other backend imports
 from backend.pipeline_registry import get_pipeline
+from backend.reference_resolver import resolve_references
 from backend.settings import settings as app_settings  # global default settings
 from backend.ingestion_store import (
     create_ingested_document,
@@ -34,6 +35,7 @@ from backend.ingestion_store import (
     get_ingested_document,
     list_ingested_documents,
     store_extraction,
+    store_resolution,
 )
 
 # Configure logging (so that logger.debug/info/etc. actually prints)
@@ -126,6 +128,43 @@ def get_ingested_extraction(doc_id: str):
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found")
     return document.get("extraction")
+
+
+@app.post("/ingest/{doc_id}/resolve", response_model=schemas.ResolutionResponse)
+def resolve_ingested_references(doc_id: str):
+    document = get_ingested_document(doc_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    extraction = document.get("extraction") or {}
+    extraction_data = extraction.get("data") or {}
+    references = extraction_data.get("references")
+    if not references:
+        raise HTTPException(
+            status_code=404, detail="Extraction data not found for document"
+        )
+
+    try:
+        resolved = resolve_references(references)
+        stored = store_resolution(doc_id, resolved)
+    except Exception as exc:
+        logger.exception("Reference resolution failed for document %s", doc_id)
+        raise HTTPException(
+            status_code=500, detail=f"Reference resolution failed: {exc}"
+        )
+
+    return {"document_id": doc_id, "resolution": stored.get("resolution")}
+
+
+@app.get("/ingest/{doc_id}/resolution", response_model=schemas.ResolutionResult)
+def get_ingested_resolution(doc_id: str):
+    document = get_ingested_document(doc_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    resolution = document.get("resolution")
+    if not resolution or not resolution.get("data"):
+        raise HTTPException(status_code=404, detail="Resolution data not found")
+    return resolution
 
 
 # ---------- /segment endpoint ----------

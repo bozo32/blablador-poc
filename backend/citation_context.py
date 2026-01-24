@@ -54,13 +54,17 @@ def get_citation_context(
     sentence_lookup = _sentence_index(root)
     callouts = _callouts(root)
 
-    if target_id:
-        callouts = [item for item in callouts if item.get("target_id") == target_id]
+    callout = None
+    if 0 <= citation_index < len(callouts):
+        callout = callouts[citation_index]
+    elif target_id:
+        for item in callouts:
+            if item.get("target_id") == target_id:
+                callout = item
+                break
 
-    if citation_index < 0 or citation_index >= len(callouts):
+    if callout is None:
         return None
-
-    callout = callouts[citation_index]
     sentence_elem_list = callout.get("sentence_elem") or []
     sentence_elem = sentence_elem_list[0] if sentence_elem_list else None
 

@@ -89,6 +89,7 @@ def get_citation_graph(
     target_id: Optional[str],
     depth: int,
     max_nodes: int,
+    doi: Optional[str] = None,
 ) -> dict:
     """Fetch citation graph data for the selected cited work."""
     url = f"{api_url.rstrip('/')}/ingest/{doc_id}/citation-graph"
@@ -98,6 +99,8 @@ def get_citation_graph(
     }
     if target_id:
         params["target_id"] = target_id
+    if doi:
+        params["doi"] = doi
     try:
         response = requests.get(url, params=params, timeout=DEFAULT_TIMEOUT)
     except requests.RequestException as exc:

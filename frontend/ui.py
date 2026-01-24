@@ -913,6 +913,7 @@ def draw_ingestion_panel():
         st.session_state["citation_graph_key"] = (
             request["doc_id"],
             request["target_id"],
+            request.get("doi"),
             request["depth"],
             request["max_nodes"],
         )
@@ -927,6 +928,7 @@ def draw_ingestion_panel():
                 request["target_id"],
                 request["depth"],
                 request["max_nodes"],
+                doi=request.get("doi"),
             )
         except RuntimeError as exc:
             st.session_state["citation_graph_error"] = str(exc)
@@ -1099,9 +1101,14 @@ def draw_ingestion_panel():
             context_snapshot = st.session_state.get("citation_context") or {}
             resolution_entry = context_snapshot.get("resolution") or {}
             reference_entry = context_snapshot.get("reference") or {}
-            resolved_doi = resolution_entry.get("doi") or reference_entry.get("doi")
-            if resolved_doi:
-                st.caption(f"Resolved DOI: {resolved_doi}")
+            resolved_identifier = (
+                resolution_entry.get("openalex_id")
+                or resolution_entry.get("openalex_work_id")
+                or resolution_entry.get("doi")
+                or reference_entry.get("doi")
+            )
+            if resolved_identifier:
+                st.caption(f"Resolved identifier: {resolved_identifier}")
             else:
                 st.caption("No DOI resolved for this citation yet.")
             if selected_target:
@@ -1122,6 +1129,7 @@ def draw_ingestion_panel():
                 "api_url": st.session_state.get("api_url", "http://localhost:8000"),
                 "doc_id": doc_id,
                 "target_id": selected_target,
+                "doi": resolved_identifier,
                 "depth": int(st.session_state.get("citation_graph_depth", 1)),
                 "max_nodes": int(st.session_state.get("citation_graph_max_nodes", 10)),
             }
@@ -1130,6 +1138,7 @@ def draw_ingestion_panel():
             graph_key = (
                 graph_request["doc_id"],
                 graph_request["target_id"],
+                graph_request.get("doi"),
                 graph_request["depth"],
                 graph_request["max_nodes"],
             )

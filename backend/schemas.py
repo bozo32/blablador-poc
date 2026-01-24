@@ -190,6 +190,7 @@ class CitationContextReference(BaseModel):
     raw_reference: Optional[str] = None
     doi: Optional[str] = None
     url: Optional[str] = None
+    grobid: Optional[dict] = None
 
 
 class CitationContextPayload(BaseModel):

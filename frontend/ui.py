@@ -547,6 +547,67 @@ def format_reference_summary(reference: dict, resolution: dict) -> str:
     return summary
 
 
+def format_grobid_authors(authors: object) -> str:
+    if isinstance(authors, str):
+        return authors.strip()
+    if isinstance(authors, list):
+        names = []
+        for author in authors:
+            if isinstance(author, str):
+                name = author.strip()
+            elif isinstance(author, dict):
+                name = (
+                    author.get("full_name")
+                    or author.get("name")
+                    or " ".join(
+                        part
+                        for part in [
+                            author.get("given_name") or author.get("first_name"),
+                            author.get("surname") or author.get("last_name"),
+                        ]
+                        if part
+                    ).strip()
+                )
+            else:
+                name = ""
+            if name:
+                names.append(name)
+        return "; ".join(names)
+    return ""
+
+
+def select_grobid_value(grobid: dict, keys: list[str]) -> str | None:
+    for key in keys:
+        value = grobid.get(key)
+        if value:
+            return str(value).strip()
+    return None
+
+
+def build_citing_bibliography_summary(
+    reference: dict, resolution: dict
+) -> tuple[str, bool]:
+    grobid = (reference or {}).get("grobid") or (resolution or {}).get("grobid") or {}
+    title = select_grobid_value(grobid, ["title", "title_full", "title_main"])
+    year = select_grobid_value(grobid, ["year", "published_year", "date"])
+    authors = format_grobid_authors(grobid.get("authors") or grobid.get("author"))
+    has_consolidated = bool(title or year or authors)
+    if has_consolidated:
+        prefix_parts = []
+        if authors:
+            prefix_parts.append(authors)
+        if year:
+            prefix_parts.append(f"({year})")
+        prefix = " ".join(prefix_parts).strip()
+        if title:
+            if prefix:
+                return f"{prefix} — {title}", True
+            return title, True
+        return prefix, True
+    fallback = (reference or {}).get("raw_reference") or ""
+    return fallback, False
+
+
 def format_candidate_label(source_label: str, candidate: dict) -> str:
     title = (candidate or {}).get("title") or "Untitled"
     doi = (candidate or {}).get("doi")
@@ -1101,6 +1162,21 @@ def draw_ingestion_panel():
                             if resolution.get("mismatch_reason"):
                                 st.caption(
                                     f"Reason: {resolution.get('mismatch_reason')}"
+                                )
+                            (
+                                citing_summary,
+                                has_consolidated,
+                            ) = build_citing_bibliography_summary(
+                                reference or {}, resolution or {}
+                            )
+                            if citing_summary:
+                                st.markdown("**Citing bibliography**")
+                                st.markdown(citing_summary)
+                            else:
+                                st.caption("Citing bibliography unavailable.")
+                            if not has_consolidated:
+                                st.warning(
+                                    "Consolidated metadata missing for this reference."
                                 )
                             candidate_options = build_resolution_candidates(resolution)
                             if reference_id and candidate_options:

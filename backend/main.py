@@ -9,6 +9,7 @@ from backend import utils
 
 utils.set_sane_threads()
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
@@ -34,7 +35,7 @@ except ImportError:
 
 # New imports after other backend imports
 from backend.pipeline_registry import get_pipeline
-from backend.reference_resolver import resolve_references
+from backend.reference_resolver import apply_resolution_selection, resolve_references
 from backend.settings import settings as app_settings  # global default settings
 from backend.ingestion_store import (
     create_ingested_document,
@@ -44,6 +45,7 @@ from backend.ingestion_store import (
     list_ingested_documents,
     store_extraction,
     store_resolution,
+    update_ingested_document,
 )
 
 # Configure logging (so that logger.debug/info/etc. actually prints)
@@ -173,6 +175,51 @@ def get_ingested_resolution(doc_id: str):
     if not resolution or not resolution.get("data"):
         raise HTTPException(status_code=404, detail="Resolution data not found")
     return resolution
+
+
+@app.post(
+    "/ingest/{doc_id}/resolution/{reference_id}/select",
+    response_model=schemas.ResolutionResponse,
+)
+def select_resolution_source(
+    doc_id: str, reference_id: str, payload: schemas.ResolutionSelectionRequest
+):
+    document = get_ingested_document(doc_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    resolution = document.get("resolution") or {}
+    resolution_data = resolution.get("data") or []
+    if not resolution_data:
+        raise HTTPException(status_code=404, detail="Resolution data not found")
+
+    updated_entries = []
+    updated = False
+    for entry in resolution_data:
+        if entry.get("reference_id") == reference_id:
+            try:
+                updated_entry = apply_resolution_selection(
+                    entry, payload.selected_source, override_status=True
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            updated_entries.append(updated_entry)
+            updated = True
+        else:
+            updated_entries.append(entry)
+
+    if not updated:
+        raise HTTPException(status_code=404, detail="Resolution entry not found")
+
+    resolved_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    resolution_payload = {
+        **resolution,
+        "status": "complete",
+        "resolved_at": resolved_at,
+        "data": updated_entries,
+    }
+    stored = update_ingested_document(doc_id, {"resolution": resolution_payload})
+    return {"document_id": doc_id, "resolution": stored.get("resolution")}
 
 
 @app.get(

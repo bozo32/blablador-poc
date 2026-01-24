@@ -162,6 +162,12 @@ class ResolvedReference(BaseModel):
     year: Optional[str] = None
     source: Optional[str] = None
     confidence: Optional[float] = None
+    grobid: Optional[dict] = None
+    crossref: Optional[dict] = None
+    openalex: Optional[dict] = None
+    status: Optional[str] = None
+    mismatch_reason: Optional[str] = None
+    selected_source: Optional[str] = None
 
 
 class ResolutionResult(BaseModel):
@@ -173,6 +179,10 @@ class ResolutionResult(BaseModel):
 class ResolutionResponse(BaseModel):
     document_id: str
     resolution: ResolutionResult
+
+
+class ResolutionSelectionRequest(BaseModel):
+    selected_source: str
 
 
 class CitationContextReference(BaseModel):

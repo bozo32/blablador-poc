@@ -30,6 +30,7 @@ from frontend.ingestion_api import (
     get_citation_graph,
     get_document,
     list_documents,
+    submit_resolution_choice,
     trigger_extraction,
     trigger_resolution,
     upload_pdf,
@@ -544,6 +545,27 @@ def format_reference_summary(reference: dict, resolution: dict) -> str:
             else f"DOI: https://doi.org/{doi}"
         )
     return summary
+
+
+def format_candidate_label(source_label: str, candidate: dict) -> str:
+    title = (candidate or {}).get("title") or "Untitled"
+    doi = (candidate or {}).get("doi")
+    if doi:
+        return f"{source_label}: {title} (DOI: {doi})"
+    return f"{source_label}: {title}"
+
+
+def build_resolution_candidates(resolution: dict) -> dict:
+    candidates = {}
+    for source, label in (
+        ("grobid", "GROBID"),
+        ("crossref", "Crossref"),
+        ("openalex", "OpenAlex"),
+    ):
+        candidate = (resolution or {}).get(source)
+        if candidate:
+            candidates[source] = format_candidate_label(label, candidate)
+    return candidates
 
 
 def build_citation_graphviz(graph_data: dict) -> graphviz.Digraph:
@@ -1071,6 +1093,51 @@ def draw_ingestion_panel():
                         st.caption("Reference summary unavailable.")
                     if not resolution:
                         st.caption("Resolution missing — run Resolve References.")
+                    else:
+                        status = resolution.get("status")
+                        if status in ("mismatch", "needs_review"):
+                            reference_id = resolution.get("reference_id")
+                            st.caption("Resolution needs review.")
+                            if resolution.get("mismatch_reason"):
+                                st.caption(
+                                    f"Reason: {resolution.get('mismatch_reason')}"
+                                )
+                            candidate_options = build_resolution_candidates(resolution)
+                            if reference_id and candidate_options:
+                                option_keys = list(candidate_options.keys())
+                                default_key = resolution.get("selected_source")
+                                if default_key not in option_keys:
+                                    default_key = option_keys[0]
+                                selected_source = st.selectbox(
+                                    "Select source",
+                                    option_keys,
+                                    index=option_keys.index(default_key),
+                                    format_func=lambda key: candidate_options.get(
+                                        key, key
+                                    ),
+                                    key=f"resolution-select-{reference_id}",
+                                )
+                                if st.button(
+                                    "Apply selection",
+                                    key=f"resolution-apply-{reference_id}",
+                                ):
+                                    api_url = st.session_state.get(
+                                        "api_url", "http://localhost:8000"
+                                    )
+                                    try:
+                                        submit_resolution_choice(
+                                            api_url,
+                                            doc_id,
+                                            reference_id,
+                                            selected_source,
+                                        )
+                                        load_selected_document(show_error=False)
+                                        load_citation_context(context_request)
+                                        st.success("Resolution updated.")
+                                    except RuntimeError as exc:
+                                        st.error(f"Failed to update resolution: {exc}")
+                            else:
+                                st.caption("No resolution candidates available.")
                     with st.expander("Show raw metadata"):
                         if reference:
                             st.markdown("**Bibliography entry**")

@@ -65,6 +65,18 @@ def trigger_resolution(api_url: str, doc_id: str) -> dict:
     return _parse_response(response) or {}
 
 
+def submit_resolution_choice(
+    api_url: str, doc_id: str, reference_id: str, selected_source: str
+) -> dict:
+    url = f"{api_url.rstrip('/')}/ingest/{doc_id}/resolution/{reference_id}/select"
+    payload = {"selected_source": selected_source}
+    try:
+        response = requests.post(url, json=payload, timeout=DEFAULT_TIMEOUT)
+    except requests.RequestException as exc:
+        raise RuntimeError(f"Failed to reach ingestion API at {url}") from exc
+    return _parse_response(response) or {}
+
+
 def get_citation_context(
     api_url: str,
     doc_id: str,

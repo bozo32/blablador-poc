@@ -63,7 +63,11 @@ Plans:
 **Success Criteria** (what must be TRUE):
   1. User can see candidate claims segmented from citing text.
   2. User can select and edit an extracted claim before validation.
-**Plans**: TBD
+**Plans**: 3 plans
+Plans:
+- [ ] 03-01-PLAN.md — Claim queue state and segmentation helpers
+- [ ] 03-02-PLAN.md — Queue rendering and parsing confirmation UI
+- [ ] 03-03-PLAN.md — Modal claim editor with autosave and reset
 
 ### Phase 4: Evidence Attachment
 **Goal**: Users can attach cited PDFs and prepare them for evidence retrieval.

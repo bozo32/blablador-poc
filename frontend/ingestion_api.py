@@ -1,9 +1,11 @@
+from typing import Dict, Optional, Union
+
 import requests
 
 DEFAULT_TIMEOUT = 30
 
 
-def _parse_response(response: requests.Response) -> dict | None:
+def _parse_response(response: requests.Response) -> Optional[dict]:
     try:
         response.raise_for_status()
     except requests.HTTPError as exc:
@@ -67,10 +69,11 @@ def get_citation_context(
     api_url: str,
     doc_id: str,
     citation_index: int,
-    target_id: str | None = None,
+    target_id: Optional[str] = None,
 ) -> dict:
+    """Fetch citation context (sentence + neighbors) for a callout."""
     url = f"{api_url.rstrip('/')}/ingest/{doc_id}/citation-context"
-    params = {"citation_index": citation_index}
+    params: Dict[str, Union[int, str]] = {"citation_index": int(citation_index)}
     if target_id:
         params["target_id"] = target_id
     try:
@@ -83,14 +86,15 @@ def get_citation_context(
 def get_citation_graph(
     api_url: str,
     doc_id: str,
-    target_id: str | None,
+    target_id: Optional[str],
     depth: int,
     max_nodes: int,
 ) -> dict:
+    """Fetch citation graph data for the selected cited work."""
     url = f"{api_url.rstrip('/')}/ingest/{doc_id}/citation-graph"
-    params = {
-        "depth": depth,
-        "max_nodes": max_nodes,
+    params: Dict[str, Union[int, str]] = {
+        "depth": int(depth),
+        "max_nodes": int(max_nodes),
     }
     if target_id:
         params["target_id"] = target_id

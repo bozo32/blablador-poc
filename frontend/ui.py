@@ -8,6 +8,7 @@ import re
 import sys
 import tempfile
 
+import graphviz
 import pandas as pd
 import requests
 import streamlit as st
@@ -23,6 +24,8 @@ from backend.model_cache import add_model, get_models
 from backend.settings import AppSettings
 from backend.utils import list_local_models
 from frontend.ingestion_api import (
+    get_citation_context,
+    get_citation_graph,
     get_document,
     list_documents,
     trigger_extraction,
@@ -63,6 +66,19 @@ def init_session_state():
         "ingested_docs": [],
         "selected_doc_id": None,
         "active_document": None,
+        "citation_selected_index": None,
+        "citation_selected_target": None,
+        "citation_context_key": None,
+        "citation_context": None,
+        "citation_context_error": None,
+        "citation_last_context_request": None,
+        "citation_follow_open": False,
+        "citation_graph_key": None,
+        "citation_graph": None,
+        "citation_graph_error": None,
+        "citation_last_graph_request": None,
+        "citation_graph_depth": 1,
+        "citation_graph_max_nodes": 10,
     }
     for key, val in defaults.items():
         st.session_state.setdefault(key, val)
@@ -294,6 +310,92 @@ def normalize_records(records: list[dict]) -> list[dict]:
     return [
         {key: stringify_value(val) for key, val in record.items()} for record in records
     ]
+
+
+def show_api_error(message: str) -> None:
+    if hasattr(st, "toast"):
+        st.toast(message)
+    else:
+        st.error(message)
+
+
+def render_skeleton(lines: int = 3) -> None:
+    if hasattr(st, "skeleton"):
+        for _ in range(lines):
+            st.skeleton()
+    else:
+        st.write("Loading...")
+
+
+def highlight_callout(text: str | None, callout: str | None) -> str:
+    if not text:
+        return ""
+    if not callout:
+        return text
+    pattern = re.escape(callout)
+    return re.sub(
+        pattern,
+        (
+            '<span style="background-color:#fff2b3; padding:2px 4px; '
+            'border-radius:4px;">' + callout + "</span>"
+        ),
+        text,
+        count=1,
+    )
+
+
+def build_citation_graphviz(graph_data: dict) -> graphviz.Digraph:
+    graph = graphviz.Digraph()
+    graph.attr(rankdir="LR", bgcolor="transparent")
+    nodes = graph_data.get("nodes") or []
+    edges = graph_data.get("edges") or []
+    root_id = graph_data.get("root_id")
+
+    for node in nodes:
+        node_id = node.get("id")
+        if not node_id:
+            continue
+        if node.get("kind") == "stub":
+            label = "data unavailable"
+        else:
+            label_parts = [node.get("label") or "Untitled work"]
+            year = node.get("year")
+            if year:
+                label_parts.append(str(year))
+            label = "\n".join(label_parts)
+        if node.get("kind") == "stub":
+            graph.node(
+                node_id,
+                label,
+                style="dashed",
+                color="#999999",
+                fontcolor="#777777",
+            )
+        elif node_id == root_id:
+            graph.node(
+                node_id,
+                label,
+                style="filled",
+                fillcolor="#e6eefb",
+                color="#2f5d9f",
+            )
+        else:
+            graph.node(node_id, label, style="rounded", color="#4b4f5a")
+
+    for edge in edges:
+        source = edge.get("source")
+        target = edge.get("target")
+        if not source or not target:
+            continue
+        relation = edge.get("relation")
+        if relation == "cited_by":
+            graph.edge(source, target, color="#2f5d9f")
+        elif relation == "references":
+            graph.edge(source, target, color="#6b4e3d")
+        else:
+            graph.edge(source, target, color="#666666")
+
+    return graph
 
 
 # === UI Drawing ===
@@ -546,6 +648,230 @@ def draw_ingestion_panel():
             )
         else:
             st.info("No resolved references yet. Run resolution after extraction.")
+
+    st.divider()
+    st.subheader("Citation Context")
+
+    citations = extraction_data.get("citations") or []
+    if not citations:
+        st.info("No citations extracted yet.")
+        return
+
+    def select_citation(index: int, target_id: str | None) -> None:
+        st.session_state["citation_selected_index"] = index
+        st.session_state["citation_selected_target"] = target_id
+        st.session_state["citation_context_key"] = None
+        st.session_state["citation_context"] = None
+        st.session_state["citation_context_error"] = None
+        st.session_state["citation_last_context_request"] = None
+        st.session_state["citation_follow_open"] = False
+        st.session_state["citation_graph_key"] = None
+        st.session_state["citation_graph"] = None
+        st.session_state["citation_graph_error"] = None
+        st.session_state["citation_last_graph_request"] = None
+
+    def load_citation_context(request: dict) -> None:
+        st.session_state["citation_context_error"] = None
+        st.session_state["citation_context"] = None
+        st.session_state["citation_context_key"] = (
+            request["doc_id"],
+            request["citation_index"],
+            request.get("target_id"),
+        )
+        st.session_state["citation_last_context_request"] = request
+        placeholder = st.empty()
+        with placeholder:
+            render_skeleton(3)
+        try:
+            response = get_citation_context(
+                request["api_url"],
+                request["doc_id"],
+                request["citation_index"],
+                target_id=request.get("target_id"),
+            )
+        except RuntimeError as exc:
+            st.session_state["citation_context_error"] = str(exc)
+            show_api_error(f"Failed to load citation context: {exc}")
+            placeholder.empty()
+            return
+        placeholder.empty()
+        st.session_state["citation_context"] = response.get("context")
+
+    def load_citation_graph(request: dict) -> None:
+        st.session_state["citation_graph_error"] = None
+        st.session_state["citation_graph"] = None
+        st.session_state["citation_graph_key"] = (
+            request["doc_id"],
+            request["target_id"],
+            request["depth"],
+            request["max_nodes"],
+        )
+        st.session_state["citation_last_graph_request"] = request
+        placeholder = st.empty()
+        with placeholder:
+            render_skeleton(4)
+        try:
+            response = get_citation_graph(
+                request["api_url"],
+                request["doc_id"],
+                request["target_id"],
+                request["depth"],
+                request["max_nodes"],
+            )
+        except RuntimeError as exc:
+            st.session_state["citation_graph_error"] = str(exc)
+            show_api_error(f"Failed to load citation graph: {exc}")
+            placeholder.empty()
+            return
+        placeholder.empty()
+        st.session_state["citation_graph"] = response
+
+    left_col, right_col = st.columns([2, 3])
+
+    with left_col:
+        st.markdown("#### Callouts")
+        grouped: dict[str, list[tuple[int, dict]]] = {}
+        for idx, citation in enumerate(citations):
+            sentence = (citation.get("sentence") or "Sentence unavailable").strip()
+            grouped.setdefault(sentence, []).append((idx, citation))
+
+        for sentence, items in grouped.items():
+            st.markdown(sentence or "Sentence unavailable")
+            max_per_row = 4
+            for offset in range(0, len(items), max_per_row):
+                row_items = items[offset : offset + max_per_row]
+                cols = st.columns(len(row_items))
+                for col, (citation_index, citation) in zip(cols, row_items):
+                    callout = citation.get("callout") or "citation"
+                    target_id = citation.get("target_id")
+                    selected = (
+                        st.session_state.get("citation_selected_index")
+                        == citation_index
+                        and st.session_state.get("citation_selected_target")
+                        == target_id
+                    )
+                    label = f"{callout} ✓" if selected else callout
+                    if col.button(label, key=f"citation-callout-{citation_index}"):
+                        select_citation(citation_index, target_id)
+
+    with right_col:
+        st.markdown("#### Context")
+        selected_index = st.session_state.get("citation_selected_index")
+        selected_target = st.session_state.get("citation_selected_target")
+        if selected_index is None:
+            st.info("Select a citation callout to view its context.")
+        else:
+            context_request = {
+                "api_url": st.session_state.get("api_url", "http://localhost:8000"),
+                "doc_id": doc_id,
+                "citation_index": selected_index,
+                "target_id": selected_target,
+            }
+            current_key = (
+                context_request["doc_id"],
+                context_request["citation_index"],
+                context_request.get("target_id"),
+            )
+            if st.session_state.get("citation_context_key") != current_key:
+                load_citation_context(context_request)
+
+            context = st.session_state.get("citation_context")
+            if context:
+                st.markdown(
+                    highlight_callout(context.get("previous_sentence"), None),
+                    unsafe_allow_html=True,
+                )
+                st.markdown(
+                    highlight_callout(context.get("sentence"), context.get("callout")),
+                    unsafe_allow_html=True,
+                )
+                st.markdown(
+                    highlight_callout(context.get("next_sentence"), None),
+                    unsafe_allow_html=True,
+                )
+                follow_label = (
+                    "Hide citation details"
+                    if st.session_state.get("citation_follow_open")
+                    else "Follow citation"
+                )
+                if st.button(follow_label, key="citation-follow-toggle"):
+                    st.session_state["citation_follow_open"] = not st.session_state.get(
+                        "citation_follow_open", False
+                    )
+                if st.session_state.get("citation_follow_open"):
+                    reference = context.get("reference")
+                    resolution = context.get("resolution")
+                    if not reference and not resolution:
+                        st.info("Citation metadata unavailable.")
+                    if reference:
+                        st.markdown("**Bibliography entry**")
+                        st.json(reference)
+                    else:
+                        st.caption("Bibliography entry unavailable.")
+                    if resolution:
+                        st.markdown("**Resolved metadata**")
+                        st.json(resolution)
+                    else:
+                        st.caption("Resolved metadata unavailable.")
+            else:
+                st.info("Context unavailable.")
+                if st.session_state.get("citation_context_error"):
+                    if st.button("Retry context", key="citation-context-retry"):
+                        last_request = st.session_state.get(
+                            "citation_last_context_request"
+                        )
+                        if last_request:
+                            load_citation_context(last_request)
+
+        st.divider()
+        st.markdown("#### Citation Graph")
+        if selected_target is None:
+            st.info("Select a citation with a target ID to view the graph.")
+        else:
+            st.slider(
+                "Depth",
+                min_value=1,
+                max_value=3,
+                key="citation_graph_depth",
+            )
+            st.number_input(
+                "Node cap",
+                min_value=5,
+                max_value=50,
+                key="citation_graph_max_nodes",
+            )
+            graph_request = {
+                "api_url": st.session_state.get("api_url", "http://localhost:8000"),
+                "doc_id": doc_id,
+                "target_id": selected_target,
+                "depth": int(st.session_state.get("citation_graph_depth", 1)),
+                "max_nodes": int(st.session_state.get("citation_graph_max_nodes", 10)),
+            }
+            if st.button("Load citation graph", key="citation-graph-load"):
+                load_citation_graph(graph_request)
+            graph_key = (
+                graph_request["doc_id"],
+                graph_request["target_id"],
+                graph_request["depth"],
+                graph_request["max_nodes"],
+            )
+            graph_data = None
+            if st.session_state.get("citation_graph_key") == graph_key:
+                graph_data = st.session_state.get("citation_graph")
+            if graph_data:
+                nodes = graph_data.get("nodes") or []
+                if not nodes:
+                    st.info("No data available for this citation graph.")
+                else:
+                    graph = build_citation_graphviz(graph_data)
+                    st.graphviz_chart(graph)
+            else:
+                st.caption("Load the citation graph to explore references.")
+            if st.session_state.get("citation_graph_error"):
+                if st.button("Retry graph", key="citation-graph-retry"):
+                    last_request = st.session_state.get("citation_last_graph_request")
+                    if last_request:
+                        load_citation_graph(last_request)
 
 
 def draw_main():

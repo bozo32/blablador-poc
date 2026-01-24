@@ -240,12 +240,37 @@ def get_citation_graph(
         raise HTTPException(status_code=404, detail="Document not found")
 
     try:
-        graph = citation_graph.build_local_citation_graph(
-            document,
-            target_id,
-            depth=depth,
-            max_nodes=max_nodes,
-        )
+        resolved_identifier = doi
+        if not resolved_identifier and target_id:
+            resolution_data = (document.get("resolution") or {}).get("data") or []
+            resolution_entry = next(
+                (
+                    ref
+                    for ref in resolution_data
+                    if ref.get("reference_id") == target_id
+                ),
+                None,
+            )
+            if resolution_entry:
+                resolved_identifier = (
+                    resolution_entry.get("openalex_id")
+                    or resolution_entry.get("openalex_work_id")
+                    or resolution_entry.get("doi")
+                )
+
+        if resolved_identifier:
+            graph = citation_graph.build_citation_graph(
+                resolved_identifier,
+                depth=depth,
+                max_nodes=max_nodes,
+            )
+        else:
+            graph = citation_graph.build_local_citation_graph(
+                document,
+                target_id,
+                depth=depth,
+                max_nodes=max_nodes,
+            )
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
 

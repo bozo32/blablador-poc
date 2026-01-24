@@ -241,12 +241,12 @@ def _select_default_source(
     openalex: Optional[Dict[str, Any]],
     grobid: Optional[Dict[str, Any]],
 ) -> Optional[str]:
+    if grobid:
+        return "grobid"
     if crossref:
         return "crossref"
     if openalex:
         return "openalex"
-    if grobid:
-        return "grobid"
     return None
 
 

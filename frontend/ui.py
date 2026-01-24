@@ -1178,6 +1178,11 @@ def draw_ingestion_panel():
                                 st.warning(
                                     "Consolidated metadata missing for this reference."
                                 )
+                            if resolution.get("openalex"):
+                                st.caption(
+                                    "OpenAlex may resolve to the citing article; "
+                                    "review before selecting."
+                                )
                             candidate_options = build_resolution_candidates(resolution)
                             if reference_id and candidate_options:
                                 option_keys = list(candidate_options.keys())

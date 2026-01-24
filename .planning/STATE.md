@@ -42,6 +42,7 @@ Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
 - Use local citation graph data when DOI resolution is unavailable to avoid OpenAlex 404s (02-02).
+- Prefer GROBID consolidation when resolver sources disagree; warn that OpenAlex may return citing articles (02-06).
 
 ### Pending Todos
 
@@ -49,9 +50,8 @@ None yet.
 
 ### Blockers/Concerns
 
-- OpenAlex API key not yet configured (see 02-USER-SETUP.md).
+- OpenAlex resolution can return citing articles; consolidation remains inconsistent for some references.
 - Non-DOI link formatting in callout metadata remains messy.
-- Manual verification pending for mismatch review UI.
 
 ## Session Continuity
 

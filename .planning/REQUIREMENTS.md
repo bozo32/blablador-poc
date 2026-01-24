@@ -17,9 +17,9 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Citation Navigation + Context
 
-- [ ] **NAV-01**: User can view citation context (sentence/section) for a selected callout
-- [ ] **NAV-02**: User can follow a citation to load cited context into the validation pane
-- [ ] **NAV-03**: User can browse a citation tree of referenced and cited-by works when available
+- [x] **NAV-01**: User can view citation context (sentence/section) for a selected callout
+- [x] **NAV-02**: User can follow a citation to load cited context into the validation pane
+- [x] **NAV-03**: User can browse a citation tree of referenced and cited-by works when available
 
 ### Claim + Evidence
 
@@ -86,9 +86,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ING-03 | Phase 1 | Complete |
 | ING-04 | Phase 1 | Complete |
 | ING-05 | Phase 1 | Complete |
-| NAV-01 | Phase 2 | Pending |
-| NAV-02 | Phase 2 | Pending |
-| NAV-03 | Phase 2 | Pending |
+| NAV-01 | Phase 2 | Complete |
+| NAV-02 | Phase 2 | Complete |
+| NAV-03 | Phase 2 | Complete |
 | CLM-01 | Phase 3 | Pending |
 | CLM-02 | Phase 3 | Pending |
 | EVD-01 | Phase 4 | Pending |

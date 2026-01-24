@@ -36,6 +36,61 @@ def _extract_year(value: Optional[str]) -> Optional[str]:
     return match.group(0) if match else None
 
 
+def _parse_reference_authors(entry: etree._Element) -> List[str]:
+    authors: List[str] = []
+    for author in entry.xpath(".//tei:author", namespaces=NS):
+        forename = _first_text(author, ".//tei:forename")
+        surname = _first_text(author, ".//tei:surname")
+        name_parts = [part for part in (forename, surname) if part]
+        name = " ".join(name_parts) if name_parts else _text_content(author)
+        if name:
+            authors.append(name)
+    return authors
+
+
+def _parse_reference_title(entry: etree._Element) -> Optional[str]:
+    return _first_text(entry, ".//tei:analytic//tei:title") or _first_text(
+        entry, ".//tei:monogr//tei:title"
+    )
+
+
+def _parse_reference_container(
+    entry: etree._Element,
+) -> tuple[Optional[str], Optional[str]]:
+    journal = _first_text(entry, ".//tei:monogr//tei:title[@level='j']")
+    container = _first_text(
+        entry, ".//tei:monogr//tei:title[@level='m']"
+    ) or _first_text(entry, ".//tei:monogr//tei:title")
+    return journal, container
+
+
+def _parse_reference_year(entry: etree._Element) -> Optional[str]:
+    date_value = _first_text(entry, ".//tei:imprint//tei:date/@when") or _first_text(
+        entry, ".//tei:imprint//tei:date"
+    )
+    return _extract_year(date_value)
+
+
+def _parse_grobid_reference(entry: etree._Element) -> Dict[str, Any]:
+    title = _parse_reference_title(entry)
+    authors = _parse_reference_authors(entry)
+    journal, container = _parse_reference_container(entry)
+    year = _parse_reference_year(entry)
+    doi = _first_text(entry, ".//tei:idno[@type='DOI']")
+    url = _first_text(entry, ".//tei:idno[@type='URL']")
+    if url is None:
+        url = _first_text(entry, ".//tei:ptr/@target")
+    return {
+        "title": title,
+        "authors": authors,
+        "year": year,
+        "journal": journal,
+        "container": container,
+        "doi": doi,
+        "url": url,
+    }
+
+
 def parse_metadata(tei_root: etree._Element) -> Dict[str, Any]:
     title = _first_text(
         tei_root,
@@ -125,12 +180,14 @@ def parse_bibliography(tei_root: etree._Element) -> List[Dict[str, Any]]:
         url = _first_text(entry, ".//tei:idno[@type='URL']")
         if url is None:
             url = _first_text(entry, ".//tei:ptr/@target")
+        grobid = _parse_grobid_reference(entry)
         entries.append(
             {
                 "id": entry_id,
                 "raw_reference": raw_reference,
                 "doi": doi,
                 "url": url,
+                "grobid": grobid,
             }
         )
     return entries

@@ -23,6 +23,10 @@ def extract_tei(pdf_path: Union[str, Path]) -> str:
         response = requests.post(
             url,
             files=files,
+            data={
+                "consolidateCitations": "1",
+                "consolidateHeader": "1",
+            },
             timeout=settings.GROBID_TIMEOUT,
         )
 

@@ -419,6 +419,13 @@ def normalize_callout_text(callout: str) -> str:
     return text
 
 
+def normalize_target_id(target_id: str | None) -> str | None:
+    if not target_id:
+        return None
+    normalized = str(target_id).strip()
+    return normalized or None
+
+
 def split_callout_suffix(callout: str) -> tuple[str, str]:
     raw = (callout or "").strip()
     if not raw:
@@ -868,8 +875,9 @@ def draw_ingestion_panel():
         return
 
     def select_citation(index: int, target_id: str | None) -> None:
+        normalized_target = normalize_target_id(target_id)
         st.session_state["citation_selected_index"] = index
-        st.session_state["citation_selected_target"] = target_id
+        st.session_state["citation_selected_target"] = normalized_target
         st.session_state["citation_context_key"] = None
         st.session_state["citation_context"] = None
         st.session_state["citation_context_error"] = None
@@ -986,7 +994,7 @@ def draw_ingestion_panel():
                 for col, (citation_index, citation) in zip(cols, row_items):
                     callout = citation.get("callout") or "citation"
                     display_callout = format_callout(callout)["display"]
-                    target_id = citation.get("target_id")
+                    target_id = normalize_target_id(citation.get("target_id"))
                     selected = (
                         st.session_state.get("citation_selected_index")
                         == citation_index
@@ -1005,7 +1013,9 @@ def draw_ingestion_panel():
     with right_col:
         st.markdown("#### Context")
         selected_index = st.session_state.get("citation_selected_index")
-        selected_target = st.session_state.get("citation_selected_target")
+        selected_target = normalize_target_id(
+            st.session_state.get("citation_selected_target")
+        )
         if selected_index is None:
             st.info("Select a citation callout to view its context.")
         else:

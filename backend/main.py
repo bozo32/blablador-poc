@@ -239,28 +239,10 @@ def get_citation_graph(
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    doi_value = doi
-    if doi_value is None and target_id:
-        resolution_data = (document.get("resolution") or {}).get("data") or []
-        for entry in resolution_data:
-            if entry.get("reference_id") == target_id and entry.get("doi"):
-                doi_value = entry.get("doi")
-                break
-
-    if doi_value is None and target_id:
-        extraction_data = (document.get("extraction") or {}).get("data") or {}
-        references = extraction_data.get("references") or []
-        for entry in references:
-            if entry.get("id") == target_id and entry.get("doi"):
-                doi_value = entry.get("doi")
-                break
-
-    if not doi_value:
-        raise HTTPException(status_code=404, detail="DOI not found for citation")
-
     try:
-        graph = citation_graph.build_citation_graph(
-            doi_value,
+        graph = citation_graph.build_local_citation_graph(
+            document,
+            target_id,
             depth=depth,
             max_nodes=max_nodes,
         )

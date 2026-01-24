@@ -13,6 +13,8 @@ import pandas as pd
 import requests
 import streamlit as st
 
+st.set_page_config(page_title="Citation-Support Checker", layout="wide")
+
 # Add project root to sys.path so `backend` is importable
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -79,6 +81,9 @@ def init_session_state():
         "citation_last_graph_request": None,
         "citation_graph_depth": 1,
         "citation_graph_max_nodes": 10,
+        "auto_extract_on_upload": True,
+        "auto_resolve_on_upload": True,
+        "citation_debug": False,
     }
     for key, val in defaults.items():
         st.session_state.setdefault(key, val)
@@ -298,6 +303,27 @@ def handle_pdf_upload():
             st.session_state["selected_doc_id"] = last_doc["id"]
             st.session_state["active_document"] = last_doc
         st.success(f"Uploaded {len(uploaded)} PDF(s).")
+        doc_id = last_doc.get("id")
+        if doc_id and st.session_state.get("auto_extract_on_upload"):
+            with st.spinner("Running extraction..."):
+                try:
+                    trigger_extraction(api_url, doc_id)
+                    document = load_selected_document(show_error=False)
+                    st.session_state["active_document"] = document
+                    st.success("Extraction complete.")
+                except RuntimeError as exc:
+                    st.error(f"Extraction failed: {exc}")
+                    return
+        if doc_id and st.session_state.get("auto_resolve_on_upload"):
+            with st.spinner("Resolving references..."):
+                try:
+                    trigger_resolution(api_url, doc_id)
+                    document = load_selected_document(show_error=False)
+                    st.session_state["active_document"] = document
+                    st.success("Resolution complete.")
+                except RuntimeError as exc:
+                    st.error(f"Resolution failed: {exc}")
+                    return
 
 
 def stringify_value(value: object) -> str | int | float | bool | None:
@@ -342,6 +368,175 @@ def highlight_callout(text: str | None, callout: str | None) -> str:
         text,
         count=1,
     )
+
+
+def inject_citation_styles() -> None:
+    if st.session_state.get("citation_styles_loaded"):
+        return
+    st.markdown(
+        """
+        <style>
+        .citation-sentence {
+            font-size: 0.96rem;
+            line-height: 1.6;
+            color: #1f2933;
+        }
+        .citation-chip {
+            display: inline-block;
+            padding: 2px 6px;
+            margin: 0 2px;
+            border-radius: 10px;
+            background: #eef3ff;
+            color: #1f3a8a;
+            border: 1px solid #c9d8ff;
+            font-weight: 600;
+            font-size: 0.82rem;
+            text-decoration: none;
+        }
+        .citation-chip:hover {
+            background: #dce7ff;
+        }
+        .citation-divider {
+            height: 1px;
+            background: #e6e6e6;
+            margin: 12px 0 16px;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.session_state["citation_styles_loaded"] = True
+
+
+def normalize_callout_text(callout: str) -> str:
+    text = (callout or "").strip()
+    if not text:
+        return ""
+    text = text.strip("()[]")
+    text = re.sub(r"\s*(,|;)?\s*(and|&)\s*$", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s*(,|;)?\s*$", "", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def split_callout_suffix(callout: str) -> tuple[str, str]:
+    raw = (callout or "").strip()
+    if not raw:
+        return "", ""
+    suffix = ""
+    match = re.search(r"\s*(and|&)\s*$", raw, flags=re.IGNORECASE)
+    if match:
+        suffix = " and"
+        raw = raw[: match.start()].strip()
+    if raw.endswith(")") or raw.endswith("]"):
+        suffix = raw[-1] + suffix
+        raw = raw[:-1].rstrip()
+    return raw, suffix
+
+
+def format_callout(callout: str) -> dict:
+    raw = (callout or "citation").strip()
+    base_text, suffix = split_callout_suffix(raw)
+    match_text = normalize_callout_text(base_text) or base_text or raw
+    tokens = re.findall(r"\d+[a-zA-Z]?", match_text)
+    has_letters = bool(re.search(r"[A-Za-z]", match_text))
+    if has_letters:
+        display = match_text
+    elif tokens:
+        display = f"({', '.join(tokens)})"
+    else:
+        display = match_text
+    return {
+        "raw": raw,
+        "display": display,
+        "tokens": tokens,
+        "match": match_text,
+        "suffix": suffix,
+    }
+
+
+def render_sentence_with_callouts(
+    sentence: str, callouts: list[dict]
+) -> tuple[str, list[dict]]:
+    rendered = sentence
+    unmatched = []
+    for callout in sorted(
+        callouts, key=lambda item: len(item.get("raw", "")), reverse=True
+    ):
+        raw = callout.get("raw") or ""
+        display = callout.get("display") or "citation"
+        match_text = callout.get("match") or raw
+        tokens = callout.get("tokens") or []
+        suffix = callout.get("suffix") or ""
+        if not match_text:
+            continue
+        chip = f'<span class="citation-chip">{display}</span>{suffix}'
+
+        tokens_lower = [token.lower() for token in tokens]
+        if tokens_lower:
+            for bracket_match in re.finditer(r"[\[(][^\])]+[\])]", rendered):
+                segment = bracket_match.group(0)
+                segment_tokens = [
+                    token.lower() for token in re.findall(r"\d+[a-zA-Z]?", segment)
+                ]
+                if segment_tokens and all(
+                    token in segment_tokens for token in tokens_lower
+                ):
+                    start, end = bracket_match.span()
+                    rendered = f"{rendered[:start]}{chip}{rendered[end:]}"
+                    break
+            else:
+                segment = None
+        else:
+            segment = None
+
+        if tokens_lower and segment is not None:
+            continue
+        if tokens:
+            joined = r"\s*,\s*".join(re.escape(token) for token in tokens)
+            pattern = re.compile(rf"[\[(]?\s*{joined}\s*[\])]?")
+        else:
+            normalized = re.sub(r"\s+", " ", match_text)
+            escaped = re.escape(normalized).replace(r"\ ", r"\\s*")
+            pattern = re.compile(escaped)
+
+        if pattern.search(rendered):
+            rendered = pattern.sub(chip, rendered, count=1)
+            continue
+
+        matches = list(re.finditer(r"\d+[a-zA-Z]?", rendered))
+        if tokens_lower and matches:
+            match_tokens = [m.group(0).lower() for m in matches]
+            for idx in range(len(match_tokens) - len(tokens_lower) + 1):
+                if match_tokens[idx : idx + len(tokens_lower)] == tokens_lower:
+                    start = matches[idx].start()
+                    end = matches[idx + len(tokens_lower) - 1].end()
+                    rendered = f"{rendered[:start]}{chip}{rendered[end:]}"
+                    break
+            else:
+                unmatched.append(callout)
+        else:
+            unmatched.append(callout)
+    return rendered, unmatched
+
+
+def format_reference_summary(reference: dict, resolution: dict) -> str:
+    title = (resolution or {}).get("title") or (reference or {}).get("raw_reference")
+    year = (resolution or {}).get("year")
+    doi = (resolution or {}).get("doi") or (reference or {}).get("doi")
+    parts = []
+    if title:
+        parts.append(title)
+    if year:
+        parts.append(f"({year})")
+    summary = " ".join(parts).strip()
+    if doi:
+        summary = (
+            f"{summary} DOI: https://doi.org/{doi}"
+            if summary
+            else f"DOI: https://doi.org/{doi}"
+        )
+    return summary
 
 
 def build_citation_graphviz(graph_data: dict) -> graphviz.Digraph:
@@ -435,6 +630,21 @@ def draw_sidebar():
         )
         st.session_state["pipeline_mode"] = mode
         st.header("PDF Ingestion")
+        st.checkbox(
+            "Auto-run extraction",
+            key="auto_extract_on_upload",
+            help="Run extraction immediately after upload.",
+        )
+        st.checkbox(
+            "Auto-run reference resolution",
+            key="auto_resolve_on_upload",
+            help="Resolve references after extraction completes.",
+        )
+        st.checkbox(
+            "Debug callouts",
+            key="citation_debug",
+            help="Show raw sentence + callout strings for troubleshooting.",
+        )
         st.file_uploader(
             "PDF files",
             type=["pdf"],
@@ -726,23 +936,54 @@ def draw_ingestion_panel():
         placeholder.empty()
         st.session_state["citation_graph"] = response
 
-    left_col, right_col = st.columns([2, 3])
+    inject_citation_styles()
+    left_col, right_col = st.columns([5, 7])
 
     with left_col:
         st.markdown("#### Callouts")
+        st.caption("Click the badges below each sentence to open context.")
         grouped: dict[str, list[tuple[int, dict]]] = {}
         for idx, citation in enumerate(citations):
             sentence = (citation.get("sentence") or "Sentence unavailable").strip()
             grouped.setdefault(sentence, []).append((idx, citation))
 
         for sentence, items in grouped.items():
-            st.markdown(sentence or "Sentence unavailable")
+            callouts = [
+                format_callout(item[1].get("callout") or "citation") for item in items
+            ]
+            rendered_sentence, unmatched = render_sentence_with_callouts(
+                sentence, callouts
+            )
+            st.markdown(
+                f'<div class="citation-sentence">{rendered_sentence}</div>',
+                unsafe_allow_html=True,
+            )
+            if st.session_state.get("citation_debug"):
+                debug_rows = [
+                    {
+                        "callout": item[1].get("callout"),
+                        "target_id": item[1].get("target_id"),
+                    }
+                    for item in items
+                ]
+                st.caption(f"Raw sentence: {sentence}")
+                st.json(debug_rows)
+            if unmatched:
+                overflow = " ".join(
+                    f'<span class="citation-chip">{item.get("display")}</span>'
+                    for item in unmatched
+                )
+                st.markdown(
+                    f'<div style="margin-top:6px;">{overflow}</div>',
+                    unsafe_allow_html=True,
+                )
             max_per_row = 4
             for offset in range(0, len(items), max_per_row):
                 row_items = items[offset : offset + max_per_row]
                 cols = st.columns(len(row_items))
                 for col, (citation_index, citation) in zip(cols, row_items):
                     callout = citation.get("callout") or "citation"
+                    display_callout = format_callout(callout)["display"]
                     target_id = citation.get("target_id")
                     selected = (
                         st.session_state.get("citation_selected_index")
@@ -750,9 +991,14 @@ def draw_ingestion_panel():
                         and st.session_state.get("citation_selected_target")
                         == target_id
                     )
-                    label = f"{callout} ✓" if selected else callout
-                    if col.button(label, key=f"citation-callout-{citation_index}"):
+                    label = f"{display_callout} ✓" if selected else display_callout
+                    if col.button(
+                        label,
+                        key=f"citation-callout-{citation_index}",
+                        type="secondary",
+                    ):
                         select_citation(citation_index, target_id)
+            st.markdown('<div class="citation-divider"></div>', unsafe_allow_html=True)
 
     with right_col:
         st.markdown("#### Context")
@@ -803,18 +1049,40 @@ def draw_ingestion_panel():
                     resolution = context.get("resolution")
                     if not reference and not resolution:
                         st.info("Citation metadata unavailable.")
-                    if reference:
-                        st.markdown("**Bibliography entry**")
-                        st.json(reference)
+                    summary = format_reference_summary(
+                        reference or {}, resolution or {}
+                    )
+                    if summary:
+                        st.markdown("**Reference summary**")
+                        st.markdown(summary)
                     else:
-                        st.caption("Bibliography entry unavailable.")
-                    if resolution:
-                        st.markdown("**Resolved metadata**")
-                        st.json(resolution)
-                    else:
-                        st.caption("Resolved metadata unavailable.")
+                        st.caption("Reference summary unavailable.")
+                    if not resolution:
+                        st.caption("Resolution missing — run Resolve References.")
+                    with st.expander("Show raw metadata"):
+                        if reference:
+                            st.markdown("**Bibliography entry**")
+                            st.json(reference)
+                        else:
+                            st.caption("Bibliography entry unavailable.")
+                        if resolution:
+                            st.markdown("**Resolved metadata**")
+                            st.json(resolution)
+                        else:
+                            st.caption("Resolved metadata unavailable.")
             else:
-                st.info("Context unavailable.")
+                st.info("Context unavailable yet. Try running extraction/resolution.")
+                fallback = None
+                if selected_index is not None and 0 <= selected_index < len(citations):
+                    fallback = citations[selected_index]
+                if fallback:
+                    fallback_sentence = fallback.get("sentence") or ""
+                    callout = fallback.get("callout")
+                    callouts = [format_callout(callout)] if callout else []
+                    rendered, _ = render_sentence_with_callouts(
+                        fallback_sentence, callouts
+                    )
+                    st.markdown(rendered, unsafe_allow_html=True)
                 if st.session_state.get("citation_context_error"):
                     if st.button("Retry context", key="citation-context-retry"):
                         last_request = st.session_state.get(
@@ -828,6 +1096,16 @@ def draw_ingestion_panel():
         if selected_target is None:
             st.info("Select a citation with a target ID to view the graph.")
         else:
+            context_snapshot = st.session_state.get("citation_context") or {}
+            resolution_entry = context_snapshot.get("resolution") or {}
+            reference_entry = context_snapshot.get("reference") or {}
+            resolved_doi = resolution_entry.get("doi") or reference_entry.get("doi")
+            if resolved_doi:
+                st.caption(f"Resolved DOI: {resolved_doi}")
+            else:
+                st.caption("No DOI resolved for this citation yet.")
+            if selected_target:
+                st.caption(f"Target ID: {selected_target}")
             st.slider(
                 "Depth",
                 min_value=1,
@@ -868,6 +1146,13 @@ def draw_ingestion_panel():
             else:
                 st.caption("Load the citation graph to explore references.")
             if st.session_state.get("citation_graph_error"):
+                error_message = st.session_state.get("citation_graph_error", "")
+                if "OpenAlex request failed (404)" in error_message:
+                    st.caption(
+                        "OpenAlex could not find this work. "
+                        "Check that reference resolution populated a DOI "
+                        "or OpenAlex ID."
+                    )
                 if st.button("Retry graph", key="citation-graph-retry"):
                     last_request = st.session_state.get("citation_last_graph_request")
                     if last_request:

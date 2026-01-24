@@ -5,7 +5,7 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import List, Literal, Optional, Tuple  # new import
+from typing import List, Literal, Optional, Tuple, Union  # new import
 
 import pandas as pd
 from sentence_transformers import CrossEncoder, SentenceTransformer
@@ -19,9 +19,9 @@ import hashlib
 
 # testing for parallelism support
 def set_sane_threads():
-    """Sets a sane number of threads for heavy compute libraries.
+    """Set a sane number of threads for heavy compute libraries.
 
-    Uses number of physical cores if possible.
+    Use number of physical cores if possible.
     """
     import os
 
@@ -52,11 +52,10 @@ def clean_text(text: str) -> str:
     return text.strip()
 
 
-def read_csv(path: Path | str) -> pd.DataFrame:
-    """Read a CSV file into a pandas DataFrame, ensuring correct path
-    resolution.
+def read_csv(path: Union[Path, str]) -> pd.DataFrame:
+    """Read a CSV file into a pandas DataFrame.
 
-    Handles edge cases like globally quoted files and nested quoting.
+    Ensure correct path resolution and handle nested quoting.
     """
     import csv
 
@@ -113,8 +112,10 @@ _loaded_models: dict[str, SentenceTransformer] = {}
 
 
 def get_model(model_name: str) -> SentenceTransformer:
-    """Load a SentenceTransformer from local cache if present; otherwise,
-    download to MODEL_CACHE_DIR."""
+    """Load a SentenceTransformer from local cache if present.
+
+    Download to MODEL_CACHE_DIR when missing.
+    """
     if model_name in _loaded_models:
         return _loaded_models[model_name]
     try:
@@ -197,7 +198,9 @@ def pick_best_passage(
                 logging.error(f"Parsed JSON missing expected types: {candidate}")
         except Exception as e:
             logging.error(
-                f"Failed to json.loads() in pick_best_passage: {e}\nCandidate: {candidate}"
+                "Failed to json.loads() in pick_best_passage: %s\nCandidate: %s",
+                e,
+                candidate,
             )
 
     else:
@@ -209,23 +212,27 @@ def pick_best_passage(
     )
     return 0, "no rationale"
 
-def make_retriever_key(row_id: str, segment_id: str | None = None) -> str:
-    """
-    Always returns row_id::segment_id if segment_id given,
-    otherwise just row_id.
+
+def make_retriever_key(row_id: str, segment_id: Optional[str] = None) -> str:
+    """Build a stable retriever key.
+
+    Return row_id::segment_id when segment_id is provided; otherwise row_id.
     """
     return f"{row_id}::{segment_id}" if segment_id else row_id
+
 
 @lru_cache(maxsize=4)  # adjust as needed
 def get_cross_encoder(model_name: str) -> CrossEncoder:
     return CrossEncoder(model_name)
 
+
 def rerank(
     query: str, candidates: list[dict], model_name: str, top_k: int
 ) -> list[dict]:
-    """
-    candidates: list of dicts with keys 'text' plus any metadata.
-    Returns the same dicts with an added 'rerank_score', sorted and sliced to top_k.
+    """Rerank candidates with a cross-encoder.
+
+    Candidates are dicts with keys 'text' plus metadata. Returns entries with
+    'rerank_score', sorted and sliced to top_k.
     """
     model = get_cross_encoder(model_name)
     pairs = [(query, c["text"]) for c in candidates]
@@ -235,6 +242,7 @@ def rerank(
     candidates.sort(key=lambda c: c["rerank_score"], reverse=True)
     return candidates[:top_k]
 
+
 def filter_and_snap(
     ids: list[str],
     scores: list[float],
@@ -242,10 +250,10 @@ def filter_and_snap(
     tau: float,
     cap: int,
 ) -> list[dict]:
-    """
-    1) Keep any hit with score ≥ tau·best, up to 'cap' items.
-    2) Snap each kept window to its parent3_id, dedupe, taking highest score.
-    Returns list of windows, each with added 'faiss_score'.
+    """Filter and snap FAISS windows.
+
+    Keep hits within tau of the best score and snap to parent3_id, keeping the
+    highest score. Returns windows with added faiss_score.
     """
     # 1. pair & sort
     hits = sorted(
@@ -275,11 +283,10 @@ def filter_and_snap(
     return out
 
 
-def sbert_rerank(
-    windows: list[dict], claim: str, model_name: str
-) -> list[dict]:
+def sbert_rerank(windows: list[dict], claim: str, model_name: str) -> list[dict]:
     """Attach '_sbert_score' to each window and return them sorted descending."""
     from sentence_transformers import SentenceTransformer, util
+
     model = SentenceTransformer(model_name)
     q_emb = model.encode([claim], convert_to_tensor=True)
     p_emb = model.encode([w["text"] for w in windows], convert_to_tensor=True)
@@ -289,12 +296,11 @@ def sbert_rerank(
     return sorted(windows, key=lambda w: w["_sbert_score"], reverse=True)
 
 
-def bm25_rerank(
-    windows: list[dict], claim: str
-) -> list[dict]:
+def bm25_rerank(windows: list[dict], claim: str) -> list[dict]:
     """Attach '_bm25_score' to each window and return them sorted descending."""
     from rank_bm25 import BM25Okapi
     import spacy
+
     nlp = spacy.blank("en")
     tok_corpus = [[tok.text for tok in nlp(w["text"])] for w in windows]
     bm = BM25Okapi(tok_corpus)
@@ -304,8 +310,8 @@ def bm25_rerank(
         w["_bm25_score"] = s
     return sorted(windows, key=lambda w: w["_bm25_score"], reverse=True)
 
-# ---- ColBERT wrappers ----------------------------------------------
 
+# ---- ColBERT wrappers ----------------------------------------------
 
 
 # --------------------------------------------------------------------
@@ -323,15 +329,13 @@ def _ensure_index(tsv_sha1: str, api_url: str, tsv_bytes: bytes) -> None:
     r.raise_for_status()
 
 
-def colbert_api_rerank(query: str,
-                       windows: list[dict],
-                       api_url: str,
-                       k: int = 20) -> list[dict]:
-
+def colbert_api_rerank(
+    query: str, windows: list[dict], api_url: str, k: int = 20
+) -> list[dict]:
     # 1) Build collection.tsv in-memory
     tsv_lines = []
     for i, w in enumerate(windows):
-        clean_text = w['text'].replace('\n', ' ')
+        clean_text = w["text"].replace("\n", " ")
         tsv_lines.append(f"{i}\t{clean_text}")
 
     # 2) POST /build  (cached on SHA‑1 of TSV)
@@ -340,10 +344,9 @@ def colbert_api_rerank(query: str,
     _ensure_index(sha1, api_url, tsv_bytes)
 
     # 3) /search
-    r = requests.post(f"{api_url}/search",
-                      json={"query": query, "k": k})
+    r = requests.post(f"{api_url}/search", json={"query": query, "k": k})
     r.raise_for_status()
-    hits = r.json()             # [{text, score, token_scores}, …]
+    hits = r.json()  # [{text, score, token_scores}, …]
 
     out = []
     for h in hits:

@@ -170,3 +170,74 @@ def build_citation_graph(
         "nodes": list(nodes.values()),
         "edges": edges,
     }
+
+
+def build_local_citation_graph(
+    document: Dict[str, Any],
+    target_id: Optional[str],
+    depth: int = 1,
+    max_nodes: int = 10,
+) -> Dict[str, Any]:
+    extraction = (document.get("extraction") or {}).get("data") or {}
+    references = extraction.get("references") or []
+    resolution = (document.get("resolution") or {}).get("data") or []
+    metadata = extraction.get("metadata") or {}
+
+    ref_lookup = {ref.get("id"): ref for ref in references if ref.get("id")}
+    res_lookup = {
+        ref.get("reference_id"): ref for ref in resolution if ref.get("reference_id")
+    }
+
+    nodes: Dict[str, Dict[str, Any]] = {}
+    edges: List[Dict[str, str]] = []
+
+    source_id = "source-document"
+    source_label = metadata.get("title") or "Current document"
+    source_year = metadata.get("year")
+    nodes[source_id] = {
+        "id": source_id,
+        "label": source_label,
+        "year": source_year,
+        "kind": "source",
+    }
+
+    def add_reference(ref_id: str) -> str:
+        reference = ref_lookup.get(ref_id) or {}
+        resolved = res_lookup.get(ref_id) or {}
+        label = (
+            resolved.get("title")
+            or reference.get("raw_reference")
+            or reference.get("url")
+            or "Untitled work"
+        )
+        year = resolved.get("year")
+        nodes[ref_id] = {
+            "id": ref_id,
+            "label": label,
+            "year": year,
+            "doi": resolved.get("doi") or reference.get("doi"),
+            "kind": "work",
+        }
+        return ref_id
+
+    if target_id:
+        root_id = add_reference(target_id)
+        edges.append({"source": source_id, "target": root_id, "relation": "references"})
+        _add_stub(nodes, edges, root_id, "references")
+        _add_stub(nodes, edges, root_id, "cited_by")
+    else:
+        root_id = source_id
+        for ref in references[:max_nodes]:
+            ref_id = ref.get("id")
+            if not ref_id:
+                continue
+            add_reference(ref_id)
+            edges.append(
+                {"source": source_id, "target": ref_id, "relation": "references"}
+            )
+
+    return {
+        "root_id": root_id,
+        "nodes": list(nodes.values()),
+        "edges": edges,
+    }

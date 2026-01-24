@@ -47,13 +47,14 @@ Plans:
   1. User can open citation context for a selected callout.
   2. User can follow a citation to load cited context into the validation pane.
   3. User can browse a citation tree of referenced and cited-by works when available.
-**Plans**: 5 plans
+**Plans**: 6 plans
 Plans:
 - [x] 02-01-PLAN.md — Backend citation context and graph endpoints
 - [x] 02-02-PLAN.md — Streamlit callout navigation and citation tree UI
 - [x] 02-03-PLAN.md — OpenAlex citation graph expansion wiring
 - [x] 02-04-PLAN.md — Callout context selection fixes
 - [x] 02-05-PLAN.md — GROBID consolidation + Crossref/OpenAlex mismatch resolution
+- [x] 02-06-PLAN.md — Mismatch UI bibliography context + consolidation flag
 
 ### Phase 3: Claim Selection + Editing
 **Goal**: Users can review and refine extracted claims from citing text.
@@ -121,7 +122,7 @@ Phases execute in numeric order: 2 → 2.1 → 2.2 → 3 → 3.1 → 4
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Ingestion + Extraction | 4/4 | Complete | 2026-01-23 |
-| 2. Citation Context Navigation | 5/5 | Complete | 2026-01-24 |
+| 2. Citation Context Navigation | 6/6 | Complete | 2026-01-24 |
 | 3. Claim Selection + Editing | 0/TBD | Not started | - |
 | 4. Evidence Attachment | 0/TBD | Not started | - |
 | 5. Evidence Matching + Ranking | 0/TBD | Not started | - |

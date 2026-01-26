@@ -47,6 +47,8 @@ from backend.ingestion_store import (
     store_resolution,
     update_ingested_document,
 )
+from backend.claim_store import claim_store
+from backend.reference_retrieval import build_retrieval_dossier
 
 # Configure logging (so that logger.debug/info/etc. actually prints)
 logging.basicConfig(
@@ -223,6 +225,17 @@ def select_resolution_source(
 
 
 @app.get(
+    "/references/{doc_id}/{reference_id}/retrieval",
+    response_model=schemas.ReferenceRetrievalResponse,
+)
+def get_reference_retrieval(doc_id: str, reference_id: str):
+    try:
+        return build_retrieval_dossier(doc_id, reference_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get(
     "/ingest/{doc_id}/citation-context",
     response_model=schemas.CitationContextResponse,
 )
@@ -322,6 +335,12 @@ def get_citation_graph(
         raise HTTPException(status_code=502, detail=str(exc))
 
     return {"document_id": doc_id, **graph}
+
+
+@app.post("/claims/confirm", response_model=schemas.ClaimConfirmationResponse)
+def confirm_claims(payload: schemas.ClaimConfirmationRequest):
+    inserted = claim_store.persist_confirmed_claims(payload)
+    return {"inserted": inserted}
 
 
 # ---------- /segment endpoint ----------

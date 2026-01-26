@@ -230,6 +230,51 @@ class CitationGraphResponse(BaseModel):
     edges: List[CitationGraphEdge]
 
 
+class ReferenceRetrievalSource(BaseModel):
+    label: str
+    title: Optional[str] = None
+    doi: Optional[str] = None
+    url: Optional[str] = None
+    confidence: Optional[float] = None
+    source: Optional[str] = None
+
+
+class ReferenceRetrievalResponse(BaseModel):
+    document_id: str
+    reference_id: str
+    canonical_citation: str
+    doi: Optional[str] = None
+    primary_url: Optional[str] = None
+    manual_instructions: Optional[str] = None
+    resolver_status: Optional[str] = None
+    resolver_confidence: Optional[float] = None
+    sources: List[ReferenceRetrievalSource] = Field(default_factory=list)
+
+
+class ConfirmedClaim(BaseModel):
+    claim_index: int
+    parsed_text: str
+    original_text: Optional[str] = None
+    confidence: Optional[float] = None
+
+
+class ClaimConfirmationRequest(BaseModel):
+    document_id: str
+    sentence_id: str
+    sentence_text: str
+    citation_index: int
+    target_id: Optional[str] = None
+    segmentation_model: Optional[str] = None
+    reviewer_uid: str
+    confirmed_claims: List[ConfirmedClaim] = Field(
+        ..., min_items=1, description="Confirmed claim segments for this sentence"
+    )
+
+
+class ClaimConfirmationResponse(BaseModel):
+    inserted: int
+
+
 class IngestedDocument(BaseModel):
     id: str
     filename: str

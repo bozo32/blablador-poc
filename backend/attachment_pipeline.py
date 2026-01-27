@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 from pathlib import Path
-from typing import Iterable, List
+from typing import Iterable, List, Optional
 from uuid import uuid4
 
 from lxml import etree
@@ -85,7 +85,9 @@ def _merge_embeddings(
     return merged
 
 
-def process_attachment(attachment_id: str, *, max_attempts: int | None = None) -> None:
+def process_attachment(
+    attachment_id: str, *, max_attempts: Optional[int] = None
+) -> None:
     record = attachment_store.get_attachment(attachment_id)
     if record is None:
         logger.warning("Attachment %s no longer exists", attachment_id)

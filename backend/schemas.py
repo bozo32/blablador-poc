@@ -1,4 +1,4 @@
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -323,7 +323,7 @@ class AttachmentStatus(BaseModel):
     attempts: Optional[int] = None
     max_attempts: Optional[int] = None
     retry_available: bool = True
-    artifacts: Optional[AttachmentArtifactPaths | dict] = None
+    artifacts: Optional[Union[AttachmentArtifactPaths, dict]] = None
 
 
 class AttachmentCreateRequest(BaseModel):

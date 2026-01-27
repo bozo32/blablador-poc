@@ -11,6 +11,7 @@ utils.set_sane_threads()
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -97,7 +98,7 @@ def _is_pdf_upload(file: UploadFile) -> bool:
     return filename.endswith(".pdf") and content_type == "application/pdf"
 
 
-def _serialize_attachment(record: dict | None) -> schemas.AttachmentStatus:
+def _serialize_attachment(record: Optional[dict]) -> schemas.AttachmentStatus:
     if record is None:
         raise HTTPException(status_code=404, detail="Attachment not found")
     return schemas.AttachmentStatus(**record)
@@ -242,7 +243,7 @@ def select_resolution_source(
 def create_claim_attachment(
     claim_id: str,
     payload: schemas.AttachmentCreateRequest,
-    background_tasks: BackgroundTasks | None = None,
+    background_tasks: Optional[BackgroundTasks] = None,
 ):
     try:
         record = attachment_store.create_attachment(
@@ -285,7 +286,7 @@ def get_attachment_status(attachment_id: str):
     "/attachments/{attachment_id}/retry", response_model=schemas.AttachmentResponse
 )
 def retry_attachment(
-    attachment_id: str, background_tasks: BackgroundTasks | None = None
+    attachment_id: str, background_tasks: Optional[BackgroundTasks] = None
 ):
     try:
         attachment_store.reset_for_retry(attachment_id)
@@ -317,7 +318,7 @@ def get_reference_retrieval(doc_id: str, reference_id: str):
 def get_citation_context(
     doc_id: str,
     citation_index: int = 0,
-    target_id: str | None = None,
+    target_id: Optional[str] = None,
 ):
     document = get_ingested_document(doc_id)
     if document is None:
@@ -365,8 +366,8 @@ def get_citation_context(
 )
 def get_citation_graph(
     doc_id: str,
-    target_id: str | None = None,
-    doi: str | None = None,
+    target_id: Optional[str] = None,
+    doi: Optional[str] = None,
     depth: int = 1,
     max_nodes: int = 10,
 ):

@@ -12,6 +12,7 @@ __pycache__/
 output.json
 tmp.*
 *.pdf
+!fixtures/*.pdf
 *.xml
 **/__pycache__/
 **/*.py[cod]

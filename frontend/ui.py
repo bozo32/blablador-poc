@@ -14,6 +14,11 @@ import pandas as pd
 import requests
 import streamlit as st
 
+try:  # Optional dependency for timed polling
+    from streamlit_autorefresh import st_autorefresh
+except ImportError:  # pragma: no cover - fallback when package missing
+    st_autorefresh = None
+
 st.set_page_config(page_title="Citation-Support Checker", layout="wide")
 
 # Add project root to sys.path so `backend`/`frontend` modules import cleanly
@@ -562,9 +567,7 @@ def prepare_attachment_workspace() -> None:
     claim_queue.sync_claims_from_results(st.session_state.get("results"))
     if not claim_queue.get_claim_records():
         claim_queue.ensure_demo_claims()
-    attachment_queue.advance_inflight_items()
-    attachment_queue.auto_match_queue_items()
-    attachment_queue.refresh_summary_counts()
+    attachment_queue.sync_backend_state()
     attachment_queue.ensure_open_when_activity()
     attachment_queue.collapse_when_idle()
 
@@ -573,6 +576,14 @@ def render_attachment_workspace() -> None:
     """Render claim drop zones, modal fallback, and queue panel."""
     inject_attachment_panel_styles()
     prepare_attachment_workspace()
+    if attachment_queue.has_inflight_jobs():
+        if st_autorefresh:
+            st_autorefresh(interval=5000, key="attachment-autopoll")
+        else:
+            st.caption(
+                "Attachments are processing in the background. "
+                "Use the queue panel to refresh statuses."
+            )
     st.subheader("Evidence attachments & queue")
     st.caption(
         "Drop cited PDFs onto claims, then monitor their status in the queue panel."
@@ -669,7 +680,7 @@ def render_claim_card(claim: dict, active_target: Optional[str]) -> None:
             attachment_queue.detach_attachment(claim_id, attached.get("id"))
     else:
         st.caption("No attachment assigned yet.")
-    timeline = claim_queue.get_timeline(claim_id)
+    timeline = (attached or {}).get("history") or claim_queue.get_timeline(claim_id)
     if timeline:
         with st.expander("Attachment timeline", expanded=False):
             for entry in timeline:
@@ -757,6 +768,11 @@ def render_attachment_queue_panel() -> None:
     snapshot = attachment_queue.get_queue_snapshot()
     summary_label = attachment_queue.summarize_chip_label()
     if not snapshot.get("panel_open"):
+        if attachment_queue.has_inflight_jobs():
+            st.info(
+                "Attachments are still processing in the background. "
+                "Open the queue to monitor progress."
+            )
         if st.button(
             summary_label,
             key="queue-summary-chip",
@@ -795,48 +811,22 @@ def render_queue_item(item: dict) -> None:
     st.caption(f"Source: {source_label} • Size: {size_label}")
     if claim:
         st.caption(f"Attached to: {claim.get('claim')}")
-    candidate_ids = item.get("ambiguous_matches") or [
-        record.get("id") for record in claim_queue.get_claim_records()
-    ]
-    manual_options = []
-    for candidate in candidate_ids:
-        record = claim_queue.get_claim_record(candidate)
-        if record:
-            manual_options.append((candidate, record.get("claim", candidate)))
-    if manual_options:
-        option_values = [cid for cid, _ in manual_options]
-        option_labels = {cid: label for cid, label in manual_options}
-        manual_label = (
-            "Resolve ambiguity" if item.get("ambiguous_matches") else "Assign to claim"
-        )
-        selection = st.selectbox(
-            manual_label,
-            option_values,
-            key=f"queue-assign-{item['id']}",
-            format_func=lambda cid: option_labels.get(cid, cid),
-        )
-        if st.button("Assign file", key=f"queue-assign-btn-{item['id']}"):
-            attachment_queue.attach_to_claim(selection, item["id"], via="manual")
-    action_cols = st.columns(3)
-    with action_cols[0]:
-        if st.button("Mark error", key=f"queue-error-{item['id']}"):
-            attachment_queue.mark_item_error(item["id"], "Manually flagged")
-    with action_cols[1]:
-        if item.get("claim_id") and st.button(
-            "Detach", key=f"queue-detach-{item['id']}"
-        ):
-            attachment_queue.detach_attachment(item["claim_id"], item["id"])
-    with action_cols[2]:
-        if st.button("Remove", key=f"queue-remove-{item['id']}"):
-            attachment_queue.remove_queue_item(item["id"])
+    if status == "error":
+        if st.button("Retry parse", key=f"queue-retry-{item['id']}"):
+            attachment_queue.retry_attachment(item["id"])
+            st.experimental_rerun()
     history = item.get("history") or []
     if history:
-        with st.expander("Lifecycle", expanded=False):
-            for event in history[:5]:
+        with st.expander("Timeline", expanded=False):
+            for event in history:
                 detail = event.get("detail") or ""
                 st.markdown(
                     f"- {event.get('at')}: {event.get('event')} {detail}".strip()
                 )
+    backend_details = item.get("backend_details")
+    if backend_details:
+        with st.expander("Diagnostics", expanded=False):
+            st.json(backend_details)
     st.markdown("</div>", unsafe_allow_html=True)
 
 

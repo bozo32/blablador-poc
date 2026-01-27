@@ -140,6 +140,25 @@ def get_claim_record(claim_id: str) -> Optional[dict]:
     return _registry().get(claim_id)
 
 
+def get_claim_options(max_claim_chars: int = 60) -> List[dict]:
+    options: List[dict] = []
+    for record in get_claim_records():
+        claim_id = record.get("id")
+        if not claim_id:
+            continue
+        label = _claim_option_label(record, max_claim_chars=max_claim_chars)
+        options.append({"id": claim_id, "label": label})
+    return options
+
+
+def _claim_option_label(record: dict, *, max_claim_chars: int = 60) -> str:
+    callout = record.get("callout") or "Unlabeled citation"
+    claim_text = (record.get("claim") or "Untitled claim").strip()
+    if len(claim_text) > max_claim_chars:
+        claim_text = claim_text[: max_claim_chars - 1].rstrip() + "…"
+    return f"{callout} • {claim_text}"
+
+
 def record_timeline_event(
     claim_id: str, event: str, detail: Optional[dict] = None
 ) -> None:

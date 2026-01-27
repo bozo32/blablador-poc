@@ -213,6 +213,7 @@ def sync_backend_state(claim_ids: Optional[Iterable[str]] = None) -> None:
             record.setdefault("claim_id", claim_id)
             _apply_backend_payload(record)
     refresh_summary_counts()
+    auto_match_queue_items()
 
 
 def has_inflight_jobs() -> bool:
@@ -278,6 +279,7 @@ def enqueue_files(
         _log_item_history(item_dict, "queued", detail=source)
         created_ids.append(item_id)
     refresh_summary_counts()
+    auto_match_queue_items()
     return created_ids
 
 
@@ -340,9 +342,46 @@ def refresh_summary_counts() -> None:
     queue["summary"] = summary
 
 
-def auto_match_queue_items(min_score: float = 0.6) -> None:
-    """Auto-matching handled by backend; retained for compatibility."""
-    return None
+def auto_match_queue_items(min_score: float = 0.65) -> None:
+    queue = _queue_state()
+    updated = False
+    for item_id, item in queue["items"].items():
+        if item.get("claim_id") or not item.get("filename"):
+            continue
+        candidates = claim_queue.auto_match_claim(item)
+        if not candidates:
+            continue
+        top = candidates[0]
+        if top.get("score", 0) >= min_score:
+            attach_to_claim(top["id"], item_id, via="auto", score=top["score"])
+            _log_item_history(item, "auto-matched", detail=top["id"])
+            updated = True
+            continue
+        _flag_ambiguous(item, candidates)
+        updated = True
+    if updated:
+        refresh_summary_counts()
+
+
+def _flag_ambiguous(item: dict, candidates: List[dict]) -> None:
+    shortlist: List[dict] = []
+    for candidate in candidates:
+        record = candidate.get("record") or {}
+        shortlist.append(
+            {
+                "id": candidate.get("id"),
+                "score": candidate.get("score"),
+                "callout": record.get("callout"),
+                "claim": record.get("claim"),
+            }
+        )
+    item["ambiguous_matches"] = shortlist
+    item["status"] = "pending"
+    _log_item_history(
+        item,
+        "ambiguous",
+        detail=", ".join(match.get("id") or "?" for match in shortlist),
+    )
 
 
 def attach_to_claim(
@@ -357,18 +396,17 @@ def attach_to_claim(
     if not item:
         return
     item["claim_id"] = claim_id
-    item["status"] = "matched"
-    item["next_transition"] = None
     item["ambiguous_matches"] = []
     if score is not None:
         item["match_score"] = round(score, 3)
-    _log_item_history(item, "matched", detail=via)
+    item["status"] = "pending"
+    _log_item_history(item, "assigned", detail=f"{via}:{claim_id}")
     claim_queue.record_timeline_event(
         claim_id,
         "attached",
         {"filename": item["filename"], "method": via},
     )
-    refresh_summary_counts()
+    _upload_to_backend(queue_item_id)
 
 
 def detach_attachment(claim_id: str, queue_item_id: Optional[str] = None) -> None:

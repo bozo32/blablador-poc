@@ -65,9 +65,9 @@ Plans:
   2. User can select and edit an extracted claim before validation.
 **Plans**: 3 plans
 Plans:
-- [ ] 03-01-PLAN.md — Claim queue state and segmentation helpers
-- [ ] 03-02-PLAN.md — Queue rendering and parsing confirmation UI
-- [ ] 03-03-PLAN.md — Modal claim editor with autosave and reset
+- [x] 03-01-PLAN.md — Claim queue state and segmentation helpers
+- [x] 03-02-PLAN.md — Queue rendering and parsing confirmation UI
+- [x] 03-03-PLAN.md — Modal claim editor with autosave and reset
 
 ### Phase 4: Evidence Attachment
 **Goal**: Users can attach cited PDFs and prepare them for evidence retrieval.
@@ -79,8 +79,8 @@ Plans:
   3. User can see the attached cited PDF parsed and ready for evidence search.
 **Plans:** 3 plans
 Plans:
-- [ ] 04-01-PLAN.md — Retrieval dossier API + claim UI action
-- [ ] 04-02-PLAN.md — Attachment queue UX with drop surfaces + accessibility fallback
+- [x] 04-01-PLAN.md — Retrieval dossier API + claim UI action
+- [x] 04-02-PLAN.md — Attachment queue UX with drop surfaces + accessibility fallback
 - [ ] 04-03-PLAN.md — Attachment persistence + parsing pipeline integration
 
 ### Phase 5: Evidence Matching + Ranking
@@ -131,8 +131,8 @@ Phases execute in numeric order: 2 → 2.1 → 2.2 → 3 → 3.1 → 4
 |-------|----------------|--------|-----------|
 | 1. Ingestion + Extraction | 4/4 | Complete | 2026-01-23 |
 | 2. Citation Context Navigation | 6/6 | Complete | 2026-01-24 |
-| 3. Claim Selection + Editing | 0/TBD | Not started | - |
-| 4. Evidence Attachment | 0/TBD | Not started | - |
+| 3. Claim Selection + Editing | 3/3 | Complete | 2026-01-25 |
+| 4. Evidence Attachment | 2/3 | In progress | - |
 | 5. Evidence Matching + Ranking | 0/TBD | Not started | - |
 | 6. Evidence Review + Selection | 0/TBD | Not started | - |
 | 7. Validation + Export | 0/TBD | Not started | - |

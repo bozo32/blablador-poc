@@ -77,11 +77,14 @@ Plans:
   1. User can request retrieval instructions for a cited work from the claim context.
   2. User can drop a cited PDF onto a claim and see it attached.
   3. User can see the attached cited PDF parsed and ready for evidence search.
-**Plans:** 3 plans
+**Plans:** 6 plans
 Plans:
 - [x] 04-01-PLAN.md — Retrieval dossier API + claim UI action
 - [x] 04-02-PLAN.md — Attachment queue UX with drop surfaces + accessibility fallback
 - [x] 04-03-PLAN.md — Attachment persistence + parsing pipeline integration
+- [ ] 04-04-PLAN.md — Clipboard-backed retrieval instructions copy action
+- [ ] 04-05-PLAN.md — Attachment lifecycle statuses (pending → converting → parsing → matched)
+- [ ] 04-06-PLAN.md — Auto-match heuristics + manual reassignment controls
 
 ### Phase 5: Evidence Matching + Ranking
 **Goal**: Users receive ranked evidence candidates that link claims to cited text.

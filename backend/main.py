@@ -12,10 +12,12 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend import (
+    attachment_pipeline,
+    attachment_store,
     citation_context,
     citation_graph,
     extraction,
@@ -70,8 +72,11 @@ SOURCE_DIR = Path(os.environ.get("SOURCE_DIR", CSV_PATH.parent / "source")).reso
 
 @app.on_event("startup")
 async def startup_event():
-    # automatic prebuild disabled; will be triggered manually from the UI
-    pass
+    pending = attachment_store.list_resumable()
+    if pending:
+        logger.info("Resuming %s attachment(s) from previous session", len(pending))
+    for record in pending:
+        attachment_pipeline.enqueue_processing(record["id"])
 
 
 app.add_middleware(
@@ -90,6 +95,12 @@ def _is_pdf_upload(file: UploadFile) -> bool:
     filename = (file.filename or "").lower()
     content_type = (file.content_type or "").lower()
     return filename.endswith(".pdf") and content_type == "application/pdf"
+
+
+def _serialize_attachment(record: dict | None) -> schemas.AttachmentStatus:
+    if record is None:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+    return schemas.AttachmentStatus(**record)
 
 
 @app.post("/ingest", response_model=schemas.IngestUploadResponse)
@@ -222,6 +233,70 @@ def select_resolution_source(
     }
     stored = update_ingested_document(doc_id, {"resolution": resolution_payload})
     return {"document_id": doc_id, "resolution": stored.get("resolution")}
+
+
+@app.post(
+    "/claims/{claim_id}/attachments",
+    response_model=schemas.AttachmentResponse,
+)
+def create_claim_attachment(
+    claim_id: str,
+    payload: schemas.AttachmentCreateRequest,
+    background_tasks: BackgroundTasks | None = None,
+):
+    try:
+        record = attachment_store.create_attachment(
+            claim_id=claim_id,
+            doc_id=payload.doc_id,
+            local_path=payload.local_path,
+            filename=payload.filename,
+            size_bytes=payload.size_bytes,
+            reference_hint=payload.reference_hint,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    public_record = attachment_store.public_status(record["id"])
+    if background_tasks is not None:
+        background_tasks.add_task(attachment_pipeline.process_attachment, record["id"])
+    else:
+        attachment_pipeline.enqueue_processing(record["id"])
+    return {"attachment": _serialize_attachment(public_record)}
+
+
+@app.get(
+    "/claims/{claim_id}/attachments/status",
+    response_model=schemas.AttachmentListResponse,
+)
+def claim_attachment_status(claim_id: str):
+    records = attachment_store.public_claim_status(claim_id)
+    return {
+        "attachments": [schemas.AttachmentStatus(**rec) for rec in records],
+    }
+
+
+@app.get("/attachments/{attachment_id}", response_model=schemas.AttachmentResponse)
+def get_attachment_status(attachment_id: str):
+    public_record = attachment_store.public_status(attachment_id)
+    return {"attachment": _serialize_attachment(public_record)}
+
+
+@app.post(
+    "/attachments/{attachment_id}/retry", response_model=schemas.AttachmentResponse
+)
+def retry_attachment(
+    attachment_id: str, background_tasks: BackgroundTasks | None = None
+):
+    try:
+        attachment_store.reset_for_retry(attachment_id)
+    except attachment_store.AttachmentNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    public_record = attachment_store.public_status(attachment_id)
+    if background_tasks is not None:
+        background_tasks.add_task(attachment_pipeline.process_attachment, attachment_id)
+    else:
+        attachment_pipeline.enqueue_processing(attachment_id)
+    return {"attachment": _serialize_attachment(public_record)}
 
 
 @app.get(

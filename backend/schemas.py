@@ -292,3 +292,51 @@ class IngestListResponse(BaseModel):
 
 class IngestUploadResponse(BaseModel):
     document: IngestedDocument
+
+
+class AttachmentTimelineEvent(BaseModel):
+    event: str
+    at: str
+    detail: Optional[str] = None
+
+
+class AttachmentArtifactPaths(BaseModel):
+    tei_xml: Optional[str] = None
+    tei_json: Optional[str] = None
+    sentences: Optional[str] = None
+
+
+class AttachmentStatus(BaseModel):
+    id: str
+    claim_id: str
+    doc_id: Optional[str] = None
+    filename: str
+    size: Optional[int] = None
+    status: str
+    error: Optional[str] = None
+    uploaded_at: str
+    updated_at: str
+    parsed_at: Optional[str] = None
+    timeline: List[AttachmentTimelineEvent] = Field(default_factory=list)
+    history: List[AttachmentTimelineEvent] = Field(default_factory=list)
+    reference_hint: Optional[dict] = None
+    attempts: Optional[int] = None
+    max_attempts: Optional[int] = None
+    retry_available: bool = True
+    artifacts: Optional[AttachmentArtifactPaths | dict] = None
+
+
+class AttachmentCreateRequest(BaseModel):
+    doc_id: Optional[str] = None
+    local_path: str
+    filename: Optional[str] = None
+    size_bytes: Optional[int] = None
+    reference_hint: Optional[dict] = None
+
+
+class AttachmentResponse(BaseModel):
+    attachment: AttachmentStatus
+
+
+class AttachmentListResponse(BaseModel):
+    attachments: List[AttachmentStatus]

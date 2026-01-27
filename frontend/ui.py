@@ -733,6 +733,39 @@ def format_filesize(num_bytes: Optional[int]) -> str:
     return f"{mb:.1f} MB"
 
 
+def _render_queue_summary(summary: dict) -> None:
+    status_line = _format_queue_summary(summary)
+    if status_line:
+        st.caption(status_line)
+    converting = summary.get("converting", 0)
+    pending = summary.get("pending", 0)
+    if converting:
+        st.info(
+            (
+                f"{converting} attachment{'s' if converting != 1 else ''} "
+                "converting before parsing completes."
+            ),
+            icon="⏳",
+        )
+    elif pending:
+        st.caption(
+            "Pending uploads will move into converting automatically as soon as "
+            "preprocessing starts."
+        )
+
+
+def _format_queue_summary(summary: dict) -> str:
+    ordered = ["pending", "converting", "parsing", "matched", "error"]
+    parts = []
+    for status in ordered:
+        label = ATTACHMENT_STATUS_LABELS.get(status, status.title())
+        count = summary.get(status, 0)
+        if status == "error" and count == 0:
+            continue
+        parts.append(f"{label}: {count}")
+    return " • ".join(parts)
+
+
 def render_attachment_modal() -> None:
     claim_id = attachment_queue.get_modal_claim_id()
     if not claim_id:
@@ -782,6 +815,7 @@ def render_attachment_queue_panel() -> None:
             attachment_queue.toggle_panel(True)
         return
     st.markdown("### Attachment queue panel")
+    _render_queue_summary(snapshot.get("summary", {}))
     if st.button("Collapse queue panel", key="queue-collapse"):
         attachment_queue.toggle_panel(False)
         return

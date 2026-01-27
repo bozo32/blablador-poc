@@ -93,6 +93,30 @@
   background: #f9fafb;
 }
 
+.queue-item--pending {
+  border-left: 4px solid #fb923c;
+}
+
+.queue-item--converting {
+  border-left: 4px solid #f59e0b;
+  background: #fffbeb;
+}
+
+.queue-item--parsing {
+  border-left: 4px solid #7c3aed;
+  background: #f5f3ff;
+}
+
+.queue-item--matched {
+  border-left: 4px solid #16a34a;
+  background: #f0fdf4;
+}
+
+.queue-item--error {
+  border-left: 4px solid #b91c1c;
+  background: #fef2f2;
+}
+
 .queue-item-header {
   display: flex;
   align-items: center;

@@ -43,6 +43,14 @@ class QueueItem:
     attachment_id: Optional[str] = None
 
 
+def _normalize_status(value: Optional[str]) -> str:
+    if not value:
+        return "pending"
+    if value == "ready":
+        return "matched"
+    return value
+
+
 def init_attachment_queue_state() -> None:
     """Ensure session state keys exist for the attachment queue."""
     if QUEUE_KEY not in st.session_state:
@@ -110,7 +118,9 @@ def _hydrate_from_backend(item: dict, payload: dict) -> None:
         return
     history = payload.get("history") or payload.get("timeline") or []
     item["attachment_id"] = payload.get("id")
-    item["status"] = payload.get("status", item.get("status", "pending"))
+    item["status"] = _normalize_status(
+        payload.get("status", item.get("status", "pending"))
+    )
     item["history"] = history[:5]
     item["timeline"] = item["history"]
     item["error"] = payload.get("error")
@@ -141,7 +151,7 @@ def _apply_backend_payload(payload: dict) -> dict:
             filename=payload.get("filename") or payload.get("id") or "attachment.pdf",
             size=payload.get("size"),
             local_path="",
-            status=payload.get("status", "pending"),
+            status=_normalize_status(payload.get("status", "pending")),
             claim_id=payload.get("claim_id"),
             doc_id=payload.get("doc_id"),
             source="backend",
@@ -185,6 +195,7 @@ def _upload_to_backend(queue_item_id: str) -> None:
     attachment = (response or {}).get("attachment")
     if attachment:
         _hydrate_from_backend(item, attachment)
+        item["status"] = _normalize_status(item.get("status"))
     refresh_summary_counts()
 
 
@@ -207,7 +218,8 @@ def sync_backend_state(claim_ids: Optional[Iterable[str]] = None) -> None:
 def has_inflight_jobs() -> bool:
     queue = _queue_state()
     return any(
-        item.get("status") in {"pending", "parsing"} for item in queue["items"].values()
+        item.get("status") in {"pending", "converting", "parsing"}
+        for item in queue["items"].values()
     )
 
 
@@ -322,7 +334,9 @@ def refresh_summary_counts() -> None:
     queue = _queue_state()
     summary: Dict[str, int] = {status: 0 for status in DEFAULT_STATUSES}
     for item in queue["items"].values():
-        summary[item.get("status", "pending")] += 1
+        status = _normalize_status(item.get("status"))
+        summary.setdefault(status, 0)
+        summary[status] += 1
     queue["summary"] = summary
 
 
@@ -467,11 +481,20 @@ def summarize_chip_label() -> str:
     queue = _queue_state()
     summary = queue.get("summary", {})
     pending = summary.get("pending", 0)
+    converting = summary.get("converting", 0)
     errors = summary.get("error", 0)
     matched = summary.get("matched", 0)
-    return f"Queue • {pending} pending • {matched} matched" + (
-        f" • {errors} errors" if errors else ""
-    )
+    parts = [f"Queue • {pending} pending"]
+    if converting:
+        parts.append(f"{converting} converting")
+    parts.append(f"{matched} matched")
+    if errors:
+        parts.append(f"{errors} errors")
+    return " • ".join(parts)
+
+
+def summarize_counts() -> Dict[str, int]:
+    return dict(_queue_state().get("summary", {}))
 
 
 def get_queue_items() -> List[dict]:

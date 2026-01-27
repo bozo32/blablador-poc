@@ -33,7 +33,7 @@ gaps: []
 ## Required Evidence
 
 - **Automated tests:** `pytest tests/test_attachment_store.py tests/test_attachment_pipeline.py tests/test_claim_queue.py`
-- **Manual UI run:** `python -m streamlit run frontend/ui.py` → verified clipboard helper, queue summary counts, ambiguous-warning banner, “Accept suggestion” + “Assign to claim” controls, and lifecycle chips.
+- **Manual UI check (recommended):** `python -m streamlit run frontend/ui.py` to confirm clipboard helper behavior, queue summary counts, ambiguous-warning banner, reassignment controls, and lifecycle chips in your environment.
 - **CLI smoke:** `python scripts/attachment_smoke.py ...` prints `pending → converting → parsing → matched` before exiting.
 
 ## Requirements Coverage

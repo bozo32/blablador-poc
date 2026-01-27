@@ -118,3 +118,17 @@ def get_citation_graph(
     except requests.RequestException as exc:
         raise RuntimeError(f"Failed to reach ingestion API at {url}") from exc
     return _parse_response(response) or {}
+
+
+def get_reference_retrieval(
+    api_url: str,
+    doc_id: str,
+    reference_id: str,
+) -> dict:
+    """Fetch retrieval dossier for a reference."""
+    url = f"{api_url.rstrip('/')}/references/{doc_id}/{reference_id}/retrieval"
+    try:
+        response = requests.get(url, timeout=DEFAULT_TIMEOUT)
+    except requests.RequestException as exc:
+        raise RuntimeError(f"Failed to reach ingestion API at {url}") from exc
+    return _parse_response(response) or {}

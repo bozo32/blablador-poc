@@ -13,6 +13,8 @@ import pandas as pd
 import requests
 import streamlit as st
 
+from frontend import claim_queue
+
 st.set_page_config(page_title="Citation-Support Checker", layout="wide")
 
 # Add project root to sys.path so `backend` is importable
@@ -35,7 +37,7 @@ from frontend.ingestion_api import (
     trigger_resolution,
     upload_pdf,
 )
-from typing import List
+from typing import List, Optional
 
 
 # Third-party
@@ -266,7 +268,7 @@ def refresh_ingested_docs(show_error: bool = True) -> list[dict]:
     return documents
 
 
-def load_selected_document(show_error: bool = True) -> dict | None:
+def load_selected_document(show_error: bool = True) -> Optional[dict]:
     doc_id = st.session_state.get("selected_doc_id")
     if not doc_id:
         st.session_state["active_document"] = None
@@ -420,7 +422,7 @@ def normalize_callout_text(callout: str) -> str:
     return text
 
 
-def normalize_target_id(target_id: str | None) -> str | None:
+def normalize_target_id(target_id: Optional[str]) -> Optional[str]:
     if not target_id:
         return None
     normalized = str(target_id).strip()
@@ -1101,6 +1103,12 @@ def draw_ingestion_panel():
         )
         if selected_index is None:
             st.info("Select a citation callout to view its context.")
+            st.button(
+                "Retrieval instructions",
+                key="retrieval-disabled",
+                disabled=True,
+                help="Select a citation to load retrieval guidance",
+            )
         else:
             context_request = {
                 "api_url": st.session_state.get("api_url", "http://localhost:8000"),
@@ -1118,6 +1126,14 @@ def draw_ingestion_panel():
 
             context = st.session_state.get("citation_context")
             if context:
+                reference = context.get("reference") or {}
+                reference_id = reference.get("id") or selected_target
+                doc_identifier = context.get("document_id") or doc_id
+                show_retrieval = st.button(
+                    "Retrieval instructions",
+                    key="retrieval-instructions-button",
+                    help="Open canonical citation, DOI links, and fallback steps",
+                )
                 st.markdown(
                     highlight_callout(context.get("previous_sentence"), None),
                     unsafe_allow_html=True,
@@ -1230,6 +1246,19 @@ def draw_ingestion_panel():
                             st.json(resolution)
                         else:
                             st.caption("Resolved metadata unavailable.")
+                if show_retrieval:
+                    with st.expander("Retrieval instructions", expanded=True):
+                        if reference_id:
+                            claim_queue.render_retrieval_instructions(
+                                api_url=context_request["api_url"],
+                                doc_id=doc_identifier,
+                                reference_id=reference_id,
+                            )
+                        else:
+                            st.warning(
+                                "Reference metadata missing — run resolution to fetch"
+                                " dossiers."
+                            )
             else:
                 st.info("Context unavailable yet. Try running extraction/resolution.")
                 fallback = None

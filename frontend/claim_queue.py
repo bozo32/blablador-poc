@@ -9,6 +9,7 @@ from typing import Dict, List, Optional
 
 import streamlit as st
 
+from frontend.clipboard import render_copy_to_clipboard
 from frontend.ingestion_api import get_reference_retrieval
 
 
@@ -32,8 +33,11 @@ def init_claim_registry() -> None:
     st.session_state.setdefault(CLAIM_TIMELINE_KEY, {})
 
 
-def register_claim(claim_id: str, **metadata) -> dict:
+def register_claim(claim_id: Optional[str] = None, **metadata) -> dict:
     init_claim_registry()
+    claim_id = claim_id or metadata.pop("id", None)
+    if not claim_id:
+        raise ValueError("register_claim requires a claim_id or id field")
     registry = _registry()
     record = registry.get(claim_id, {})
     record.update(
@@ -258,9 +262,8 @@ def render_retrieval_instructions(
     primary = dossier.get("primary_url")
     manual = dossier.get("manual_instructions")
 
-    copy_disabled = manual is None
-
     col_open, col_copy = st.columns(2)
+    copy_result: Optional[dict] = None
     with col_open:
         if primary:
             st.link_button(
@@ -277,16 +280,28 @@ def render_retrieval_instructions(
                 key=f"open_source_{reference_id}",
             )
     with col_copy:
-        if st.button(
+        copy_result = render_copy_to_clipboard(
             "Copy instructions",
-            disabled=copy_disabled,
-            key=f"copy_instr_{reference_id}",
-        ):
-            st.session_state["retrieval_clipboard"] = manual
-            st.success("Instructions copied to clipboard placeholder")
+            manual,
+            key=f"{doc_id}_{reference_id}",
+            toast=f"Copied retrieval instructions for {reference_id}",
+            help_text="Copies the full retrieval instructions to your clipboard.",
+        )
+
+    if copy_result and copy_result.get("copied") and copy_result.get("snippet"):
+        st.success(f"Copied: {copy_result['snippet']}")
+
+    copied_at = (copy_result or {}).get("copied_at")
 
     if manual:
-        st.info(manual)
+        st.code(manual.strip(), language="text")
+        if copied_at:
+            st.caption(f"Copied at {copied_at}")
+        else:
+            st.caption(
+                "Review or copy the instructions above when contacting a library "
+                "or visiting the publisher site."
+            )
     else:
         st.warning("No direct links available. Use the fallback steps above.")
 

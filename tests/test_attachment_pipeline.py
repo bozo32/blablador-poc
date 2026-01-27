@@ -48,7 +48,8 @@ def test_process_attachment_creates_artifacts(tmp_path, monkeypatch):
     attachment_pipeline.process_attachment(record["id"])
 
     updated = attachment_store.get_attachment(record["id"])
-    assert updated["status"] == attachment_store.STATUS_READY
+    assert updated is not None
+    assert updated["status"] == attachment_store.STATUS_MATCHED
     artifacts = updated["artifacts"]
     assert artifacts
     sentences_path = Path(artifacts["sentences"])
@@ -72,5 +73,6 @@ def test_process_attachment_marks_error_after_retries(tmp_path, monkeypatch):
     attachment_pipeline.process_attachment(record["id"], max_attempts=2)
 
     updated = attachment_store.get_attachment(record["id"])
+    assert updated is not None
     assert updated["status"] == attachment_store.STATUS_ERROR
     assert updated["error"] == "explode"

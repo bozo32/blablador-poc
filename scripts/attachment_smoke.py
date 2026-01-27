@@ -152,7 +152,7 @@ def _poll_status(
         if status != last_status:
             _print_event(f"Status → {status}")
             last_status = status
-        if status in {"ready", "error"}:
+        if status in {"matched", "ready", "error"}:
             return attachment
         time.sleep(interval)
     raise TimeoutError(f"Attachment did not finish within {timeout} seconds")

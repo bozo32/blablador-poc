@@ -69,10 +69,18 @@ def test_list_resumable_filters_status(tmp_path):
         local_path=source,
     )
 
+    attachment_store.mark_converting(record["id"], attempt=1)
     attachment_store.mark_parsing(record["id"], attempt=1)
     resumable = attachment_store.list_resumable()
     assert any(item["id"] == record["id"] for item in resumable)
 
-    attachment_store.mark_ready(record["id"], artifacts={})
+    attachment_store.mark_matched(record["id"], artifacts={})
     resumable_after = attachment_store.list_resumable()
     assert all(item["id"] != record["id"] for item in resumable_after)
+
+    public_record = attachment_store.public_status(record["id"])
+    assert public_record is not None
+    assert public_record["status"] == attachment_store.STATUS_MATCHED
+    events = [evt["event"] for evt in public_record["history"]]
+    assert "converting" in events
+    assert "matched" in events

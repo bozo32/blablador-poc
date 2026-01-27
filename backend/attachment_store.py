@@ -13,8 +13,10 @@ from backend.settings import settings
 
 
 STATUS_PENDING = "pending"
+STATUS_CONVERTING = "converting"
 STATUS_PARSING = "parsing"
-STATUS_READY = "ready"
+STATUS_MATCHED = "matched"
+STATUS_READY = STATUS_MATCHED  # Backward-compatible alias
 STATUS_ERROR = "error"
 
 MAX_TIMELINE_EVENTS = 5
@@ -66,15 +68,30 @@ def _sanitize_filename(filename: str) -> str:
     return name.replace("/", "_").replace("\\", "_")
 
 
+def _normalize_status(value: Optional[str]) -> str:
+    if value == "ready":  # legacy persisted value
+        return STATUS_MATCHED
+    if value in {
+        STATUS_PENDING,
+        STATUS_CONVERTING,
+        STATUS_PARSING,
+        STATUS_MATCHED,
+        STATUS_ERROR,
+    }:
+        return value
+    return STATUS_PENDING
+
+
 def _public_view(record: dict) -> dict:
     data = dict(record)
     data.pop("file_path", None)
+    data["status"] = _normalize_status(data.get("status"))
     data["history"] = data.get("timeline", [])[:MAX_TIMELINE_EVENTS]
     data["timeline"] = data["history"]
     data.setdefault("reference_hint", {})
     data["retry_available"] = (
         data.get("attempts", 0) < data.get("max_attempts", DEFAULT_MAX_ATTEMPTS)
-        and data.get("status") != STATUS_READY
+        and data.get("status") != STATUS_MATCHED
     )
     return data
 
@@ -202,12 +219,22 @@ def save_artifacts(
 
 
 def list_resumable(statuses: Optional[Iterable[str]] = None) -> List[dict]:
-    wanted = set(statuses or {STATUS_PENDING, STATUS_PARSING})
+    wanted = set(statuses or {STATUS_PENDING, STATUS_CONVERTING, STATUS_PARSING})
     return [
         record
         for record in list_attachments(public=False)
-        if record.get("status") in wanted
+        if _normalize_status(record.get("status")) in wanted
     ]
+
+
+def mark_converting(attachment_id: str, attempt: int) -> dict:
+    return update_attachment(
+        attachment_id,
+        status=STATUS_CONVERTING,
+        timeline_event="converting",
+        timeline_detail=f"Attempt {attempt}",
+        attempts=attempt,
+    )
 
 
 def mark_parsing(attachment_id: str, attempt: int) -> dict:
@@ -220,16 +247,20 @@ def mark_parsing(attachment_id: str, attempt: int) -> dict:
     )
 
 
-def mark_ready(attachment_id: str, artifacts: dict) -> dict:
+def mark_matched(attachment_id: str, artifacts: dict) -> dict:
     return update_attachment(
         attachment_id,
-        status=STATUS_READY,
+        status=STATUS_MATCHED,
         error=None,
         parsed_at=_now(),
-        timeline_event="ready",
+        timeline_event="matched",
         timeline_detail="Artifacts written",
         artifacts=artifacts,
     )
+
+
+def mark_ready(attachment_id: str, artifacts: dict) -> dict:
+    return mark_matched(attachment_id, artifacts=artifacts)
 
 
 def mark_error(attachment_id: str, message: str) -> dict:

@@ -102,6 +102,7 @@ def process_attachment(
 
     while attempt < max_attempts:
         attempt += 1
+        attachment_store.mark_converting(attachment_id, attempt)
         attachment_store.mark_parsing(attachment_id, attempt)
         try:
             pdf_path = Path(record["file_path"])
@@ -121,7 +122,7 @@ def process_attachment(
                 tei_json=tei_json,
                 sentences=enriched,
             )
-            attachment_store.mark_ready(attachment_id, artifacts)
+            attachment_store.mark_matched(attachment_id, artifacts)
             logger.info("Attachment %s processed successfully", attachment_id)
             return
         except (

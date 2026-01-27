@@ -82,9 +82,9 @@ Plans:
 - [x] 04-01-PLAN.md — Retrieval dossier API + claim UI action
 - [x] 04-02-PLAN.md — Attachment queue UX with drop surfaces + accessibility fallback
 - [x] 04-03-PLAN.md — Attachment persistence + parsing pipeline integration
-- [ ] 04-04-PLAN.md — Clipboard-backed retrieval instructions copy action
-- [ ] 04-05-PLAN.md — Attachment lifecycle statuses (pending → converting → parsing → matched)
-- [ ] 04-06-PLAN.md — Auto-match heuristics + manual reassignment controls
+- [x] 04-04-PLAN.md — Clipboard-backed retrieval instructions copy action
+- [x] 04-05-PLAN.md — Attachment lifecycle statuses (pending → converting → parsing → matched)
+- [x] 04-06-PLAN.md — Auto-match heuristics + manual reassignment controls
 
 ### Phase 5: Evidence Matching + Ranking
 **Goal**: Users receive ranked evidence candidates that link claims to cited text.
@@ -135,7 +135,7 @@ Phases execute in numeric order: 2 → 2.1 → 2.2 → 3 → 3.1 → 4
 | 1. Ingestion + Extraction | 4/4 | Complete | 2026-01-23 |
 | 2. Citation Context Navigation | 6/6 | Complete | 2026-01-24 |
 | 3. Claim Selection + Editing | 3/3 | Complete | 2026-01-25 |
-| 4. Evidence Attachment | 3/3 | Complete | 2026-01-27 |
+| 4. Evidence Attachment | 6/6 | Complete | 2026-01-27 |
 | 5. Evidence Matching + Ranking | 0/TBD | Not started | - |
 | 6. Evidence Review + Selection | 0/TBD | Not started | - |
 | 7. Validation + Export | 0/TBD | Not started | - |

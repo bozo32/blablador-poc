@@ -10,9 +10,9 @@ See: .planning/PROJECT.md (updated 2026-01-23)
 ## Current Position
 
 Phase: 4 of 8 (Evidence Attachment)
-Plan: 3 of 3 in current phase
+Plan: 6 of 6 in current phase
 Status: Phase complete
-Last activity: 2026-01-27 — Completed 04-03-PLAN.md
+Last activity: 2026-01-27 — Completed 04-06-PLAN.md
 
 Progress: ██████████ 100%
 
@@ -43,8 +43,11 @@ Progress: ██████████ 100%
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
-- Store attachment metadata + timelines as JSON on disk to guarantee resumable processing (04-03).
-- Streamlit attachment queue now polls backend statuses (no client-side simulation) and surfaces retry/diagnostics affordances (04-03).
+ - Store attachment metadata + timelines as JSON on disk to guarantee resumable processing (04-03).
+ - Streamlit attachment queue now polls backend statuses (no client-side simulation) and surfaces retry/diagnostics affordances (04-03).
+ - Retrieval instructions copy control uses a reusable clipboard helper with manual fallback so reviewers can trust the copy action (04-04).
+ - Attachment lifecycle emits pending → converting → parsing → matched on both backend and UI, with queue summary chips reflecting the counts (04-05).
+ - Queue auto-matches dropped files via claim heuristics and highlights ambiguous attachments with manual reassignment controls (04-06).
 
 - Use local citation graph data when DOI resolution is unavailable to avoid OpenAlex 404s (02-02).
 - Prefer GROBID consolidation when resolver sources disagree; warn that OpenAlex may return citing articles (02-06).

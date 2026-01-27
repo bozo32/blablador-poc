@@ -25,9 +25,9 @@ Requirements for initial release. Each maps to roadmap phases.
 
 - [ ] **CLM-01**: System segments citing text into candidate claims
 - [ ] **CLM-02**: User can select and edit extracted claim parses
-- [ ] **EVD-01**: User can request retrieval instructions for a cited work from the claim context
-- [ ] **EVD-02**: User can drop a retrieved cited PDF onto the claim context to attach it
-- [ ] **EVD-03**: System parses dropped cited PDFs with GROBID into TEI/XML
+- [x] **EVD-01**: User can request retrieval instructions for a cited work from the claim context
+- [x] **EVD-02**: User can drop a retrieved cited PDF onto the claim context to attach it
+- [x] **EVD-03**: System parses dropped cited PDFs with GROBID into TEI/XML
 - [ ] **EVD-04**: System runs deterministic matching to find closest cited spans to the claim
 - [ ] **EVD-05**: System reranks candidate spans and shows top evidence options
 - [ ] **EVD-06**: System presents top-N evidence candidates (default 3 entailing + 3 contradicting when strongest contradicting outranks weakest entailing)
@@ -91,9 +91,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | NAV-03 | Phase 2 | Complete |
 | CLM-01 | Phase 3 | Pending |
 | CLM-02 | Phase 3 | Pending |
-| EVD-01 | Phase 4 | Pending |
-| EVD-02 | Phase 4 | Pending |
-| EVD-03 | Phase 4 | Pending |
+| EVD-01 | Phase 4 | Complete |
+| EVD-02 | Phase 4 | Complete |
+| EVD-03 | Phase 4 | Complete |
 | EVD-04 | Phase 5 | Pending |
 | EVD-05 | Phase 5 | Pending |
 | EVD-06 | Phase 5 | Pending |
@@ -113,4 +113,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 ---
 *Requirements defined: 2026-01-23*
-*Last updated: 2026-01-23 after Phase 1 completion*
+*Last updated: 2026-01-27 after Phase 4 gap closure*

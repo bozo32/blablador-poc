@@ -1,0 +1,136 @@
+.attachment-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  padding: 1rem 1rem 0.75rem;
+  margin-bottom: 1rem;
+  background: #ffffff;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.08);
+  min-height: 260px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
+}
+
+.attachment-card--focused {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.25);
+}
+
+.attachment-card--dimmed {
+  opacity: 0.45;
+}
+
+.attachment-claim-title {
+  font-weight: 600;
+  font-size: 1rem;
+  margin-bottom: 0.2rem;
+}
+
+.attachment-dropzone {
+  border: 2px dashed #94a3b8;
+  border-radius: 12px;
+  padding: 0.75rem;
+  text-align: center;
+  margin-bottom: 0.75rem;
+  background: #f8fafc;
+  color: #475569;
+}
+
+.attachment-card--focused .attachment-dropzone {
+  border-color: #2563eb;
+  background: #eef2ff;
+  color: #1d4ed8;
+}
+
+.attachment-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0.15rem 0.85rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 0.25rem 0;
+}
+
+.attachment-status-pill.pending {
+  background: #fff7ed;
+  color: #c2410c;
+}
+
+.attachment-status-pill.converting {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.attachment-status-pill.parsing {
+  background: #ede9fe;
+  color: #6d28d9;
+}
+
+.attachment-status-pill.matched {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.attachment-status-pill.error {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.attachment-modal {
+  border: 1px solid #c7d2fe;
+  border-radius: 14px;
+  padding: 1rem;
+  background: #eef2ff;
+  margin: 1.25rem 0;
+}
+
+.queue-item {
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 0.85rem 1rem;
+  margin-bottom: 0.75rem;
+  background: #f9fafb;
+}
+
+.queue-item-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.queue-item button {
+  width: 100%;
+}
+
+.queue-item select {
+  width: 100%;
+}
+
+div[data-testid="column"] div[data-testid="stFileUploader"] {
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+
+div[data-testid="column"] div[data-testid="stFileUploader"] label {
+  display: none;
+}
+
+div[data-testid="column"] div[data-testid="stFileUploader"] input[type="file"] {
+  cursor: pointer;
+}
+
+div[data-testid="baseButton-secondary"] button {
+  background: #1d4ed8;
+  color: #ffffff;
+  border-radius: 999px;
+  border: none;
+  padding: 0.4rem 1rem;
+  font-weight: 600;
+}
+
+div[data-testid="baseButton-secondary"] button:hover {
+  background: #1e40af;
+}

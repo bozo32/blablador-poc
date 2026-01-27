@@ -1,6 +1,7 @@
 # frontend/ui.py
 
 # === Imports ===
+import html
 import json
 import os
 import pathlib
@@ -13,14 +14,14 @@ import pandas as pd
 import requests
 import streamlit as st
 
-from frontend import claim_queue
-
 st.set_page_config(page_title="Citation-Support Checker", layout="wide")
 
-# Add project root to sys.path so `backend` is importable
+# Add project root to sys.path so `backend`/`frontend` modules import cleanly
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+from frontend import attachment_queue, claim_queue
 
 from backend import utils
 from backend.bl_client import BlabladorClient
@@ -528,6 +529,315 @@ def render_sentence_with_callouts(
         else:
             unmatched.append(callout)
     return rendered, unmatched
+
+
+# === Attachment Helpers ===
+ATTACHMENT_CSS_PATH = (
+    pathlib.Path(__file__).resolve().parent / "assets" / "attachment_panel.css"
+)
+ATTACHMENT_STATUS_LABELS = {
+    "pending": "Pending",
+    "converting": "Converting",
+    "parsing": "Parsing",
+    "matched": "Matched",
+    "error": "Error",
+}
+
+
+def inject_attachment_panel_styles() -> None:
+    """Load CSS for the attachment queue workspace."""
+    if st.session_state.get("attachment_panel_styles_loaded"):
+        return
+    if ATTACHMENT_CSS_PATH.exists():
+        st.markdown(
+            f"<style>{ATTACHMENT_CSS_PATH.read_text()}</style>",
+            unsafe_allow_html=True,
+        )
+    st.session_state["attachment_panel_styles_loaded"] = True
+
+
+def prepare_attachment_workspace() -> None:
+    """Ensure attachment queue state and claim registry are hydrated."""
+    attachment_queue.init_attachment_queue_state()
+    claim_queue.sync_claims_from_results(st.session_state.get("results"))
+    if not claim_queue.get_claim_records():
+        claim_queue.ensure_demo_claims()
+    attachment_queue.advance_inflight_items()
+    attachment_queue.auto_match_queue_items()
+    attachment_queue.refresh_summary_counts()
+    attachment_queue.ensure_open_when_activity()
+    attachment_queue.collapse_when_idle()
+
+
+def render_attachment_workspace() -> None:
+    """Render claim drop zones, modal fallback, and queue panel."""
+    inject_attachment_panel_styles()
+    prepare_attachment_workspace()
+    st.subheader("Evidence attachments & queue")
+    st.caption(
+        "Drop cited PDFs onto claims, then monitor their status in the queue panel."
+    )
+    render_claim_cards_grid()
+    render_attachment_modal()
+    render_attachment_queue_panel()
+
+
+def render_claim_cards_grid() -> None:
+    claims = claim_queue.get_claim_records()
+    if not claims:
+        st.info(
+            "No claims available yet. Run segmentation or use the demo claims to"
+            " prototype the attachment flow."
+        )
+        return
+    active_target = attachment_queue.get_active_drop_target()
+    column_count = min(3, max(1, len(claims)))
+    columns = st.columns(column_count)
+    for idx, claim in enumerate(claims):
+        column = columns[idx % column_count]
+        with column:
+            render_claim_card(claim, active_target)
+
+
+def render_claim_card(claim: dict, active_target: Optional[str]) -> None:
+    claim_id = claim.get("id") or f"claim-{hash(claim.get('claim', 'claim'))}"
+    classes = ["attachment-card"]
+    if active_target and active_target != claim_id:
+        classes.append("attachment-card--dimmed")
+    if active_target == claim_id:
+        classes.append("attachment-card--focused")
+    class_attr = " ".join(classes)
+    st.markdown(
+        f'<div class="{class_attr}" data-claim-id="{claim_id}">',
+        unsafe_allow_html=True,
+    )
+    claim_title = html.escape(claim.get("claim", "Untitled claim"))
+    st.markdown(
+        f"<p class='attachment-claim-title'>{claim_title}</p>",
+        unsafe_allow_html=True,
+    )
+    callout = claim.get("callout") or "Unlabeled citation"
+    st.caption(f"{callout} • Claim ID: {claim_id}")
+    dropzone_html = """
+    <div class="attachment-dropzone">
+        <strong>Drop PDF</strong>
+        <span>Supports drag, drop, or keyboard navigation</span>
+    </div>
+    """
+    st.markdown(dropzone_html, unsafe_allow_html=True)
+    drop_key = f"attachment-drop-{claim_id}"
+    uploaded = st.file_uploader(
+        f"Drop PDF for {callout}",
+        type=["pdf"],
+        accept_multiple_files=True,
+        key=drop_key,
+        label_visibility="collapsed",
+    )
+    if uploaded:
+        attachment_queue.handle_drop(
+            claim_id,
+            uploaded,
+            doc_id=claim.get("doc_id"),
+            reference_hint=_build_reference_hint_from_claim(claim),
+            source="dropzone",
+        )
+        attachment_queue.clear_active_drop_target()
+        st.session_state.pop(drop_key, None)
+    action_cols = st.columns(2)
+    with action_cols[0]:
+        if st.button("Attach via modal", key=f"open-modal-{claim_id}"):
+            attachment_queue.open_attachment_modal(claim_id)
+    with action_cols[1]:
+        if active_target == claim_id:
+            if st.button("Clear highlight", key=f"clear-highlight-{claim_id}"):
+                attachment_queue.clear_active_drop_target()
+        else:
+            if st.button("Highlight drop zone", key=f"focus-highlight-{claim_id}"):
+                attachment_queue.set_active_drop_target(claim_id)
+    attached = attachment_queue.get_claim_attachment(claim_id)
+    if attached:
+        status = attached.get("status", "pending")
+        pill = ATTACHMENT_STATUS_LABELS.get(status, status.title())
+        st.markdown(
+            f"<span class='attachment-status-pill {status}'>{pill}</span>",
+            unsafe_allow_html=True,
+        )
+        st.caption(_describe_attachment(attached, claim))
+        if status in {"pending", "converting", "parsing"}:
+            render_skeleton(1)
+        if st.button("Detach file", key=f"detach-{claim_id}"):
+            attachment_queue.detach_attachment(claim_id, attached.get("id"))
+    else:
+        st.caption("No attachment assigned yet.")
+    timeline = claim_queue.get_timeline(claim_id)
+    if timeline:
+        with st.expander("Attachment timeline", expanded=False):
+            for entry in timeline:
+                detail = entry.get("detail") or {}
+                summary = ", ".join(
+                    f"{k}: {v}" for k, v in detail.items() if v is not None
+                )
+                event_label = entry.get("event", "update").title()
+                detail_text = summary or "No detail"
+                timestamp = entry.get("at") or "unknown"
+                st.markdown(f"- **{event_label}** — {detail_text} ({timestamp})")
+    st.caption("Use the modal button for keyboard-only uploads.")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+def _build_reference_hint_from_claim(claim: dict) -> dict:
+    return {
+        "callout": claim.get("callout"),
+        "reference_id": claim.get("reference_id") or claim.get("id"),
+        "author": claim.get("author"),
+        "year": claim.get("year"),
+        "doi": (claim.get("reference_hint") or {}).get("doi"),
+    }
+
+
+def _describe_attachment(item: dict, claim: Optional[dict]) -> str:
+    filename = item.get("filename")
+    size = format_filesize(item.get("size"))
+    claim_text = (claim or {}).get("claim")
+    target = (
+        claim_text[:42] + "…" if claim_text and len(claim_text) > 45 else claim_text
+    )
+    status = item.get("status", "pending")
+    label = ATTACHMENT_STATUS_LABELS.get(status, status.title())
+    base = f"{filename} ({size}) • {label}"
+    if target:
+        return f"{base} for {target}"
+    return base
+
+
+def format_filesize(num_bytes: Optional[int]) -> str:
+    if not num_bytes:
+        return "unknown"
+    if num_bytes < 1024:
+        return f"{num_bytes} B"
+    kb = num_bytes / 1024
+    if kb < 1024:
+        return f"{kb:.1f} KB"
+    mb = kb / 1024
+    return f"{mb:.1f} MB"
+
+
+def render_attachment_modal() -> None:
+    claim_id = attachment_queue.get_modal_claim_id()
+    if not claim_id:
+        return
+    claim = claim_queue.get_claim_record(claim_id) or {}
+    st.markdown('<div class="attachment-modal">', unsafe_allow_html=True)
+    modal_claim_title = html.escape(claim.get("claim", "Untitled claim"))
+    st.markdown(
+        f"<strong>Keyboard-friendly uploader</strong><br>Claim: {modal_claim_title}",
+        unsafe_allow_html=True,
+    )
+    modal_files = st.file_uploader(
+        "Attach PDF via modal",
+        type=["pdf"],
+        accept_multiple_files=True,
+        key="attachment-modal-uploader",
+    )
+    if modal_files:
+        attachment_queue.handle_drop(
+            claim_id,
+            modal_files,
+            doc_id=claim.get("doc_id"),
+            reference_hint=_build_reference_hint_from_claim(claim),
+            source="modal",
+        )
+        st.session_state["attachment-modal-uploader"] = None
+    if st.button("Close modal", key="close-attachment-modal"):
+        attachment_queue.close_attachment_modal()
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+def render_attachment_queue_panel() -> None:
+    snapshot = attachment_queue.get_queue_snapshot()
+    summary_label = attachment_queue.summarize_chip_label()
+    if not snapshot.get("panel_open"):
+        if st.button(
+            summary_label,
+            key="queue-summary-chip",
+            type="secondary",
+            help="Reopen the queue panel",
+        ):
+            attachment_queue.toggle_panel(True)
+        return
+    st.markdown("### Attachment queue panel")
+    if st.button("Collapse queue panel", key="queue-collapse"):
+        attachment_queue.toggle_panel(False)
+        return
+    items = attachment_queue.get_queue_items()
+    if not items:
+        st.info("Queue is empty. Drop a PDF from any claim to populate the panel.")
+        return
+    for item in items:
+        render_queue_item(item)
+
+
+def render_queue_item(item: dict) -> None:
+    status = item.get("status", "pending")
+    pill = ATTACHMENT_STATUS_LABELS.get(status, status.title())
+    claim = claim_queue.get_claim_record(item.get("claim_id"))
+    st.markdown(
+        f'<div class="queue-item queue-item--{status}">',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f"<div class='queue-item-header'><strong>{item.get('filename')}</strong>"
+        f"<span class='attachment-status-pill {status}'>{pill}</span></div>",
+        unsafe_allow_html=True,
+    )
+    source_label = item.get("source", "dropzone")
+    size_label = format_filesize(item.get("size"))
+    st.caption(f"Source: {source_label} • Size: {size_label}")
+    if claim:
+        st.caption(f"Attached to: {claim.get('claim')}")
+    candidate_ids = item.get("ambiguous_matches") or [
+        record.get("id") for record in claim_queue.get_claim_records()
+    ]
+    manual_options = []
+    for candidate in candidate_ids:
+        record = claim_queue.get_claim_record(candidate)
+        if record:
+            manual_options.append((candidate, record.get("claim", candidate)))
+    if manual_options:
+        option_values = [cid for cid, _ in manual_options]
+        option_labels = {cid: label for cid, label in manual_options}
+        manual_label = (
+            "Resolve ambiguity" if item.get("ambiguous_matches") else "Assign to claim"
+        )
+        selection = st.selectbox(
+            manual_label,
+            option_values,
+            key=f"queue-assign-{item['id']}",
+            format_func=lambda cid: option_labels.get(cid, cid),
+        )
+        if st.button("Assign file", key=f"queue-assign-btn-{item['id']}"):
+            attachment_queue.attach_to_claim(selection, item["id"], via="manual")
+    action_cols = st.columns(3)
+    with action_cols[0]:
+        if st.button("Mark error", key=f"queue-error-{item['id']}"):
+            attachment_queue.mark_item_error(item["id"], "Manually flagged")
+    with action_cols[1]:
+        if item.get("claim_id") and st.button(
+            "Detach", key=f"queue-detach-{item['id']}"
+        ):
+            attachment_queue.detach_attachment(item["claim_id"], item["id"])
+    with action_cols[2]:
+        if st.button("Remove", key=f"queue-remove-{item['id']}"):
+            attachment_queue.remove_queue_item(item["id"])
+    history = item.get("history") or []
+    if history:
+        with st.expander("Lifecycle", expanded=False):
+            for event in history[:5]:
+                detail = event.get("detail") or ""
+                st.markdown(
+                    f"- {event.get('at')}: {event.get('event')} {detail}".strip()
+                )
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 def format_reference_summary(reference: dict, resolution: dict) -> str:
@@ -1358,6 +1668,7 @@ def draw_ingestion_panel():
 def draw_main():
     st.title("Citation-Support Checker")
     draw_ingestion_panel()
+    render_attachment_workspace()
     st.divider()
     if not st.session_state.started:
         st.info("Configure settings then click Start segmentation.")

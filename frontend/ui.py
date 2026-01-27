@@ -766,6 +766,13 @@ def _format_queue_summary(summary: dict) -> str:
     return " • ".join(parts)
 
 
+def _claim_option_index(options: List[dict], claim_id: Optional[str]) -> int:
+    for idx, option in enumerate(options):
+        if option.get("id") == claim_id:
+            return idx
+    return 0
+
+
 def render_attachment_modal() -> None:
     claim_id = attachment_queue.get_modal_claim_id()
     if not claim_id:
@@ -823,6 +830,15 @@ def render_attachment_queue_panel() -> None:
     if not items:
         st.info("Queue is empty. Drop a PDF from any claim to populate the panel.")
         return
+    attention_needed = sum(1 for entry in items if entry.get("ambiguous_matches"))
+    if attention_needed:
+        st.warning(
+            (
+                f"{attention_needed} attachment{'s' if attention_needed != 1 else ''} "
+                "need manual assignment."
+            ),
+            icon="⚠",
+        )
     for item in items:
         render_queue_item(item)
 
@@ -845,6 +861,58 @@ def render_queue_item(item: dict) -> None:
     st.caption(f"Source: {source_label} • Size: {size_label}")
     if claim:
         st.caption(f"Attached to: {claim.get('claim')}")
+    ambiguous = item.get("ambiguous_matches") or []
+    needs_assignment = ambiguous or not item.get("claim_id")
+    if ambiguous:
+        suggestion = ambiguous[0]
+        suggestion_label = (
+            suggestion.get("callout") or suggestion.get("id") or "top suggestion"
+        )
+        suggestion_score = suggestion.get("score")
+        st.warning(
+            (
+                "Multiple possible claims detected. Review the suggestion or "
+                "choose manually."
+            ),
+            icon="⚠",
+        )
+        if suggestion_score is not None:
+            st.caption(
+                f"Top suggestion: {suggestion_label} (score {suggestion_score:.2f})"
+            )
+        else:
+            st.caption(f"Top suggestion: {suggestion_label}")
+        if suggestion.get("id") and st.button(
+            f"Accept {suggestion_label}",
+            key=f"queue-accept-{item['id']}",
+        ):
+            attachment_queue.attach_to_claim(
+                suggestion["id"],
+                item["id"],
+                via="auto-suggestion",
+                score=suggestion.get("score"),
+            )
+            st.experimental_rerun()
+    if needs_assignment:
+        options = claim_queue.get_claim_options()
+        if options:
+            default_idx = _claim_option_index(options, item.get("claim_id"))
+            selected_option = st.selectbox(
+                "Assign to claim",
+                options,
+                index=default_idx,
+                format_func=lambda option: option["label"],
+                key=f"queue-select-{item['id']}",
+            )
+            if st.button("Assign to claim", key=f"queue-assign-{item['id']}"):
+                attachment_queue.attach_to_claim(
+                    selected_option["id"], item["id"], via="manual"
+                )
+                st.experimental_rerun()
+        else:
+            st.info(
+                "No claims available yet. Generate claims before assigning attachments."
+            )
     if status == "error":
         if st.button("Retry parse", key=f"queue-retry-{item['id']}"):
             attachment_queue.retry_attachment(item["id"])

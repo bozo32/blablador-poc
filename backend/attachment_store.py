@@ -6,7 +6,7 @@ import json
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Iterable, List, Optional, Tuple
 from uuid import uuid4
 
 from backend.settings import settings
@@ -22,6 +22,9 @@ STATUS_ERROR = "error"
 MAX_TIMELINE_EVENTS = 5
 MAX_EVENTS_STORED = 25
 DEFAULT_MAX_ATTEMPTS = 2
+
+
+_SENTENCE_CACHE: dict[str, Tuple[float, List[dict]]] = {}
 
 
 class AttachmentNotFound(RuntimeError):
@@ -94,6 +97,11 @@ def _public_view(record: dict) -> dict:
         and data.get("status") != STATUS_MATCHED
     )
     return data
+
+
+def is_ready(record: dict) -> bool:
+    """Return True if the attachment record is ready for evidence matching."""
+    return _normalize_status(record.get("status")) == STATUS_MATCHED
 
 
 def create_attachment(
@@ -292,3 +300,47 @@ def public_status(attachment_id: str) -> Optional[dict]:
 
 def public_claim_status(claim_id: str) -> List[dict]:
     return list_attachments(claim_id=claim_id, public=True)
+
+
+def load_sentences_for_attachment(
+    attachment_id: str, *, use_cache: bool = True
+) -> List[dict]:
+    """Load persisted sentence rows for an attachment."""
+    record = get_attachment(attachment_id)
+    if record is None:
+        raise AttachmentNotFound(f"Attachment {attachment_id} not found")
+    if not is_ready(record):
+        raise RuntimeError(
+            f"Attachment {attachment_id} is not ready (status={record.get('status')})"
+        )
+    artifacts = record.get("artifacts") or {}
+    sentences_path = artifacts.get("sentences")
+    if not sentences_path:
+        raise FileNotFoundError(
+            f"Attachment {attachment_id} is missing persisted sentences"
+        )
+    path = Path(sentences_path)
+    if not path.exists():
+        raise FileNotFoundError(path)
+    mtime = path.stat().st_mtime
+    if use_cache:
+        cached = _SENTENCE_CACHE.get(attachment_id)
+        if cached and cached[0] == mtime:
+            return [dict(row) for row in cached[1]]
+    rows: List[dict] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            rows.append(json.loads(line))
+    _SENTENCE_CACHE[attachment_id] = (mtime, rows)
+    return [dict(row) for row in rows]
+
+
+def clear_sentence_cache(attachment_id: Optional[str] = None) -> None:
+    """Invalidate the in-memory sentence cache."""
+    if attachment_id is None:
+        _SENTENCE_CACHE.clear()
+        return
+    _SENTENCE_CACHE.pop(attachment_id, None)

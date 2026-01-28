@@ -114,13 +114,13 @@ class AppSettings(PydanticBaseSettings):
 
     HYBRID_COREF_MODEL: str = Field(
         "biu-nlp/f-coref",  # Default to the well-maintained HF f-coref model
-        env="HYBRID_COREF_MODEL",
+        validation_alias="HYBRID_COREF_MODEL",
         description="HuggingFace repo or local path for f-coref model",
     )
 
     HYBRID_COREF_DEVICE: str = Field(
         "cpu",  # or 'cuda' if you want GPU (and have one)
-        env="HYBRID_COREF_DEVICE",
+        validation_alias="HYBRID_COREF_DEVICE",
         description="Device for f-coref model inference (cpu/cuda)",
     )
 
@@ -203,8 +203,26 @@ class AppSettings(PydanticBaseSettings):
         description="Default reviewer UID/email for claim confirmations",
     )
 
+    # --- Evidence pipeline parameters --------------------------------------
+    EVIDENCE_MAX_WINDOWS: int = Field(
+        500,
+        description="Maximum deterministic windows to load per claim",
+    )
+    EVIDENCE_WINDOW_SIZE: int = Field(
+        3,
+        description="Number of sentences per deterministic window",
+    )
+    EVIDENCE_WINDOW_STRIDE: int = Field(
+        1,
+        description="Stride to use when rolling attachment sentences",
+    )
+    EVIDENCE_MAX_CANDIDATES: int = Field(
+        25,
+        description="Maximum evidence candidates returned to the UI",
+    )
+
 
 # ---------------------------------------------------------------------------
 #  Canonical, application‑wide settings object
 # ---------------------------------------------------------------------------
-settings = AppSettings()
+settings = AppSettings()  # type: ignore[call-arg]

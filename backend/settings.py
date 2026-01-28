@@ -242,6 +242,11 @@ class AppSettings(PydanticBaseSettings):
         300,
         description="Maximum seconds a rerun job may execute before marked stale",
     )
+    EVIDENCE_RERUN_WORKERS: int = Field(
+        1,
+        ge=1,
+        description="Maximum concurrent evidence rerun jobs",
+    )
 
 
 # ---------------------------------------------------------------------------

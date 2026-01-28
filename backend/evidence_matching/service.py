@@ -1,0 +1,325 @@
+"""High-level orchestration for evidence reruns and FastAPI consumption."""
+
+from __future__ import annotations
+
+import logging
+import threading
+import time
+from collections import deque
+from typing import Any, Callable, Sequence
+from uuid import uuid4
+
+from backend import attachment_store
+from backend.settings import AppSettings, settings as app_settings
+
+from . import deterministic_matcher, loaders, serializers
+from .pipeline import EvidencePipeline
+from .store import EvidenceRunStore
+
+logger = logging.getLogger(__name__)
+
+
+class EvidenceMatchingService:
+    """Coordinate evidence pipeline runs, persistence, and rerun queueing."""
+
+    def __init__(
+        self,
+        *,
+        settings: AppSettings | None = None,
+        pipeline: EvidencePipeline | None = None,
+        store: EvidenceRunStore | None = None,
+        max_workers: int | None = None,
+        load_windows: Callable[[str], Sequence[Any]] | None = None,
+        seed_windows: Callable[..., Sequence[Any]] | None = None,
+    ) -> None:
+        """Initialize the service with optional dependency overrides."""
+        self.settings = settings or app_settings
+        self.pipeline = pipeline or EvidencePipeline(settings=self.settings)
+        self.store = store or EvidenceRunStore(settings=self.settings)
+        self.max_workers = max(
+            1, int(max_workers or getattr(self.settings, "EVIDENCE_RERUN_WORKERS", 1))
+        )
+        self._load_claim_windows = load_windows or loaders.load_claim_windows
+        self._seed_windows = seed_windows or deterministic_matcher.seed_windows
+        self._lock = threading.Lock()
+        self._pending_jobs: deque[dict[str, Any]] = deque()
+        self._active_claims: dict[str, dict[str, Any]] = {}
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def ensure_current_run(
+        self,
+        claim_id: str,
+        *,
+        claim_text: str | None = None,
+        cited_attachment_ids: Sequence[str] | None = None,
+        force: bool = False,
+    ) -> dict:
+        """Run the pipeline immediately when attachment state is stale."""
+        if not claim_id:
+            raise ValueError("claim_id is required")
+        latest = self.store.latest_run(claim_id)
+        snapshot = self._attachment_snapshot(claim_id)
+        if not force and latest:
+            previous_state = (latest.get("metadata") or {}).get("attachments_state")
+            if previous_state == snapshot:
+                return latest
+
+        resolved_claim_text = self._resolve_claim_text(claim_id, claim_text, latest)
+        return self._execute_run(
+            claim_id,
+            claim_text=resolved_claim_text,
+            cited_attachment_ids=cited_attachment_ids,
+            attachments_state=snapshot,
+            note="ensure-current",
+        )
+
+    def list_candidates(
+        self,
+        claim_id: str,
+        *,
+        label: str | None = None,
+        include_neutral: bool = True,
+        offset: int = 0,
+        limit: int = 10,
+    ) -> dict:
+        """Return paginated candidates for a claim."""
+        latest = self.store.latest_run(claim_id)
+        if not latest:
+            return {
+                "candidates": [],
+                "total": 0,
+                "offset": offset,
+                "limit": limit,
+                "run": None,
+                "lock_state": self._lock_state(claim_id),
+            }
+
+        candidates = list(latest.get("candidates", []))
+        if label:
+            label_norm = label.lower()
+            candidates = [
+                cand
+                for cand in candidates
+                if (cand.get("label") or "").lower() == label_norm
+            ]
+        if not include_neutral:
+            candidates = [
+                cand
+                for cand in candidates
+                if (cand.get("label") or "").lower() != "neutral"
+            ]
+
+        total = len(candidates)
+        window = candidates[offset : offset + limit if limit else None]
+        return {
+            "candidates": window,
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+            "run": {
+                "run_id": latest.get("run_id"),
+                "created_at": latest.get("created_at"),
+            },
+            "lock_state": self._lock_state(claim_id),
+        }
+
+    def request_rerun(
+        self,
+        claim_id: str,
+        *,
+        claim_text: str | None = None,
+        note: str | None = None,
+        advanced_settings: dict | None = None,
+    ) -> dict:
+        """Enqueue a rerun, spawning background workers up to the concurrency limit."""
+        job = {
+            "job_id": uuid4().hex,
+            "claim_id": claim_id,
+            "claim_text": claim_text,
+            "note": note or "manual",
+            "advanced_settings": dict(advanced_settings or {}),
+            "requested_at": _utcnow(),
+        }
+
+        with self._lock:
+            if (
+                claim_id in self._active_claims
+                or len(self._active_claims) >= self.max_workers
+            ):
+                self._pending_jobs.append(job)
+                position = self._queue_position(claim_id, job["job_id"])
+                status = "queued"
+            else:
+                self._start_job(job)
+                position = 0
+                status = "running"
+
+        return {
+            "job_id": job["job_id"],
+            "status": status,
+            "position": position,
+            "locked": True,
+        }
+
+    def trigger_auto_rerun(
+        self, claim_id: str, *, claim_text: str | None = None
+    ) -> dict:
+        """Best-effort auto-rerun invoked by attachment lifecycle hooks."""
+        return self.request_rerun(
+            claim_id, claim_text=claim_text, note="auto-attachment"
+        )
+
+    def get_history(self, claim_id: str) -> list[dict]:
+        """Expose run history for API responses."""
+        return self.store.history(claim_id)
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _start_job(self, job: dict[str, Any]) -> None:
+        claim_id = job["claim_id"]
+        self._active_claims[claim_id] = {
+            "job_id": job["job_id"],
+            "started_at": _utcnow(),
+            "note": job.get("note"),
+        }
+        thread = threading.Thread(
+            target=self._run_job,
+            args=(job,),
+            daemon=True,
+            name=f"evidence-rerun-{claim_id}",
+        )
+        thread.start()
+
+    def _run_job(self, job: dict[str, Any]) -> None:
+        claim_id = job["claim_id"]
+        try:
+            latest = self.store.latest_run(claim_id)
+            claim_text = self._resolve_claim_text(
+                claim_id, job.get("claim_text"), latest
+            )
+            snapshot = self._attachment_snapshot(claim_id)
+            self._execute_run(
+                claim_id,
+                claim_text=claim_text,
+                cited_attachment_ids=None,
+                attachments_state=snapshot,
+                note=job.get("note"),
+                advanced_settings=job.get("advanced_settings"),
+            )
+        except Exception as exc:  # pragma: no cover - logged for observability
+            logger.exception("Evidence rerun failed for claim %s: %s", claim_id, exc)
+        finally:
+            with self._lock:
+                self._active_claims.pop(claim_id, None)
+                next_job = self._dequeue_job()
+                if next_job:
+                    self._start_job(next_job)
+
+    def _dequeue_job(self) -> dict[str, Any] | None:
+        while self._pending_jobs:
+            job = self._pending_jobs.popleft()
+            if job["claim_id"] in self._active_claims:
+                # Claim currently running; push back to queue tail
+                self._pending_jobs.append(job)
+                continue
+            return job
+        return None
+
+    def _queue_position(self, claim_id: str, job_id: str) -> int:
+        position = 0
+        for pending in self._pending_jobs:
+            if pending["job_id"] == job_id:
+                return position
+            if pending["claim_id"] == claim_id:
+                position += 1
+        return position
+
+    def _execute_run(
+        self,
+        claim_id: str,
+        *,
+        claim_text: str,
+        cited_attachment_ids: Sequence[str] | None,
+        attachments_state: list[dict[str, Any]],
+        note: str | None = None,
+        advanced_settings: dict | None = None,
+    ) -> dict:
+        windows = self._load_claim_windows(claim_id)
+        seeds = self._seed_windows(
+            claim_text,
+            windows,
+            cited_attachment_ids=cited_attachment_ids,
+            settings_override=self.settings,
+        )
+        candidates = self.pipeline.run(
+            claim_id=claim_id,
+            claim_text=claim_text,
+            seeds=seeds,
+        )
+        serialized = serializers.serialize_candidates(candidates)
+        metadata = {
+            "claim_text": claim_text,
+            "attachments_state": attachments_state,
+            "note": note,
+            "advanced_settings": dict(advanced_settings or {}),
+        }
+        return self.store.record_run(claim_id, candidates=serialized, metadata=metadata)
+
+    def _attachment_snapshot(self, claim_id: str) -> list[dict[str, Any]]:
+        records = attachment_store.list_attachments(claim_id=claim_id)
+        snapshot: list[dict[str, Any]] = []
+        for record in records:
+            if not attachment_store.is_ready(record):
+                continue
+            snapshot.append(
+                {
+                    "id": record.get("id"),
+                    "updated_at": record.get("updated_at"),
+                    "status": record.get("status"),
+                }
+            )
+        snapshot.sort(key=lambda entry: entry.get("id") or "")
+        return snapshot
+
+    def _resolve_claim_text(
+        self,
+        claim_id: str,
+        supplied: str | None,
+        latest_run: dict | None,
+    ) -> str:
+        if supplied:
+            return supplied
+        if latest_run:
+            stored = (latest_run.get("metadata") or {}).get("claim_text")
+            if stored:
+                return stored
+        raise ValueError(
+            (
+                "claim_text is required for claim "
+                f"{claim_id!r}. Submit a manual rerun with claim text first."
+            )
+        )
+
+    def _lock_state(self, claim_id: str) -> dict[str, Any]:
+        with self._lock:
+            if claim_id in self._active_claims:
+                return {"status": "running", "locked": True}
+            if any(
+                job for job in self._pending_jobs if job.get("claim_id") == claim_id
+            ):
+                return {"status": "queued", "locked": True}
+        return {"status": "idle", "locked": False}
+
+
+def _utcnow() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+evidence_service = EvidenceMatchingService()
+
+__all__ = ["EvidenceMatchingService", "evidence_service"]

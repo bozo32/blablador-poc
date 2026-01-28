@@ -11,6 +11,7 @@ from uuid import uuid4
 from lxml import etree
 
 from backend import attachment_store, extraction, grobid_client, utils
+from backend.evidence_matching.service import evidence_service
 from backend.settings import settings
 
 
@@ -124,6 +125,17 @@ def process_attachment(
             )
             attachment_store.mark_matched(attachment_id, artifacts)
             logger.info("Attachment %s processed successfully", attachment_id)
+            try:
+                claim_id = str(record.get("claim_id"))
+                if claim_id:
+                    evidence_service.trigger_auto_rerun(claim_id)
+            except (
+                Exception
+            ):  # pragma: no cover - rerun failures shouldn't block pipeline
+                logger.exception(
+                    "Unable to enqueue evidence rerun for claim %s",
+                    record.get("claim_id"),
+                )
             return
         except (
             Exception

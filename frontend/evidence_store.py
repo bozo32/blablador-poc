@@ -61,6 +61,9 @@ class EvidenceStore:
             self.ensure_claim_state(claim_id)
         return claim_id
 
+    def active_claim_id(self) -> Optional[str]:
+        return self._root().get("active_claim_id")
+
     def sync_for_claim(
         self,
         claim_id: str,
@@ -245,6 +248,14 @@ def ensure_claim_state(claim_id: str, **metadata: Any) -> Dict[str, Any]:
     return _get_store().ensure_claim_state(claim_id, **metadata)
 
 
+def set_active_claim(claim_id: Optional[str]) -> Optional[str]:
+    return _get_store().set_active_claim(claim_id)
+
+
+def get_active_claim_id() -> Optional[str]:
+    return _get_store().active_claim_id()
+
+
 def sync_for_claim(
     claim_id: str,
     *,
@@ -301,6 +312,8 @@ def mark_claim_stale(claim_id: str, *, reason: Optional[str] = None) -> Dict[str
 __all__ = [
     "EvidenceStore",
     "ensure_claim_state",
+    "set_active_claim",
+    "get_active_claim_id",
     "sync_for_claim",
     "apply_filter",
     "load_more",

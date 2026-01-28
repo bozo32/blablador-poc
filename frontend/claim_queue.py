@@ -9,6 +9,7 @@ from typing import Dict, List, Optional
 
 import streamlit as st
 
+from frontend import evidence_store
 from frontend.clipboard import render_copy_to_clipboard
 from frontend.ingestion_api import get_reference_retrieval
 
@@ -151,6 +152,14 @@ def get_claim_options(max_claim_chars: int = 60) -> List[dict]:
     return options
 
 
+def set_active_claim(claim_id: Optional[str]) -> Optional[str]:
+    if claim_id:
+        init_claim_registry()
+        if claim_id not in _registry():
+            raise KeyError(f"Unknown claim: {claim_id}")
+    return evidence_store.set_active_claim(claim_id)
+
+
 def _claim_option_label(record: dict, *, max_claim_chars: int = 60) -> str:
     callout = record.get("callout") or "Unlabeled citation"
     claim_text = (record.get("claim") or "Untitled claim").strip()
@@ -169,6 +178,7 @@ def record_timeline_event(
         0, {"event": event, "detail": detail, "at": datetime.utcnow().isoformat() + "Z"}
     )
     del entries[TIMELINE_MAX_EVENTS:]
+    _notify_evidence_refresh(claim_id, event, detail)
 
 
 def get_timeline(claim_id: str) -> List[dict]:
@@ -334,3 +344,21 @@ def render_retrieval_instructions(
                 st.markdown(f"- **{label}:** {title}")
                 if confidence is not None:
                     st.caption(f"Confidence: {confidence:.2f}")
+
+
+def _notify_evidence_refresh(
+    claim_id: Optional[str], event: str, detail: Optional[dict]
+) -> None:
+    if not claim_id or not _should_refresh_evidence(event, detail):
+        return
+    evidence_store.mark_claim_stale(claim_id, reason=event)
+    if evidence_store.get_active_claim_id() == claim_id:
+        evidence_store.sync_for_claim(claim_id, force=True)
+
+
+def _should_refresh_evidence(event: str, detail: Optional[dict]) -> bool:
+    watched = {"attached", "assigned", "auto-matched", "detached", "dropped", "matched"}
+    if event in watched:
+        return True
+    status = (detail or {}).get("status") if detail else None
+    return status == "matched"

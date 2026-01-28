@@ -26,7 +26,7 @@ PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from frontend import attachment_queue, claim_queue
+from frontend import attachment_queue, claim_queue, evidence_store
 from frontend.evidence_api import show_api_error
 
 from backend import utils
@@ -926,6 +926,85 @@ def render_queue_item(item: dict) -> None:
     st.markdown("</div>", unsafe_allow_html=True)
 
 
+def render_evidence_panel() -> None:
+    st.subheader("Ranked evidence preview")
+    claims = claim_queue.get_claim_records()
+    if not claims:
+        st.info("Run segmentation to populate claims before ranking evidence.")
+        return
+    options = claim_queue.get_claim_options()
+    claim_ids = [opt.get("id") for opt in options if opt.get("id")]
+    if not claim_ids:
+        st.info("Claims are missing identifiers; rerun segmentation if needed.")
+        return
+    label_map = {opt["id"]: opt["label"] for opt in options if opt.get("id")}
+    store = evidence_store.EvidenceStore()
+    active_claim = store.active_claim_id() or claim_ids[0]
+    selected_claim = st.selectbox(
+        "Focus claim",
+        claim_ids,
+        index=claim_ids.index(active_claim) if active_claim in claim_ids else 0,
+        format_func=lambda cid: label_map.get(cid, cid),
+        key="evidence-claim-select",
+    )
+    if selected_claim != active_claim:
+        claim_queue.set_active_claim(selected_claim)
+        store = evidence_store.EvidenceStore()
+    state = store.sync_for_claim(selected_claim)
+    rerun_state = state.get("rerun", {})
+    st.caption(f"Rerun status: {rerun_state.get('status', 'idle')}")
+
+    action_cols = st.columns(2)
+    with action_cols[0]:
+        disabled = bool(rerun_state.get("inflight") or state.get("is_loading"))
+        if st.button(
+            "Request rerun",
+            disabled=disabled,
+            key="evidence-rerun-btn",
+        ):
+            store.queue_rerun(selected_claim, note="manual rerun")
+            state = store.sync_for_claim(selected_claim, force=True)
+    with action_cols[1]:
+        remaining = state.get("total", 0) - len(state.get("candidates", []))
+        load_disabled = remaining <= 0 or state.get("is_loading")
+        if st.button(
+            "Load more candidates",
+            disabled=load_disabled,
+            key="evidence-load-btn",
+        ):
+            state = store.load_more(selected_claim)
+
+    if state.get("last_error"):
+        st.warning(f"Evidence fetch failed: {state['last_error']}")
+    if state.get("is_loading"):
+        render_skeleton(lines=4)
+        return
+    candidates = state.get("candidates") or []
+    if not candidates:
+        st.info("Evidence will appear once attachments finish matching this claim.")
+        return
+
+    last_payload = state.get("last_payload") or {}
+    meta = last_payload.get("meta") or {}
+    total = state.get("total", len(candidates))
+    remaining_candidates = meta.get("remaining_candidates")
+    caption = f"Showing {len(candidates)} of {total} candidates"
+    if remaining_candidates not in (None, 0):
+        caption += f" • {remaining_candidates} remaining"
+    st.caption(caption)
+
+    for idx, candidate in enumerate(candidates, start=1):
+        snippet = candidate.get("text") or "Snippet unavailable"
+        if len(snippet) > 320:
+            snippet = snippet[:317].rstrip() + "…"
+        label = candidate.get("label", "unknown").title()
+        location = candidate.get("metadata", {}).get("page") or "Page unknown"
+        st.markdown(
+            f"**{idx}. [{label}]** {snippet}\n\n" f"_Location: {location}_",
+            unsafe_allow_html=False,
+        )
+
+
 def format_reference_summary(reference: dict, resolution: dict) -> str:
     title = (resolution or {}).get("title") or (reference or {}).get("raw_reference")
     year = (resolution or {}).get("year")
@@ -1755,6 +1834,7 @@ def draw_main():
     st.title("Citation-Support Checker")
     draw_ingestion_panel()
     render_attachment_workspace()
+    render_evidence_panel()
     st.divider()
     if not st.session_state.started:
         st.info("Configure settings then click Start segmentation.")

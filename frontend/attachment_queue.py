@@ -116,6 +116,7 @@ def _request(method: str, path: str, **kwargs) -> Optional[dict]:
 def _hydrate_from_backend(item: dict, payload: dict) -> None:
     if not payload:
         return
+    previous_status = item.get("status")
     history = payload.get("history") or payload.get("timeline") or []
     item["attachment_id"] = payload.get("id")
     item["status"] = _normalize_status(
@@ -129,6 +130,16 @@ def _hydrate_from_backend(item: dict, payload: dict) -> None:
     item["filename"] = payload.get("filename") or item.get("filename")
     item["size"] = payload.get("size") or item.get("size")
     item["backend_details"] = payload
+    if (
+        payload.get("claim_id")
+        and previous_status != "matched"
+        and item.get("status") == "matched"
+    ):
+        claim_queue.record_timeline_event(
+            payload.get("claim_id"),
+            "matched",
+            {"attachment_id": payload.get("id")},
+        )
 
 
 def _find_by_attachment_id(attachment_id: Optional[str]) -> Optional[dict]:

@@ -117,6 +117,9 @@ def test_store_sync_load_more_persistence(stub_streamlit):
     assert len(state["candidates"]) == 4
     assert api.list_calls[-1][1]["limit"] == 4
 
+    state = store.sync_for_claim("claim-sync")
+    assert len(state["candidates"]) == 4
+
 
 def test_store_apply_filter_toggles_label(stub_streamlit):
     api = StubEvidenceApi()

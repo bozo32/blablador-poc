@@ -5,7 +5,8 @@ from pathlib import Path
 import pytest
 
 from backend import attachment_store
-from backend.evidence_matching import loaders
+from backend.evidence_matching import deterministic_matcher, loaders
+from backend.evidence_matching.types import Provenance
 from backend.settings import settings
 
 
@@ -98,3 +99,82 @@ def test_loader_preserves_embeddings(tmp_path, monkeypatch):
 
     assert windows
     assert windows[0].spans[0].embedding == vector
+
+
+def test_matcher_respects_score_threshold(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "EVIDENCE_WINDOW_SIZE", 1)
+    monkeypatch.setattr(settings, "EVIDENCE_SEED_LIMIT", 10)
+    _make_attachment(
+        tmp_path,
+        "claim-threshold",
+        [
+            {"sentence_id": "t1", "text": "alpha evidence", "page": 1, "position": 0},
+            {"sentence_id": "t2", "text": "beta evidence", "page": 1, "position": 1},
+        ],
+    )
+    _make_attachment(
+        tmp_path,
+        "claim-threshold",
+        [
+            {
+                "sentence_id": "t3",
+                "text": "completely unrelated",
+                "page": 2,
+                "position": 0,
+            },
+        ],
+    )
+    monkeypatch.setattr(settings, "EVIDENCE_BM25_MIN_SCORE", 0.0)
+    windows = loaders.load_claim_windows("claim-threshold")
+    baseline = deterministic_matcher.seed_windows("alpha evidence", windows)
+    assert len(baseline) >= 2
+    low_score = float(baseline[-1].scores.bm25 or 0.0)
+    monkeypatch.setattr(settings, "EVIDENCE_BM25_MIN_SCORE", low_score + 0.1)
+    filtered = deterministic_matcher.seed_windows("alpha evidence", windows)
+    assert len(filtered) < len(baseline)
+
+
+def test_matcher_tags_provenance_and_badges(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "EVIDENCE_WINDOW_SIZE", 1)
+    monkeypatch.setattr(settings, "EVIDENCE_SEED_LIMIT", 10)
+    cited_id = _make_attachment(
+        tmp_path,
+        "claim-provenance",
+        [{"sentence_id": "p1", "text": "alpha mechanism", "page": 1, "position": 0}],
+    )
+    _make_attachment(
+        tmp_path,
+        "claim-provenance",
+        [{"sentence_id": "p2", "text": "beta mechanism", "page": 1, "position": 0}],
+    )
+    monkeypatch.setattr(settings, "EVIDENCE_BM25_MIN_SCORE", 0.0)
+    windows = loaders.load_claim_windows("claim-provenance")
+    seeds = deterministic_matcher.seed_windows(
+        "alpha beta", windows, cited_attachment_ids=[cited_id]
+    )
+    cited_candidates = [seed for seed in seeds if seed.provenance is Provenance.CITED]
+    assert cited_candidates, "Expected at least one cited candidate"
+    heuristic_candidates = [
+        seed for seed in seeds if seed.provenance is Provenance.HEURISTIC
+    ]
+    assert heuristic_candidates, "Expected at least one heuristic candidate"
+    assert "ambiguous-attachment" in heuristic_candidates[0].badges
+
+
+def test_matcher_is_reproducible(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "EVIDENCE_WINDOW_SIZE", 1)
+    monkeypatch.setattr(settings, "EVIDENCE_SEED_LIMIT", 10)
+    monkeypatch.setattr(settings, "EVIDENCE_BM25_MIN_SCORE", 0.0)
+    _make_attachment(
+        tmp_path,
+        "claim-repro",
+        [
+            {"sentence_id": "r1", "text": "alpha beta", "page": 1, "position": 0},
+            {"sentence_id": "r2", "text": "beta gamma", "page": 1, "position": 1},
+        ],
+    )
+    windows = loaders.load_claim_windows("claim-repro")
+    first = deterministic_matcher.seed_windows("alpha beta", windows)
+    second = deterministic_matcher.seed_windows("alpha beta", windows)
+    assert [cand.id for cand in first] == [cand.id for cand in second]
+    assert [cand.scores.bm25 for cand in first] == [cand.scores.bm25 for cand in second]

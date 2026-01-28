@@ -220,6 +220,14 @@ class AppSettings(PydanticBaseSettings):
         25,
         description="Maximum evidence candidates returned to the UI",
     )
+    EVIDENCE_BM25_MIN_SCORE: float = Field(
+        0.0,
+        description="Minimum BM25 score required for deterministic seeds",
+    )
+    EVIDENCE_SEED_LIMIT: int = Field(
+        50,
+        description="Upper bound on deterministic BM25 seeds",
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-01-23)
 
 **Core value:** Readers can validate a citation by linking a claim to supporting (or contradicting) evidence from the cited source, with the judgment captured and reusable.
-**Current focus:** Phase 4 - Evidence Attachment
+**Current focus:** Phase 5 - Evidence Matching + Ranking
 
 ## Current Position
 
-Phase: 4 of 8 (Evidence Attachment)
-Plan: 6 of 6 in current phase
-Status: Phase complete
-Last activity: 2026-01-27 — Completed 04-06-PLAN.md
+Phase: 5 of 8 (Evidence Matching + Ranking)
+Plan: 1 of 4 in current phase
+Status: In progress
+Last activity: 2026-01-28 — Completed 05-01-PLAN.md
 
-Progress: ██████████ 100%
+Progress: █████████░ 87%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 15
-- Average duration: 10 min
-- Total execution time: 2.4 hours
+- Total plans completed: 20
+- Average duration: 11 min
+- Total execution time: 2.7 hours
 
 **By Phase:**
 
@@ -30,10 +30,11 @@ Progress: ██████████ 100%
 | 1 | 4 | 4 | 4 min |
 | 2 | 6 | 6 | 4 min |
 | 3 | 3 | 3 | 6 min |
-| 4 | 3 | 3 | 45 min |
+| 4 | 6 | 6 | 45 min |
+| 5 | 1 | 4 | 20 min |
 
 **Recent Trend:**
-- Last 5 plans: 04-03 (20 min), 02-06 (1 min), 02-05 (6 min), 02-04 (1 min), 02-03 (1 min)
+- Last 5 plans: 05-01 (20 min), 04-03 (20 min), 02-06 (1 min), 02-05 (6 min), 02-04 (1 min)
 - Trend: Building
 
 ## Accumulated Context
@@ -43,6 +44,9 @@ Progress: ██████████ 100%
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
+ - Evidence pipeline caches attachment sentences centrally so deterministic windows reuse a single source of truth (05-01).
+ - BM25 seeding now carries provenance/badge metadata with spaCy tokenization and regex fallback for deterministic output (05-01).
+ - EvidencePipeline serializes ranked candidates (scores + highlights) for downstream API consumers (05-01).
  - Store attachment metadata + timelines as JSON on disk to guarantee resumable processing (04-03).
  - Streamlit attachment queue now polls backend statuses (no client-side simulation) and surfaces retry/diagnostics affordances (04-03).
  - Retrieval instructions copy control uses a reusable clipboard helper with manual fallback so reviewers can trust the copy action (04-04).
@@ -63,6 +67,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-01-27 18:58
-Stopped at: Completed 04-03-PLAN.md
+Last session: 2026-01-28 07:28
+Stopped at: Completed 05-01-PLAN.md
 Resume file: None

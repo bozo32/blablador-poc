@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-01-23)
 ## Current Position
 
 Phase: 5 of 8 (Evidence Matching + Ranking)
-Plan: 3 of 4 in current phase
-Status: In progress
-Last activity: 2026-01-28 — Completed 05-03-PLAN.md
+Plan: 4 of 4 in current phase
+Status: Phase complete
+Last activity: 2026-01-28 — Completed 05-04-PLAN.md
 
-Progress: ██████████ 96%
+Progress: ██████████ 100%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 22
-- Average duration: 13 min
-- Total execution time: 3.3 hours
+- Total plans completed: 23
+- Average duration: 14 min
+- Total execution time: 3.6 hours
 
 **By Phase:**
 
@@ -31,10 +31,10 @@ Progress: ██████████ 96%
 | 2 | 6 | 6 | 4 min |
 | 3 | 3 | 3 | 6 min |
 | 4 | 6 | 6 | 45 min |
-| 5 | 3 | 4 | 19 min |
+| 5 | 4 | 4 | 20 min |
 
 **Recent Trend:**
-- Last 5 plans: 05-03 (15 min), 05-02 (22 min), 05-01 (20 min), 04-03 (20 min), 02-06 (1 min)
+- Last 5 plans: 05-04 (23 min), 05-03 (15 min), 05-02 (22 min), 05-01 (20 min), 04-03 (20 min)
 - Trend: Building
 
 ## Accumulated Context
@@ -52,6 +52,8 @@ Recent decisions affecting current work:
  - `/claims/{claim_id}/evidence*` FastAPI routes deliver candidates, rerun status, and run history for the frontend (05-02).
  - Evidence store auto-refreshes when attachment timeline events reach matched so reviewers see fresh candidates without rerunning manually (05-03).
  - Streamlit evidence panel keeps claim selection, rerun/load-more controls, and history in sync through the session-backed EvidenceStore (05-03).
+ - Evidence cards now render via a reusable component with keyboard navigation, inline actions, and shared styling (05-04).
+ - Inline share/pin/Open PDF actions are handled inside the session-backed store until backend endpoints land, with rationale sidebar + export helpers covering reviewer context (05-04).
  - Store attachment metadata + timelines as JSON on disk to guarantee resumable processing (04-03).
  - Streamlit attachment queue now polls backend statuses (no client-side simulation) and surfaces retry/diagnostics affordances (04-03).
  - Retrieval instructions copy control uses a reusable clipboard helper with manual fallback so reviewers can trust the copy action (04-04).
@@ -72,6 +74,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-01-28 08:28
-Stopped at: Completed 05-03-PLAN.md
+Last session: 2026-01-28 18:08
+Stopped at: Completed 05-04-PLAN.md
 Resume file: None

@@ -55,6 +55,8 @@ Readers can validate a citation by linking a claim to supporting (or contradicti
 | v1 success = end-to-end citation validation | Focus on complete user workflow | — Pending |
 | Rework pipeline as needed | Existing flow needs improvement for new UX | — Pending |
 | Primary users are researchers | Design for scholarly review workflows | — Pending |
+| Persist attachment claim_text with metadata | Enables reruns to reuse the UI-provided text without manual seeding | Implemented (05-05) |
+| Resolve claim_text via attachment metadata before failing | Avoids 409 errors on the first evidence fetch when text already exists | Implemented (05-05) |
 
 ---
-*Last updated: 2026-01-23 after initialization*
+*Last updated: 2026-01-28 after 05-05 plan*

@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-01-23)
 ## Current Position
 
 Phase: 5 of 8 (Evidence Matching + Ranking)
-Plan: 4 of 4 in current phase
-Status: Phase complete
-Last activity: 2026-01-28 — Completed 05-04-PLAN.md
+Plan: 5 of 6 in current phase
+Status: In progress
+Last activity: 2026-01-28 — Completed 05-05-PLAN.md
 
-Progress: ██████████ 100%
+Progress: █████████░░ 84%
 
 ## Performance Metrics
 
@@ -58,7 +58,9 @@ Recent decisions affecting current work:
  - Streamlit attachment queue now polls backend statuses (no client-side simulation) and surfaces retry/diagnostics affordances (04-03).
  - Retrieval instructions copy control uses a reusable clipboard helper with manual fallback so reviewers can trust the copy action (04-04).
  - Attachment lifecycle emits pending → converting → parsing → matched on both backend and UI, with queue summary chips reflecting the counts (04-05).
- - Queue auto-matches dropped files via claim heuristics and highlights ambiguous attachments with manual reassignment controls (04-06).
+-  - Queue auto-matches dropped files via claim heuristics and highlights ambiguous attachments with manual reassignment controls (04-06).
+-  - Persist attachment claim_text so evidence reruns inherit the UI-provided text (05-05).
+-  - EvidenceMatchingService resolves claim_text from attachment metadata before raising 409 so new claims succeed (05-05).
 
 - Use local citation graph data when DOI resolution is unavailable to avoid OpenAlex 404s (02-02).
 - Prefer GROBID consolidation when resolver sources disagree; warn that OpenAlex may return citing articles (02-06).

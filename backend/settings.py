@@ -229,6 +229,20 @@ class AppSettings(PydanticBaseSettings):
         description="Upper bound on deterministic BM25 seeds",
     )
 
+    EVIDENCE_STORE_DIR: Path = Field(
+        Path(__file__).parent.parent / "data" / "evidence_runs",
+        description="Root directory for persisted evidence runs",
+    )
+    EVIDENCE_HISTORY_DEPTH: int = Field(
+        5,
+        description="Maximum historical runs to retain per claim",
+        ge=1,
+    )
+    EVIDENCE_RERUN_TIMEOUT_SECONDS: int = Field(
+        300,
+        description="Maximum seconds a rerun job may execute before marked stale",
+    )
+
 
 # ---------------------------------------------------------------------------
 #  Canonical, application‑wide settings object

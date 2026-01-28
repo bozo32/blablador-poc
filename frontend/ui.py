@@ -27,6 +27,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from frontend import attachment_queue, claim_queue
+from frontend.evidence_api import show_api_error
 
 from backend import utils
 from backend.bl_client import BlabladorClient
@@ -345,13 +346,6 @@ def normalize_records(records: list[dict]) -> list[dict]:
     return [
         {key: stringify_value(val) for key, val in record.items()} for record in records
     ]
-
-
-def show_api_error(message: str) -> None:
-    if hasattr(st, "toast"):
-        st.toast(message)
-    else:
-        st.error(message)
 
 
 def render_skeleton(lines: int = 3) -> None:

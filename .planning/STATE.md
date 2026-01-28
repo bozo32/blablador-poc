@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-01-23)
 ## Current Position
 
 Phase: 5 of 8 (Evidence Matching + Ranking)
-Plan: 1 of 4 in current phase
+Plan: 2 of 4 in current phase
 Status: In progress
-Last activity: 2026-01-28 — Completed 05-01-PLAN.md
+Last activity: 2026-01-28 — Completed 05-02-PLAN.md
 
-Progress: █████████░ 87%
+Progress: ██████████ 91%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 20
-- Average duration: 11 min
-- Total execution time: 2.7 hours
+- Total plans completed: 21
+- Average duration: 12 min
+- Total execution time: 3.0 hours
 
 **By Phase:**
 
@@ -31,10 +31,10 @@ Progress: █████████░ 87%
 | 2 | 6 | 6 | 4 min |
 | 3 | 3 | 3 | 6 min |
 | 4 | 6 | 6 | 45 min |
-| 5 | 1 | 4 | 20 min |
+| 5 | 2 | 4 | 21 min |
 
 **Recent Trend:**
-- Last 5 plans: 05-01 (20 min), 04-03 (20 min), 02-06 (1 min), 02-05 (6 min), 02-04 (1 min)
+- Last 5 plans: 05-02 (22 min), 05-01 (20 min), 04-03 (20 min), 02-06 (1 min), 02-05 (6 min)
 - Trend: Building
 
 ## Accumulated Context
@@ -47,6 +47,9 @@ Recent decisions affecting current work:
  - Evidence pipeline caches attachment sentences centrally so deterministic windows reuse a single source of truth (05-01).
  - BM25 seeding now carries provenance/badge metadata with spaCy tokenization and regex fallback for deterministic output (05-01).
  - EvidencePipeline serializes ranked candidates (scores + highlights) for downstream API consumers (05-01).
+ - Evidence runs now persist to disk with history + delta metadata to power audits (05-02).
+ - EvidenceMatchingService orchestrates reruns, auto-refresh after attachments, and exposes list/history helpers (05-02).
+ - `/claims/{claim_id}/evidence*` FastAPI routes deliver candidates, rerun status, and run history for the frontend (05-02).
  - Store attachment metadata + timelines as JSON on disk to guarantee resumable processing (04-03).
  - Streamlit attachment queue now polls backend statuses (no client-side simulation) and surfaces retry/diagnostics affordances (04-03).
  - Retrieval instructions copy control uses a reusable clipboard helper with manual fallback so reviewers can trust the copy action (04-04).
@@ -67,6 +70,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-01-28 07:28
-Stopped at: Completed 05-01-PLAN.md
+Last session: 2026-01-28 07:58
+Stopped at: Completed 05-02-PLAN.md
 Resume file: None

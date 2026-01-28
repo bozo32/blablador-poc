@@ -97,7 +97,7 @@ Plans:
 **Plans:** 4 plans
 Plans:
 - [x] 05-01-PLAN.md — Backend evidence pipeline foundation
-- [ ] 05-02-PLAN.md — Evidence service + FastAPI endpoints
+- [x] 05-02-PLAN.md — Evidence service + FastAPI endpoints
 - [ ] 05-03-PLAN.md — Evidence store + claim sync wiring
 - [ ] 05-04-PLAN.md — Evidence board UI and rationale sidebar
 
@@ -141,7 +141,7 @@ Phases execute in numeric order: 2 → 2.1 → 2.2 → 3 → 3.1 → 4
 | 2. Citation Context Navigation | 6/6 | Complete | 2026-01-24 |
 | 3. Claim Selection + Editing | 3/3 | Complete | 2026-01-25 |
 | 4. Evidence Attachment | 6/6 | Complete | 2026-01-27 |
-| 5. Evidence Matching + Ranking | 0/4 | Not started | - |
+| 5. Evidence Matching + Ranking | 2/4 | In progress | - |
 | 6. Evidence Review + Selection | 0/TBD | Not started | - |
 | 7. Validation + Export | 0/TBD | Not started | - |
 | 8. Workspace Organization | 0/TBD | Not started | - |

@@ -254,6 +254,7 @@ def create_claim_attachment(
             filename=payload.filename,
             size_bytes=payload.size_bytes,
             reference_hint=payload.reference_hint,
+            claim_text=payload.claim_text,
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

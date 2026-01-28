@@ -324,6 +324,10 @@ class AttachmentStatus(BaseModel):
     max_attempts: Optional[int] = None
     retry_available: bool = True
     artifacts: Optional[Union[AttachmentArtifactPaths, dict]] = None
+    claim_text: Optional[str] = Field(
+        None,
+        description="Claim text supplied with this attachment",
+    )
 
 
 class AttachmentCreateRequest(BaseModel):
@@ -332,6 +336,10 @@ class AttachmentCreateRequest(BaseModel):
     filename: Optional[str] = None
     size_bytes: Optional[int] = None
     reference_hint: Optional[dict] = None
+    claim_text: Optional[str] = Field(
+        None,
+        description="Optional claim text to persist with the attachment",
+    )
 
 
 class AttachmentResponse(BaseModel):

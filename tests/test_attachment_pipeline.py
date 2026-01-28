@@ -32,6 +32,7 @@ def test_process_attachment_creates_artifacts(tmp_path, monkeypatch):
         claim_id="claim-1",
         doc_id="doc-9",
         local_path=source,
+        claim_text="Pipeline claim text",
     )
 
     monkeypatch.setattr(
@@ -55,6 +56,10 @@ def test_process_attachment_creates_artifacts(tmp_path, monkeypatch):
     sentences_path = Path(artifacts["sentences"])
     rows = [json.loads(line) for line in sentences_path.read_text().splitlines()]
     assert rows[0]["embedding"] == [1.0]
+    assert updated["claim_text"] == "Pipeline claim text"
+    public = attachment_store.public_status(record["id"])
+    assert public is not None
+    assert public["claim_text"] == "Pipeline claim text"
 
 
 def test_process_attachment_marks_error_after_retries(tmp_path, monkeypatch):

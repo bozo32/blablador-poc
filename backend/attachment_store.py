@@ -112,6 +112,7 @@ def create_attachment(
     filename: Optional[str] = None,
     size_bytes: Optional[int] = None,
     reference_hint: Optional[dict] = None,
+    claim_text: Optional[str] = None,
 ) -> dict:
     source_path = Path(local_path)
     if not source_path.exists():
@@ -140,6 +141,7 @@ def create_attachment(
         "timeline": [],
         "file_path": str(dest_path),
         "reference_hint": reference_hint or {},
+        "claim_text": claim_text,
         "attempts": 0,
         "max_attempts": DEFAULT_MAX_ATTEMPTS,
         "artifacts": {},

@@ -1,4 +1,4 @@
-from typing import Any, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -267,7 +267,7 @@ class ClaimConfirmationRequest(BaseModel):
     segmentation_model: Optional[str] = None
     reviewer_uid: str
     confirmed_claims: List[ConfirmedClaim] = Field(
-        ..., min_items=1, description="Confirmed claim segments for this sentence"
+        ..., min_length=1, description="Confirmed claim segments for this sentence"
     )
 
 
@@ -340,3 +340,53 @@ class AttachmentResponse(BaseModel):
 
 class AttachmentListResponse(BaseModel):
     attachments: List[AttachmentStatus]
+
+
+class EvidenceCandidatePayload(BaseModel):
+    id: str
+    claim_id: str
+    attachment_id: str
+    label: str
+    text: str
+    scores: Dict[str, Any] = Field(default_factory=dict)
+    badges: List[str] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    spans: List[Dict[str, Any]] = Field(default_factory=list)
+    highlights: List[Dict[str, Any]] = Field(default_factory=list)
+    token_saliencies: Optional[List[float]] = None
+    delta: Optional[Dict[str, Any]] = None
+
+
+class EvidenceListResponse(BaseModel):
+    claim_id: str
+    candidates: List[EvidenceCandidatePayload]
+    total: int
+    offset: int
+    limit: int
+    lock_state: Dict[str, Any]
+    run: Optional[Dict[str, Any]] = None
+
+
+class EvidenceHistoryEntry(BaseModel):
+    run_id: str
+    created_at: str
+    summary: Dict[str, Any] = Field(default_factory=dict)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class EvidenceHistoryResponse(BaseModel):
+    claim_id: str
+    runs: List[EvidenceHistoryEntry]
+
+
+class EvidenceRerunRequest(BaseModel):
+    claim_text: Optional[str] = None
+    note: Optional[str] = None
+    advanced_settings: Optional[Dict[str, Any]] = None
+
+
+class EvidenceRerunResponse(BaseModel):
+    job_id: str
+    status: str
+    position: int
+    locked: bool

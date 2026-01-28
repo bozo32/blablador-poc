@@ -27,6 +27,7 @@ from backend import (
     utils,
 )
 from backend.nli import assess
+from backend.evidence_matching.service import evidence_service
 
 try:
     from transformers import AdamW  # noqa: F401
@@ -243,7 +244,7 @@ def select_resolution_source(
 def create_claim_attachment(
     claim_id: str,
     payload: schemas.AttachmentCreateRequest,
-    background_tasks: Optional[BackgroundTasks] = None,
+    background_tasks: BackgroundTasks,
 ):
     try:
         record = attachment_store.create_attachment(
@@ -286,7 +287,8 @@ def get_attachment_status(attachment_id: str):
     "/attachments/{attachment_id}/retry", response_model=schemas.AttachmentResponse
 )
 def retry_attachment(
-    attachment_id: str, background_tasks: Optional[BackgroundTasks] = None
+    attachment_id: str,
+    background_tasks: BackgroundTasks,
 ):
     try:
         attachment_store.reset_for_retry(attachment_id)
@@ -417,6 +419,83 @@ def get_citation_graph(
 def confirm_claims(payload: schemas.ClaimConfirmationRequest):
     inserted = claim_store.persist_confirmed_claims(payload)
     return {"inserted": inserted}
+
+
+@app.get(
+    "/claims/{claim_id}/evidence",
+    response_model=schemas.EvidenceListResponse,
+)
+def list_claim_evidence(
+    claim_id: str,
+    label: Optional[str] = None,
+    offset: int = 0,
+    limit: int = 10,
+    include_neutral: bool = True,
+    pinned_only: bool = False,
+    claim_text: Optional[str] = None,
+):
+    try:
+        evidence_service.ensure_current_run(claim_id, claim_text=claim_text)
+    except ValueError as exc:
+        latest = evidence_service.store.latest_run(claim_id)
+        if latest is None:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    payload = evidence_service.list_candidates(
+        claim_id,
+        label=label,
+        include_neutral=include_neutral,
+        offset=offset,
+        limit=limit,
+    )
+    return schemas.EvidenceListResponse(
+        claim_id=claim_id,
+        candidates=[
+            schemas.EvidenceCandidatePayload(**cand) for cand in payload["candidates"]
+        ],
+        total=payload["total"],
+        offset=payload["offset"],
+        limit=payload["limit"],
+        lock_state=payload["lock_state"],
+        run=payload.get("run"),
+    )
+
+
+@app.post(
+    "/claims/{claim_id}/evidence/rerun",
+    response_model=schemas.EvidenceRerunResponse,
+)
+def request_evidence_rerun(
+    claim_id: str, payload: schemas.EvidenceRerunRequest
+) -> schemas.EvidenceRerunResponse:
+    job = evidence_service.request_rerun(
+        claim_id,
+        claim_text=payload.claim_text,
+        note=payload.note,
+        advanced_settings=payload.advanced_settings,
+    )
+    return schemas.EvidenceRerunResponse(**job)
+
+
+@app.get(
+    "/claims/{claim_id}/evidence/history",
+    response_model=schemas.EvidenceHistoryResponse,
+)
+def list_evidence_history(
+    claim_id: str, limit: int = 5
+) -> schemas.EvidenceHistoryResponse:
+    runs = evidence_service.get_history(claim_id)
+    if limit > 0:
+        runs = runs[:limit]
+    entries = [
+        schemas.EvidenceHistoryEntry(
+            run_id=run.get("run_id", "unknown"),
+            created_at=run.get("created_at", ""),
+            summary=run.get("summary", {}),
+            metadata=run.get("metadata", {}),
+        )
+        for run in runs
+    ]
+    return schemas.EvidenceHistoryResponse(claim_id=claim_id, runs=entries)
 
 
 # ---------- /segment endpoint ----------

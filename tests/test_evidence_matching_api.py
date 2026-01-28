@@ -1,11 +1,72 @@
 from __future__ import annotations
 
+import importlib.machinery
+import sys
 import threading
 import time
+import types
+from typing import cast
 
 import pytest
+from fastapi.testclient import TestClient
+
+
+class _FakeFaissIndex:
+    def __init__(self, *_args, **_kwargs):
+        self._rows = 0
+
+    def add(self, *_args, **_kwargs):  # pragma: no cover - stubbed behavior
+        return None
+
+    def search(self, arr, k):  # pragma: no cover - stubbed behavior
+        try:
+            row_count = len(arr)
+        except TypeError:
+            row_count = 1
+        distances = [[0.0] * k for _ in range(row_count)]
+        indices = [[0] * k for _ in range(row_count)]
+        return distances, indices
+
+
+_fake_faiss = types.ModuleType("faiss")
+setattr(_fake_faiss, "IndexFlatIP", _FakeFaissIndex)
+setattr(_fake_faiss, "normalize_L2", lambda arr: arr)
+setattr(_fake_faiss, "write_index", lambda *_args, **_kwargs: None)
+setattr(_fake_faiss, "read_index", lambda *_args, **_kwargs: _FakeFaissIndex())
+setattr(_fake_faiss, "__spec__", importlib.machinery.ModuleSpec("faiss", loader=None))
+sys.modules.setdefault("faiss", _fake_faiss)
+
+
+_fake_retriever = types.ModuleType("backend.retriever")
+
+
+class _StubRetriever:  # pragma: no cover - stub for imports
+    def __init__(self, *args, **kwargs):
+        self.index = None
+
+    def build(self, *_args, **_kwargs):
+        return None
+
+    def load(self):
+        return None
+
+    def search(self, *_args, **_kwargs):
+        return [], []
+
+
+setattr(_fake_retriever, "Retriever", _StubRetriever)
+setattr(_fake_retriever, "build_all", lambda *args, **kwargs: {})
+setattr(
+    _fake_retriever,
+    "__spec__",
+    importlib.machinery.ModuleSpec("backend.retriever", loader=None),
+)
+sys.modules.setdefault("backend.retriever", _fake_retriever)
+
 
 from backend import attachment_pipeline, attachment_store
+import backend.main as backend_main
+from backend.evidence_matching.pipeline import EvidencePipeline
 from backend.evidence_matching.service import EvidenceMatchingService
 from backend.evidence_matching.store import EvidenceRunStore
 from backend.evidence_matching.types import EvidenceCandidate, EvidenceLabel, RankScores
@@ -165,7 +226,7 @@ def test_service_ensure_current_run_tracks_snapshot(monkeypatch, service_store):
 
     service = EvidenceMatchingService(
         settings=settings,
-        pipeline=SimplePipeline(),
+        pipeline=cast(EvidencePipeline, SimplePipeline()),
         store=service_store,
         load_windows=lambda claim_id: ["window"],
         seed_windows=lambda *args, **kwargs: candidates,
@@ -223,7 +284,7 @@ def test_service_request_rerun_serializes_queue(monkeypatch, service_store):
 
     service = EvidenceMatchingService(
         settings=settings,
-        pipeline=BlockingPipeline(),
+        pipeline=cast(EvidencePipeline, BlockingPipeline()),
         store=service_store,
         max_workers=1,
         load_windows=lambda claim_id: ["window"],
@@ -303,3 +364,96 @@ def _wait_for(predicate, timeout: float = 2.0) -> bool:
             return True
         time.sleep(0.01)
     return False
+
+
+class _StubEvidenceService:
+    def __init__(self):
+        self.store = types.SimpleNamespace(
+            latest_run=lambda _claim_id: {"run_id": "r0"}
+        )
+
+    def ensure_current_run(
+        self, claim_id, claim_text=None, **_
+    ):  # pragma: no cover - trivial stub
+        self.latest_claim_text = claim_text
+
+    def list_candidates(self, claim_id, **_):
+        return {
+            "candidates": [
+                {
+                    "id": "cand-stub",
+                    "claim_id": claim_id,
+                    "attachment_id": "att-stub",
+                    "label": "entails",
+                    "text": "snippet",
+                    "scores": {"combined": 0.9},
+                    "badges": [],
+                    "metadata": {},
+                    "spans": [],
+                    "highlights": [],
+                }
+            ],
+            "total": 1,
+            "offset": 0,
+            "limit": 10,
+            "lock_state": {"status": "idle", "locked": False},
+            "run": {"run_id": "r1", "created_at": "now"},
+        }
+
+    def request_rerun(self, claim_id, **_):
+        return {
+            "job_id": f"job-{claim_id}",
+            "status": "queued",
+            "position": 0,
+            "locked": True,
+        }
+
+    def get_history(self, claim_id):
+        return [
+            {
+                "run_id": "run-hist",
+                "created_at": "now",
+                "summary": {"total": 1},
+                "metadata": {"note": "test"},
+            }
+        ]
+
+
+def test_service_api_list_endpoint_returns_payload(monkeypatch):
+    stub = _StubEvidenceService()
+    monkeypatch.setattr(backend_main, "evidence_service", stub)
+    client = TestClient(backend_main.app)
+
+    response = client.get("/claims/claim-api/evidence", params={"label": "entails"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["claim_id"] == "claim-api"
+    assert data["total"] == 1
+    assert data["candidates"][0]["id"] == "cand-stub"
+
+
+def test_service_api_rerun_endpoint_returns_job_state(monkeypatch):
+    stub = _StubEvidenceService()
+    monkeypatch.setattr(backend_main, "evidence_service", stub)
+    client = TestClient(backend_main.app)
+
+    payload = {"claim_text": "Alpha", "note": "manual"}
+    response = client.post("/claims/claim-api/evidence/rerun", json=payload)
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["job_id"] == "job-claim-api"
+    assert data["status"] == "queued"
+
+
+def test_service_api_history_endpoint_returns_runs(monkeypatch):
+    stub = _StubEvidenceService()
+    monkeypatch.setattr(backend_main, "evidence_service", stub)
+    client = TestClient(backend_main.app)
+
+    response = client.get("/claims/claim-api/evidence/history")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["runs"] and data["runs"][0]["run_id"] == "run-hist"

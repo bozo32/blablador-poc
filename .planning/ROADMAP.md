@@ -98,7 +98,7 @@ Plans:
 Plans:
 - [x] 05-01-PLAN.md — Backend evidence pipeline foundation
 - [x] 05-02-PLAN.md — Evidence service + FastAPI endpoints
-- [ ] 05-03-PLAN.md — Evidence store + claim sync wiring
+- [x] 05-03-PLAN.md — Evidence store + claim sync wiring
 - [ ] 05-04-PLAN.md — Evidence board UI and rationale sidebar
 
 ### Phase 6: Evidence Review + Selection

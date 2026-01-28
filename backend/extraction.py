@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 from lxml import etree
 
 NS = {"tei": "http://www.tei-c.org/ns/1.0"}
+XML_NS = "http://www.w3.org/XML/1998/namespace"
 EXTRACTION_VERSION = "v1"
 
 
@@ -161,11 +162,17 @@ def parse_citations(tei_root: etree._Element) -> List[Dict[str, Any]]:
         if context_elem is None and paragraph_elem:
             context_elem = paragraph_elem[0]
         context_text = _text_content(context_elem) if context_elem is not None else None
+        sentence_id = None
+        if context_elem is not None:
+            sentence_id = context_elem.get(f"{{{XML_NS}}}id") or context_elem.get(
+                "xml:id"
+            )
         citations.append(
             {
                 "target_id": target,
                 "callout": callout,
                 "sentence": context_text,
+                "sentence_id": sentence_id,
             }
         )
     return citations

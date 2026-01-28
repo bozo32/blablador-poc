@@ -75,6 +75,7 @@ def get_citation_context(
             "sentence": None,
             "previous_sentence": None,
             "next_sentence": None,
+            "sentence_id": None,
         }
 
     sentence_idx = sentence_lookup[sentence_elem]
@@ -83,6 +84,9 @@ def get_citation_context(
     next_sentence = (
         sentences[sentence_idx + 1] if sentence_idx + 1 < len(sentences) else None
     )
+    sentence_id = sentence_elem.get(
+        "{http://www.w3.org/XML/1998/namespace}id"
+    ) or sentence_elem.get("xml:id")
 
     return {
         "target_id": callout.get("target_id"),
@@ -90,4 +94,5 @@ def get_citation_context(
         "sentence": _text_content(sentence_elem),
         "previous_sentence": _text_content(prev_sentence) if prev_sentence else None,
         "next_sentence": _text_content(next_sentence) if next_sentence else None,
+        "sentence_id": sentence_id,
     }

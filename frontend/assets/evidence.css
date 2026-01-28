@@ -111,6 +111,60 @@
     color: #94a3b8;
 }
 
+.evidence-sidebar {
+    border-left: 1px solid rgba(15, 23, 42, 0.08);
+    padding-left: 1.25rem;
+    margin-left: 0.75rem;
+}
+
+.evidence-progress {
+    display: flex;
+    height: 12px;
+    border-radius: 999px;
+    overflow: hidden;
+    margin-bottom: 0.35rem;
+    background: rgba(15, 23, 42, 0.08);
+}
+
+.evidence-progress__segment {
+    flex: 1;
+}
+
+.evidence-progress__segment--entail {
+    background: linear-gradient(90deg, #60a5fa, #2563eb);
+}
+
+.evidence-progress__segment--contradict {
+    background: linear-gradient(90deg, #fb7185, #be123c);
+}
+
+.evidence-progress__segment--neutral {
+    background: linear-gradient(90deg, #cbd5f5, #94a3b8);
+}
+
+.evidence-progress__labels {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.78rem;
+    color: #475569;
+    margin-bottom: 0.75rem;
+}
+
+.evidence-sidebar__section {
+    margin-bottom: 1rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid rgba(15, 23, 42, 0.06);
+}
+
+.evidence-sidebar__section:last-child {
+    border-bottom: none;
+    padding-bottom: 0;
+}
+
+.evidence-sidebar__history button {
+    margin-right: 0.35rem;
+}
+
 .evidence-card__meta {
     font-size: 0.85rem;
     color: #475569;
@@ -174,5 +228,14 @@
 
     .evidence-card__badges {
         justify-content: flex-start;
+    }
+
+    .evidence-sidebar {
+        border-left: none;
+        padding-left: 0;
+        margin-left: 0;
+        border-top: 1px solid rgba(15, 23, 42, 0.08);
+        padding-top: 1rem;
+        margin-top: 1rem;
     }
 }

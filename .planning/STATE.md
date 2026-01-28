@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-01-23)
 ## Current Position
 
 Phase: 5 of 8 (Evidence Matching + Ranking)
-Plan: 5 of 6 in current phase
-Status: In progress
-Last activity: 2026-01-28 — Completed 05-05-PLAN.md
+Plan: 6 of 6 in current phase
+Status: Phase complete
+Last activity: 2026-01-28 — Completed 05-06-PLAN.md
 
-Progress: █████████░░ 84%
+Progress: ██████████░░ 88%
 
 ## Performance Metrics
 
@@ -61,6 +61,9 @@ Recent decisions affecting current work:
 -  - Queue auto-matches dropped files via claim heuristics and highlights ambiguous attachments with manual reassignment controls (04-06).
 -  - Persist attachment claim_text so evidence reruns inherit the UI-provided text (05-05).
 -  - EvidenceMatchingService resolves claim_text from attachment metadata before raising 409 so new claims succeed (05-05).
+  - Cache claim_text metadata in the EvidenceStore via claim_queue registry updates so background refreshes and reruns always have the text (05-06).
+  - Surface an explicit remediation path whenever the backend rejects evidence fetches for missing claim_text and reuse the cached or edited text to recover (05-06).
+  - Send claim_text from attachment uploads so backend auto reruns triggered after parsing have the data they need (05-06).
 
 - Use local citation graph data when DOI resolution is unavailable to avoid OpenAlex 404s (02-02).
 - Prefer GROBID consolidation when resolver sources disagree; warn that OpenAlex may return citing articles (02-06).
@@ -76,6 +79,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-01-28 18:08
-Stopped at: Completed 05-04-PLAN.md
+Last session: 2026-01-28 22:28
+Stopped at: Completed 05-06-PLAN.md
 Resume file: None

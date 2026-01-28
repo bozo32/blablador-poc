@@ -165,6 +165,24 @@
     margin-right: 0.35rem;
 }
 
+.claim-reminder {
+    background: rgba(15, 23, 42, 0.04);
+    border-radius: 12px;
+    padding: 0.75rem 1rem;
+    margin-bottom: 1rem;
+    position: relative;
+}
+
+.claim-reminder__badge {
+    position: absolute;
+    top: 0.4rem;
+    right: 0.6rem;
+    border-radius: 999px;
+    padding: 0.1rem 0.65rem;
+    font-size: 0.75rem;
+    color: #fff;
+}
+
 .evidence-card__meta {
     font-size: 0.85rem;
     color: #475569;

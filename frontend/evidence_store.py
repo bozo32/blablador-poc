@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
@@ -26,7 +28,7 @@ def _toast(ui: Any, message: str, *, icon: str = "ℹ️") -> None:
 
 @dataclass
 class EvidenceStore:
-    session_state: Optional[Dict[str, Any]] = None
+    session_state: Any = None
     api: Any = evidence_api
     ui: Any = st
     page_size: int = DEFAULT_PAGE_SIZE
@@ -166,6 +168,109 @@ class EvidenceStore:
             rerun["inflight"] = False
         return rerun
 
+    def _mark_review_state(
+        self, claim_id: str, candidate_id: str, status: str
+    ) -> Dict[str, Any]:
+        claim_state = self.ensure_claim_state(claim_id)
+        candidate = self._find_candidate(claim_state, candidate_id)
+        if not candidate:
+            _toast(
+                self.ui,
+                "Unable to update review state; candidate missing.",
+                icon="⚠️",
+            )
+            return claim_state
+        candidate["review_state"] = status
+        _toast(self.ui, f"Marked evidence as {status}.")
+        return claim_state
+
+    @staticmethod
+    def _find_candidate(
+        claim_state: Dict[str, Any], candidate_id: Optional[str]
+    ) -> Optional[Dict[str, Any]]:
+        if not candidate_id:
+            return None
+        for candidate in claim_state.get("candidates", []):
+            if candidate.get("id") == candidate_id:
+                return candidate
+        return None
+
+    def accept_candidate(self, claim_id: str, candidate_id: str) -> Dict[str, Any]:
+        return self._mark_review_state(claim_id, candidate_id, "accepted")
+
+    def reject_candidate(self, claim_id: str, candidate_id: str) -> Dict[str, Any]:
+        return self._mark_review_state(claim_id, candidate_id, "rejected")
+
+    def toggle_pin(self, claim_id: str, candidate_id: str) -> Dict[str, Any]:
+        claim_state = self.ensure_claim_state(claim_id)
+        pins = claim_state.setdefault("pinned_ids", [])
+        if candidate_id in pins:
+            pins.remove(candidate_id)
+            message = "Removed pin from evidence card."
+        else:
+            pins.append(candidate_id)
+            message = "Pinned evidence card near the top."
+        pinned_lookup = set(pins)
+        for candidate in claim_state.get("candidates", []):
+            candidate["is_pinned"] = candidate.get("id") in pinned_lookup
+        _toast(self.ui, message, icon="📌")
+        return claim_state
+
+    def prepare_share_link(
+        self, claim_id: str, candidate_id: str
+    ) -> Optional[Dict[str, Any]]:
+        claim_state = self.ensure_claim_state(claim_id)
+        candidate = self._find_candidate(claim_state, candidate_id)
+        if not candidate:
+            _toast(self.ui, "Unable to find evidence card for sharing.", icon="⚠️")
+            return None
+        share_payload = json.dumps(
+            {
+                "claim_id": claim_id,
+                "candidate_id": candidate.get("id"),
+                "label": candidate.get("label"),
+                "title": candidate.get("title"),
+                "snippet": (candidate.get("text") or "")[:500],
+                "metadata": candidate.get("metadata"),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        share_state = {
+            "candidate": candidate,
+            "payload": share_payload,
+            "title": candidate.get("title") or candidate.get("id"),
+        }
+        claim_state["share_target"] = share_state
+        _toast(self.ui, "Share details ready below the evidence list.", icon="🔗")
+        return share_state
+
+    def open_candidate_pdf(
+        self, claim_id: str, candidate_id: str
+    ) -> Optional[Dict[str, Any]]:
+        claim_state = self.ensure_claim_state(claim_id)
+        candidate = self._find_candidate(claim_state, candidate_id)
+        if not candidate:
+            _toast(self.ui, "Unable to find PDF metadata for this card.", icon="⚠️")
+            return None
+        metadata = candidate.get("metadata") or {}
+        attachment_id = metadata.get("attachment_id") or metadata.get("document_id")
+        span_id = metadata.get("span_id") or metadata.get("anchor_id")
+        if not attachment_id or not span_id:
+            _toast(self.ui, "Card is missing PDF span metadata.", icon="⚠️")
+            return None
+        try:
+            jump = self.api.jump_to_pdf_span(attachment_id, span_id)
+        except evidence_api.EvidenceApiError:
+            return None
+        claim_state["pdf_jump"] = {
+            "attachment_id": attachment_id,
+            "span_id": span_id,
+            "viewer": jump,
+        }
+        _toast(self.ui, "Open the PDF viewer using the metadata below.", icon="📄")
+        return jump
+
     def update_from_payload(
         self, claim_id: str, payload: Optional[Dict[str, Any]]
     ) -> Dict[str, Any]:
@@ -181,6 +286,9 @@ class EvidenceStore:
         claim_state["focus_order"] = [
             cand.get("id") for cand in claim_state["candidates"] if cand.get("id")
         ]
+        pinned_lookup = set(claim_state.get("pinned_ids", []))
+        for candidate in claim_state.get("candidates", []):
+            candidate["is_pinned"] = candidate.get("id") in pinned_lookup
         return claim_state
 
     def mark_claim_stale(
@@ -222,6 +330,8 @@ class EvidenceStore:
             "is_loading": False,
             "inflight_fetches": 0,
             "rerun": self._default_rerun_state(),
+            "share_target": None,
+            "pdf_jump": None,
         }
 
     @staticmethod

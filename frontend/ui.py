@@ -26,8 +26,15 @@ PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from frontend import attachment_queue, claim_queue, evidence_store
-from frontend.evidence_api import show_api_error
+from frontend import attachment_queue, claim_queue, clipboard, evidence_store
+from frontend.components.evidence_card import CardActionCallbacks, EvidenceCardRenderer
+from frontend.components.rationale_sidebar import (
+    SidebarConfig,
+    build_filter_chip_config,
+    build_progress_summary,
+    render_rationale_sidebar,
+)
+from frontend.evidence_api import MAX_LIST_REQUESTS, show_api_error
 
 from backend import utils
 from backend.bl_client import BlabladorClient
@@ -44,7 +51,7 @@ from frontend.ingestion_api import (
     trigger_resolution,
     upload_pdf,
 )
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 
 # Third-party
@@ -951,57 +958,303 @@ def render_evidence_panel() -> None:
         claim_queue.set_active_claim(selected_claim)
         store = evidence_store.EvidenceStore()
     state = store.sync_for_claim(selected_claim)
+    claim_record = claim_queue.get_claim_record(selected_claim) or {}
     rerun_state = state.get("rerun", {})
-    st.caption(f"Rerun status: {rerun_state.get('status', 'idle')}")
+    summary = build_progress_summary(state.get("candidates") or [])
+    layout_main, layout_sidebar = st.columns([2, 1], gap="large")
 
-    action_cols = st.columns(2)
-    with action_cols[0]:
-        disabled = bool(rerun_state.get("inflight") or state.get("is_loading"))
-        if st.button(
-            "Request rerun",
-            disabled=disabled,
-            key="evidence-rerun-btn",
-        ):
-            store.queue_rerun(selected_claim, note="manual rerun")
-            state = store.sync_for_claim(selected_claim, force=True)
-    with action_cols[1]:
-        remaining = state.get("total", 0) - len(state.get("candidates", []))
-        load_disabled = remaining <= 0 or state.get("is_loading")
-        if st.button(
-            "Load more candidates",
-            disabled=load_disabled,
-            key="evidence-load-btn",
-        ):
-            state = store.load_more(selected_claim)
+    def _build_action_callback(action: str):
+        def _callback(candidate: Dict[str, Any]) -> None:
+            candidate_id = candidate.get("id")
+            if not candidate_id:
+                return
+            if action == "accept":
+                store.accept_candidate(selected_claim, candidate_id)
+            elif action == "reject":
+                store.reject_candidate(selected_claim, candidate_id)
+            elif action == "pin":
+                store.toggle_pin(selected_claim, candidate_id)
+            elif action == "share":
+                store.prepare_share_link(selected_claim, candidate_id)
+            elif action == "open":
+                store.open_candidate_pdf(selected_claim, candidate_id)
 
-    if state.get("last_error"):
-        st.warning(f"Evidence fetch failed: {state['last_error']}")
-    if state.get("is_loading"):
-        render_skeleton(lines=4)
-        return
-    candidates = state.get("candidates") or []
-    if not candidates:
-        st.info("Evidence will appear once attachments finish matching this claim.")
-        return
+        return _callback
 
-    last_payload = state.get("last_payload") or {}
-    meta = last_payload.get("meta") or {}
-    total = state.get("total", len(candidates))
-    remaining_candidates = meta.get("remaining_candidates")
-    caption = f"Showing {len(candidates)} of {total} candidates"
-    if remaining_candidates not in (None, 0):
-        caption += f" • {remaining_candidates} remaining"
-    st.caption(caption)
+    with layout_main:
+        callbacks = CardActionCallbacks(
+            accept=_build_action_callback("accept"),
+            reject=_build_action_callback("reject"),
+            pin=_build_action_callback("pin"),
+            share=_build_action_callback("share"),
+            open_pdf=_build_action_callback("open"),
+        )
+        renderer = EvidenceCardRenderer(ui=layout_main, callbacks=callbacks)
 
-    for idx, candidate in enumerate(candidates, start=1):
-        snippet = candidate.get("text") or "Snippet unavailable"
-        if len(snippet) > 320:
-            snippet = snippet[:317].rstrip() + "…"
-        label = candidate.get("label", "unknown").title()
-        location = candidate.get("metadata", {}).get("page") or "Page unknown"
-        st.markdown(
-            f"**{idx}. [{label}]** {snippet}\n\n" f"_Location: {location}_",
-            unsafe_allow_html=False,
+        def _render_claim_header() -> None:
+            claim_text = (claim_record.get("claim") or "Untitled claim").strip()
+            callout = claim_record.get("callout") or "Unlabeled citation"
+            metadata = claim_record.get("metadata") or state.get("metadata") or {}
+            unsaved = metadata.get("unsaved_edits") or metadata.get(
+                "has_unsaved_changes"
+            )
+            badge = "Unsaved edits" if unsaved else "Synced"
+            badge_color = "#f97316" if unsaved else "#10b981"
+            st.markdown(
+                f"""
+                <div class=\"claim-reminder\">
+                    <div><strong>{callout}</strong></div>
+                    <div>{claim_text}</div>
+                    <span
+                        class=\"claim-reminder__badge\"
+                        style=\"background:{badge_color};\"
+                    >
+                        {badge}
+                    </span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        def _render_status_messages() -> None:
+            if state.get("stale"):
+                st.warning(
+                    state.get("stale_reason") or "Ranking looks stale. Request a rerun."
+                )
+            if state.get("last_error"):
+                st.error(f"Evidence fetch failed: {state['last_error']}")
+            status = rerun_state.get("status")
+            if status in {"queued", "running"}:
+                st.info("Evidence rerun in progress…", icon="🔁")
+            history = state.get("history") or []
+            if history:
+                latest = history[0]
+                log_url = latest.get("log_url") or latest.get("artifact_path")
+                if log_url:
+                    st.caption(f"Latest rerun logs: {log_url}")
+
+        def _render_filter_chips() -> None:
+            chips = build_filter_chip_config(state.get("filters"))
+            chip_cols = st.columns(len(chips))
+            for column, chip in zip(chip_cols, chips):
+                button_type = "primary" if chip["active"] else "secondary"
+                if column.button(
+                    chip["label"],
+                    key=f"filter-{chip['key']}-{selected_claim}",
+                    type=button_type,
+                ):
+                    store.apply_filter(selected_claim, **chip["payload"])
+                    st.experimental_rerun()
+
+        def _render_rerun_controls() -> None:
+            meta = (state.get("last_payload") or {}).get("meta") or {}
+            remaining = meta.get("remaining_candidates", 0)
+            inflight = state.get("inflight_fetches", 0)
+            btn_cols = st.columns([1, 1, 1])
+            with btn_cols[0]:
+                disabled = rerun_state.get("inflight") or state.get("is_loading")
+                if st.button(
+                    "Request rerun",
+                    key=f"rerun-{selected_claim}",
+                    disabled=disabled,
+                ):
+                    store.queue_rerun(selected_claim, note="manual rerun")
+                    st.experimental_rerun()
+            with btn_cols[1]:
+                load_disabled = (
+                    state.get("is_loading")
+                    or inflight >= MAX_LIST_REQUESTS
+                    or remaining <= 0
+                )
+                label = (
+                    f"Load more ({max(0, remaining)})"
+                    if remaining not in (None, 0)
+                    else "Load more"
+                )
+                if st.button(
+                    label,
+                    key=f"load-more-{selected_claim}",
+                    disabled=load_disabled,
+                ):
+                    store.load_more(selected_claim)
+                    st.experimental_rerun()
+            with btn_cols[2]:
+                if st.button(
+                    "Refresh list",
+                    key=f"refresh-{selected_claim}",
+                    disabled=state.get("is_loading"),
+                ):
+                    store.sync_for_claim(selected_claim, force=True)
+                    st.experimental_rerun()
+            with st.expander("Advanced rerun controls", expanded=False):
+                note = st.text_input(
+                    "Optional note",
+                    key=f"rerun-note-{selected_claim}",
+                )
+                advanced_blob = st.text_area(
+                    "Advanced settings (JSON)",
+                    key=f"rerun-advanced-{selected_claim}",
+                    height=120,
+                )
+                if st.button(
+                    "Queue rerun with settings",
+                    key=f"advanced-rerun-{selected_claim}",
+                    disabled=rerun_state.get("inflight"),
+                ):
+                    payload = {}
+                    if advanced_blob.strip():
+                        try:
+                            payload = json.loads(advanced_blob)
+                        except json.JSONDecodeError as exc:
+                            st.error(f"Advanced settings JSON invalid: {exc}")
+                            payload = None
+                    if payload is not None:
+                        store.queue_rerun(
+                            selected_claim,
+                            note=note or None,
+                            advanced_settings=payload,
+                        )
+                        st.experimental_rerun()
+
+        def _render_progress_glance() -> None:
+            st.markdown(
+                f"""
+                <div
+                    class=\"evidence-progress\"
+                    aria-label=\"Global entail vs contradict\"
+                >
+                    <div
+                        class=\"evidence-progress__segment
+                               evidence-progress__segment--entail\"
+                        style=\"flex:{summary['entail']}\"
+                    ></div>
+                    <div
+                        class=\"evidence-progress__segment
+                               evidence-progress__segment--contradict\"
+                        style=\"flex:{summary['contradict']}\"
+                    ></div>
+                    <div
+                        class=\"evidence-progress__segment
+                               evidence-progress__segment--neutral\"
+                        style=\"flex:{summary['neutral']}\"
+                    ></div>
+                </div>
+                <div class=\"evidence-progress__labels\">
+                    <span>{summary['entail']} entail</span>
+                    <span>{summary['contradict']} contradict</span>
+                    <span>{summary['neutral']} neutral</span>
+                    <span>{summary['total']} total</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        def _render_evidence_lists() -> None:
+            candidates = state.get("candidates") or []
+            if not candidates:
+                st.info(
+                    "Evidence will appear once attachments finish matching this claim."
+                )
+                return
+            filter_state = state.get("filters", {})
+            pinned_ids = state.get("pinned_ids") or []
+            pinned_set = set(pinned_ids)
+            pinned_only = filter_state.get("pinned_only", False)
+            include_neutral = filter_state.get("include_neutral", True)
+            if pinned_only:
+                pinned_candidates = candidates
+                primary_candidates: list[dict] = []
+                neutral_candidates: list[dict] = []
+            else:
+                pinned_candidates = [c for c in candidates if c.get("id") in pinned_set]
+                remaining = [c for c in candidates if c.get("id") not in pinned_set]
+                neutral_candidates = [
+                    c
+                    for c in remaining
+                    if (c.get("label") or "").lower() not in {"entail", "contradict"}
+                ]
+                primary_candidates = [
+                    c for c in remaining if c not in neutral_candidates
+                ]
+            if pinned_candidates:
+                st.markdown("#### Pinned")
+                renderer.render_cards(
+                    selected_claim,
+                    pinned_candidates,
+                    pinned_ids=pinned_ids,
+                    lock_state=state.get("lock_state"),
+                )
+            if primary_candidates:
+                st.markdown("#### Ranked evidence")
+                renderer.render_cards(
+                    selected_claim,
+                    primary_candidates,
+                    pinned_ids=pinned_ids,
+                    lock_state=state.get("lock_state"),
+                )
+            if neutral_candidates and include_neutral:
+                with st.expander(
+                    f"Neutral candidates ({len(neutral_candidates)})",
+                    expanded=False,
+                ):
+                    renderer.render_cards(
+                        selected_claim,
+                        neutral_candidates,
+                        pinned_ids=pinned_ids,
+                        lock_state=state.get("lock_state"),
+                    )
+
+        def _render_share_panel() -> None:
+            share_state = state.get("share_target")
+            if not share_state:
+                return
+            st.markdown("#### Share evidence card")
+            clipboard.render_copy_to_clipboard(
+                "Copy share payload",
+                share_state.get("payload"),
+                key=f"share-{selected_claim}",
+                toast="Evidence payload copied",
+            )
+            if st.button(
+                "Clear share context",
+                key=f"clear-share-{selected_claim}",
+            ):
+                state["share_target"] = None
+                st.experimental_rerun()
+
+        def _render_pdf_notice() -> None:
+            pdf_jump = state.get("pdf_jump")
+            if not pdf_jump:
+                return
+            viewer = pdf_jump.get("viewer") or {}
+            page_label = viewer.get("page") or viewer.get("page_number") or "?"
+            fragment = viewer.get("fragment") or viewer.get("coordinates") or ""
+            st.info(
+                f"PDF span ready on page {page_label}. {fragment}",
+                icon="📄",
+            )
+            if st.button(
+                "Clear PDF hint",
+                key=f"clear-pdf-{selected_claim}",
+            ):
+                state["pdf_jump"] = None
+                st.experimental_rerun()
+
+        _render_claim_header()
+        _render_status_messages()
+        _render_filter_chips()
+        _render_rerun_controls()
+        _render_progress_glance()
+        _render_evidence_lists()
+        _render_share_panel()
+        _render_pdf_notice()
+
+    focus_order = state.get("focus_order") or []
+    with layout_sidebar:
+        render_rationale_sidebar(
+            state,
+            selected_candidate_id=focus_order[0] if focus_order else None,
+            config=SidebarConfig(ui=layout_sidebar),
         )
 
 

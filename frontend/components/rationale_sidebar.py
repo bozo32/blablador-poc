@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 import streamlit as st
 
@@ -48,6 +48,45 @@ def summarize_rank_delta(
         return "—"
     arrow = "↑" if delta < 0 else "↓"
     return f"{arrow}{abs(int(delta))}"
+
+
+def build_filter_chip_config(filters: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Describe filter chip states for entail/contrad/neutral/pinned toggles."""
+    state = (filters or {}).copy()
+    label = (state.get("label") or "").lower() or None
+    include_neutral = state.get("include_neutral", True)
+    pinned_only = state.get("pinned_only", False)
+    chips: List[Dict[str, Any]] = []
+    for slug, text in (
+        ("entail", "Entail"),
+        ("contradict", "Contradict"),
+        ("neutral", "Neutral"),
+    ):
+        chips.append(
+            {
+                "key": f"label-{slug}",
+                "label": text,
+                "active": label == slug,
+                "payload": {"label": slug},
+            }
+        )
+    chips.append(
+        {
+            "key": "neutral-toggle",
+            "label": "Neutral +",
+            "active": include_neutral,
+            "payload": {"include_neutral": not include_neutral},
+        }
+    )
+    chips.append(
+        {
+            "key": "pinned-only",
+            "label": "Pinned",
+            "active": pinned_only,
+            "payload": {"pinned_only": not pinned_only},
+        }
+    )
+    return chips
 
 
 @dataclass
@@ -262,4 +301,5 @@ __all__ = [
     "render_rationale_sidebar",
     "build_progress_summary",
     "summarize_rank_delta",
+    "build_filter_chip_config",
 ]

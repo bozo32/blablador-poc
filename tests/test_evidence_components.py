@@ -9,6 +9,7 @@ from frontend.components.evidence_card import (
 )
 from frontend.components.rationale_sidebar import (
     build_progress_summary,
+    build_filter_chip_config,
     summarize_rank_delta,
 )
 
@@ -72,3 +73,25 @@ def test_rationale_rank_delta_falls_back_to_previous_rank() -> None:
     assert summarize_rank_delta(current_rank=4, previous_rank=2) == "↓2"
     assert summarize_rank_delta(current_rank=1, previous_rank=5) == "↑4"
     assert summarize_rank_delta(current_rank=3, previous_rank=3) == "—"
+
+
+def test_progress_filter_chip_config_toggles_values() -> None:
+    filters = {"label": "entail", "include_neutral": True, "pinned_only": False}
+    chips = build_filter_chip_config(filters)
+    entail_chip = next(
+        item for item in chips if item["payload"].get("label") == "entail"
+    )
+    assert entail_chip["active"] is True
+    pinned_chip = next(item for item in chips if item["key"] == "pinned-only")
+    assert pinned_chip["active"] is False
+    assert pinned_chip["payload"] == {"pinned_only": True}
+
+
+def test_progress_filter_chip_config_handles_toggle_states() -> None:
+    filters = {"label": None, "include_neutral": False, "pinned_only": True}
+    chips = build_filter_chip_config(filters)
+    neutral_chip = next(item for item in chips if item["key"] == "neutral-toggle")
+    assert neutral_chip["active"] is False
+    assert neutral_chip["payload"] == {"include_neutral": True}
+    pinned_chip = next(item for item in chips if item["key"] == "pinned-only")
+    assert pinned_chip["active"] is True

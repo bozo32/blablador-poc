@@ -43,6 +43,21 @@ def _auth_headers() -> Dict[str, str]:
     return {"Authorization": f"Bearer {api_key}"}
 
 
+def _extract_response_detail(response: Optional[requests.Response]) -> Optional[str]:
+    if not response:
+        return None
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+    if isinstance(payload, dict):
+        detail = payload.get("detail") or payload.get("message")
+        if detail:
+            return str(detail).strip()
+    text = response.text or ""
+    return text.strip() or None
+
+
 def _request(
     method: str,
     path: str,
@@ -64,8 +79,12 @@ def _request(
         )
         response.raise_for_status()
     except requests.RequestException as exc:  # pragma: no cover - network not in tests
-        show_api_error(f"Evidence service error: {exc}")
-        raise EvidenceApiError(str(exc)) from exc
+        message = str(exc)
+        detail = _extract_response_detail(getattr(exc, "response", None))
+        if detail:
+            message = f"{message} ({detail})"
+        show_api_error(f"Evidence service error: {message}")
+        raise EvidenceApiError(message) from exc
     if not response.text:
         return {}
     try:

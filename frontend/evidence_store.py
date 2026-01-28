@@ -138,6 +138,7 @@ class EvidenceStore:
         label: Optional[str] = None,
         include_neutral: Optional[bool] = None,
         pinned_only: Optional[bool] = None,
+        claim_text: Optional[str] = None,
     ) -> Dict[str, Any]:
         claim_state = self.ensure_claim_state(claim_id)
         filters = claim_state.setdefault("filters", {})
@@ -149,16 +150,18 @@ class EvidenceStore:
             filters["pinned_only"] = pinned_only
         claim_state["load_more_pages"] = 0
         claim_state["stale"] = True
-        return self.sync_for_claim(claim_id, force=True)
+        return self.sync_for_claim(claim_id, claim_text=claim_text, force=True)
 
-    def load_more(self, claim_id: str) -> Dict[str, Any]:
+    def load_more(
+        self, claim_id: str, *, claim_text: Optional[str] = None
+    ) -> Dict[str, Any]:
         claim_state = self.ensure_claim_state(claim_id)
         if claim_state.get("load_more_pages", 0) >= self.max_extra_pages:
             _toast(self.ui, "All available evidence candidates are already loaded.")
             return claim_state
         claim_state["load_more_pages"] = claim_state.get("load_more_pages", 0) + 1
         claim_state["stale"] = True
-        return self.sync_for_claim(claim_id, force=True)
+        return self.sync_for_claim(claim_id, claim_text=claim_text, force=True)
 
     def queue_rerun(
         self,
@@ -409,17 +412,19 @@ def apply_filter(
     label: Optional[str] = None,
     include_neutral: Optional[bool] = None,
     pinned_only: Optional[bool] = None,
+    claim_text: Optional[str] = None,
 ) -> Dict[str, Any]:
     return _get_store().apply_filter(
         claim_id,
         label=label,
         include_neutral=include_neutral,
         pinned_only=pinned_only,
+        claim_text=claim_text,
     )
 
 
-def load_more(claim_id: str) -> Dict[str, Any]:
-    return _get_store().load_more(claim_id)
+def load_more(claim_id: str, *, claim_text: Optional[str] = None) -> Dict[str, Any]:
+    return _get_store().load_more(claim_id, claim_text=claim_text)
 
 
 def queue_rerun(

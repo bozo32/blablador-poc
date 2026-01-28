@@ -198,6 +198,11 @@ def _upload_to_backend(queue_item_id: str) -> None:
         "size_bytes": item.get("size"),
         "reference_hint": item.get("reference_hint"),
     }
+    # Include the claim text so backend auto-reruns have needed data.
+    record = claim_queue.get_claim_record(claim_id) or {}
+    claim_text = record.get("claim") or ""
+    if claim_text.strip():
+        payload["claim_text"] = claim_text.strip()
     try:
         response = _request("post", f"/claims/{claim_id}/attachments", json=payload)
     except RuntimeError as exc:

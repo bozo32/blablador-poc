@@ -957,11 +957,28 @@ def render_evidence_panel() -> None:
     if selected_claim != active_claim:
         claim_queue.set_active_claim(selected_claim)
         store = evidence_store.EvidenceStore()
-    state = store.sync_for_claim(selected_claim)
     claim_record = claim_queue.get_claim_record(selected_claim) or {}
+    claim_text_override = (claim_record.get("claim") or "").strip()
+    initial_claim_text = claim_text_override or None
+    state = store.sync_for_claim(
+        selected_claim,
+        claim_text=initial_claim_text,
+    )
+    metadata_claim_text = (state.get("metadata") or {}).get("claim_text") or ""
+    active_claim_text = (metadata_claim_text or claim_text_override).strip()
+    active_claim_text_payload = active_claim_text or None
     rerun_state = state.get("rerun", {})
     summary = build_progress_summary(state.get("candidates") or [])
     layout_main, layout_sidebar = st.columns([2, 1], gap="large")
+
+    def _claim_text_missing_error() -> Optional[str]:
+        last_error = state.get("last_error") or ""
+        if not last_error:
+            return None
+        normalized = last_error.lower()
+        if "claim_text" in normalized:
+            return last_error
+        return None
 
     def _build_action_callback(action: str):
         def _callback(candidate: Dict[str, Any]) -> None:
@@ -1023,6 +1040,28 @@ def render_evidence_panel() -> None:
                 )
             if state.get("last_error"):
                 st.error(f"Evidence fetch failed: {state['last_error']}")
+            missing_claim_text_reason = _claim_text_missing_error()
+            if missing_claim_text_reason:
+                # Remediation flow: surface the missing claim_text warning so reviewers
+                # can resend the cached or edited text before rerunning evidence.
+                st.warning(
+                    (
+                        "Evidence fetch needs the claim text before it can run. "
+                        "Press 'Send claim text' to resubmit the cached text."
+                    ),
+                    icon="⚠️",
+                )
+                if st.button(
+                    "Send claim text",
+                    key=f"send-claim-text-{selected_claim}",
+                    disabled=not active_claim_text_payload,
+                ):
+                    store.sync_for_claim(
+                        selected_claim,
+                        claim_text=active_claim_text_payload,
+                        force=True,
+                    )
+                    st.experimental_rerun()
             status = rerun_state.get("status")
             if status in {"queued", "running"}:
                 st.info("Evidence rerun in progress…", icon="🔁")
@@ -1043,7 +1082,11 @@ def render_evidence_panel() -> None:
                     key=f"filter-{chip['key']}-{selected_claim}",
                     type=button_type,
                 ):
-                    store.apply_filter(selected_claim, **chip["payload"])
+                    store.apply_filter(
+                        selected_claim,
+                        claim_text=active_claim_text_payload,
+                        **chip["payload"],
+                    )
                     st.experimental_rerun()
 
         def _render_rerun_controls() -> None:
@@ -1058,7 +1101,11 @@ def render_evidence_panel() -> None:
                     key=f"rerun-{selected_claim}",
                     disabled=disabled,
                 ):
-                    store.queue_rerun(selected_claim, note="manual rerun")
+                    store.queue_rerun(
+                        selected_claim,
+                        claim_text=active_claim_text_payload,
+                        note="manual rerun",
+                    )
                     st.experimental_rerun()
             with btn_cols[1]:
                 load_disabled = (
@@ -1076,7 +1123,10 @@ def render_evidence_panel() -> None:
                     key=f"load-more-{selected_claim}",
                     disabled=load_disabled,
                 ):
-                    store.load_more(selected_claim)
+                    store.load_more(
+                        selected_claim,
+                        claim_text=active_claim_text_payload,
+                    )
                     st.experimental_rerun()
             with btn_cols[2]:
                 if st.button(
@@ -1084,7 +1134,11 @@ def render_evidence_panel() -> None:
                     key=f"refresh-{selected_claim}",
                     disabled=state.get("is_loading"),
                 ):
-                    store.sync_for_claim(selected_claim, force=True)
+                    store.sync_for_claim(
+                        selected_claim,
+                        claim_text=active_claim_text_payload,
+                        force=True,
+                    )
                     st.experimental_rerun()
             with st.expander("Advanced rerun controls", expanded=False):
                 note = st.text_input(
@@ -1111,6 +1165,7 @@ def render_evidence_panel() -> None:
                     if payload is not None:
                         store.queue_rerun(
                             selected_claim,
+                            claim_text=active_claim_text_payload,
                             note=note or None,
                             advanced_settings=payload,
                         )

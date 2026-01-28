@@ -5,7 +5,7 @@ import sys
 import threading
 import time
 import types
-from typing import cast
+from typing import cast, Optional
 
 import pytest
 from fastapi.testclient import TestClient
@@ -316,6 +316,7 @@ def test_service_auto_rerun_triggered_by_attachment_pipeline(tmp_path, monkeypat
         claim_id="claim-auto",
         doc_id="doc-auto",
         local_path=source,
+        claim_text="Attachment rerun text",
     )
 
     monkeypatch.setattr(
@@ -344,9 +345,13 @@ def test_service_auto_rerun_triggered_by_attachment_pipeline(tmp_path, monkeypat
     class FakeService:
         def __init__(self):
             self.invocations: list[str] = []
+            self.claim_texts: list[Optional[str]] = []
 
-        def trigger_auto_rerun(self, claim_id: str, **_):
+        def trigger_auto_rerun(
+            self, claim_id: str, *, claim_text: Optional[str] = None, **_
+        ):
             self.invocations.append(claim_id)
+            self.claim_texts.append(claim_text)
             return {"status": "queued"}
 
     fake_service = FakeService()
@@ -355,6 +360,7 @@ def test_service_auto_rerun_triggered_by_attachment_pipeline(tmp_path, monkeypat
     attachment_pipeline.process_attachment(record["id"])
 
     assert fake_service.invocations == ["claim-auto"]
+    assert fake_service.claim_texts == ["Attachment rerun text"]
 
 
 def _wait_for(predicate, timeout: float = 2.0) -> bool:
@@ -431,6 +437,19 @@ def test_service_api_list_endpoint_returns_payload(monkeypatch):
     assert data["claim_id"] == "claim-api"
     assert data["total"] == 1
     assert data["candidates"][0]["id"] == "cand-stub"
+
+
+def test_service_api_accepts_claim_text(monkeypatch):
+    stub = _StubEvidenceService()
+    monkeypatch.setattr(backend_main, "evidence_service", stub)
+    client = TestClient(backend_main.app)
+
+    response = client.get(
+        "/claims/claim-text/evidence", params={"claim_text": "Fresh claim"}
+    )
+
+    assert response.status_code == 200
+    assert stub.latest_claim_text == "Fresh claim"
 
 
 def test_service_api_rerun_endpoint_returns_job_state(monkeypatch):

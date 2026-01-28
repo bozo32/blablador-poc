@@ -126,9 +126,11 @@ def process_attachment(
             attachment_store.mark_matched(attachment_id, artifacts)
             logger.info("Attachment %s processed successfully", attachment_id)
             try:
-                claim_id = str(record.get("claim_id"))
+                record = attachment_store.get_attachment(attachment_id)
+                claim_id = str(record.get("claim_id")) if record else None
+                claim_text = record.get("claim_text") if record else None
                 if claim_id:
-                    evidence_service.trigger_auto_rerun(claim_id)
+                    evidence_service.trigger_auto_rerun(claim_id, claim_text=claim_text)
             except (
                 Exception
             ):  # pragma: no cover - rerun failures shouldn't block pipeline

@@ -168,8 +168,9 @@ class EvidenceMatchingService:
         self, claim_id: str, *, claim_text: str | None = None
     ) -> dict:
         """Best-effort auto-rerun invoked by attachment lifecycle hooks."""
+        resolved_claim_text = claim_text or self._claim_text_from_attachments(claim_id)
         return self.request_rerun(
-            claim_id, claim_text=claim_text, note="auto-attachment"
+            claim_id, claim_text=resolved_claim_text, note="auto-attachment"
         )
 
     def get_history(self, claim_id: str) -> list[dict]:
@@ -298,12 +299,23 @@ class EvidenceMatchingService:
             stored = (latest_run.get("metadata") or {}).get("claim_text")
             if stored:
                 return stored
+        attachment_text = self._claim_text_from_attachments(claim_id)
+        if attachment_text:
+            return attachment_text
         raise ValueError(
             (
                 "claim_text is required for claim "
-                f"{claim_id!r}. Submit a manual rerun with claim text first."
+                f"{claim_id!r}. Provide it via `/claims/{claim_id}/evidence` "
+                "or include it when uploading an attachment before rerunning."
             )
         )
+
+    def _claim_text_from_attachments(self, claim_id: str) -> str | None:
+        for record in attachment_store.list_attachments(claim_id=claim_id):
+            text = record.get("claim_text")
+            if text:
+                return text
+        return None
 
     def _lock_state(self, claim_id: str) -> dict[str, Any]:
         with self._lock:

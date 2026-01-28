@@ -5,7 +5,8 @@ from pathlib import Path
 import pytest
 
 from backend import attachment_store
-from backend.evidence_matching import deterministic_matcher, loaders
+from backend.evidence_matching import deterministic_matcher, loaders, serializers
+from backend.evidence_matching.pipeline import EvidencePipeline
 from backend.evidence_matching.types import Provenance
 from backend.settings import settings
 
@@ -178,3 +179,96 @@ def test_matcher_is_reproducible(tmp_path, monkeypatch):
     second = deterministic_matcher.seed_windows("alpha beta", windows)
     assert [cand.id for cand in first] == [cand.id for cand in second]
     assert [cand.scores.bm25 for cand in first] == [cand.scores.bm25 for cand in second]
+
+
+def test_pipeline_orders_candidates(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "EVIDENCE_WINDOW_SIZE", 1)
+    monkeypatch.setattr(settings, "EVIDENCE_BM25_MIN_SCORE", 0.0)
+    monkeypatch.setattr(settings, "EVIDENCE_SEED_LIMIT", 10)
+    monkeypatch.setattr(settings, "EVIDENCE_MAX_CANDIDATES", 2)
+    seeds = _build_seeds_for_pipeline(tmp_path)
+
+    class FakeNLI:
+        @staticmethod
+        def assess(_claim, passages, metadatas, **_kwargs):
+            return [
+                {"id": metadatas[0]["id"], "label": "entailment", "score": 0.91},
+                {"id": metadatas[1]["id"], "label": "contradiction", "score": 0.87},
+            ]
+
+    pipeline = EvidencePipeline(settings=settings, nli_module=FakeNLI)
+    results = pipeline.run(
+        claim_id="claim-pipeline",
+        claim_text="alpha mechanism",
+        seeds=seeds,
+    )
+    assert len(results) == 2
+    assert results[0].scores.position == 1
+    summary = pipeline.summarize_labels(results)
+    assert summary["entails"] == 1
+    assert summary["contradicts"] == 1
+
+
+def test_serializers_include_metadata(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "EVIDENCE_WINDOW_SIZE", 1)
+    monkeypatch.setattr(settings, "EVIDENCE_BM25_MIN_SCORE", 0.0)
+    monkeypatch.setattr(settings, "EVIDENCE_SEED_LIMIT", 10)
+    monkeypatch.setattr(settings, "EVIDENCE_MAX_CANDIDATES", 2)
+    seeds = _build_seeds_for_pipeline(tmp_path)
+
+    class NeutralNLI:
+        @staticmethod
+        def assess(_claim, passages, metadatas, **_kwargs):
+            return []
+
+    pipeline = EvidencePipeline(settings=settings, nli_module=NeutralNLI)
+    results = pipeline.run(
+        claim_id="claim-pipeline",
+        claim_text="alpha mechanism",
+        seeds=seeds,
+    )
+    serialized = serializers.serialize_candidates(results, max_text=20)
+    assert len(serialized) == 2
+    first = serialized[0]
+    assert len(first["text"]) <= 20
+    assert "page" in first["metadata"]
+    assert "section" in first["metadata"]
+    assert "bbox_count" in first["metadata"]
+    assert first["metadata"]["bbox_count"] >= 0
+    assert first["spans"]
+    assert "highlights" in first
+
+
+def _build_seeds_for_pipeline(tmp_path: Path) -> list:
+    _make_attachment(
+        tmp_path,
+        "claim-pipeline",
+        [
+            {
+                "sentence_id": "pp1",
+                "text": "alpha evidence chunk",
+                "page": 1,
+                "position": 0,
+            },
+            {
+                "sentence_id": "pp2",
+                "text": "supporting rationale",
+                "page": 2,
+                "position": 1,
+            },
+        ],
+    )
+    _make_attachment(
+        tmp_path,
+        "claim-pipeline",
+        [
+            {
+                "sentence_id": "pp3",
+                "text": "contradicting fragment",
+                "page": 3,
+                "position": 0,
+            },
+        ],
+    )
+    windows = loaders.load_claim_windows("claim-pipeline")
+    return deterministic_matcher.seed_windows("alpha evidence", windows)

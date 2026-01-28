@@ -43,6 +43,25 @@ class EvidenceStore:
         )
         self.max_extra_pages = max(0, (self.max_total // self.page_size) - 1)
 
+    def _normalize_claim_text(self, text: Optional[str]) -> Optional[str]:
+        if text is None:
+            return None
+        normalized = str(text).strip()
+        return normalized or None
+
+    def _resolve_claim_text(
+        self, claim_state: Dict[str, Any], claim_text: Optional[str]
+    ) -> Optional[str]:
+        metadata = claim_state.setdefault("metadata", {})
+        normalized = self._normalize_claim_text(claim_text)
+        if normalized:
+            metadata["claim_text"] = normalized
+            return normalized
+        stored = self._normalize_claim_text(metadata.get("claim_text"))
+        if stored:
+            return stored
+        return None
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -74,6 +93,13 @@ class EvidenceStore:
         force: bool = False,
     ) -> Dict[str, Any]:
         claim_state = self.ensure_claim_state(claim_id)
+        normalized_provided = self._normalize_claim_text(claim_text)
+        stored_metadata_text = self._normalize_claim_text(
+            (claim_state.get("metadata") or {}).get("claim_text")
+        )
+        if normalized_provided and normalized_provided != stored_metadata_text:
+            force = True
+            claim_state["stale"] = True
         if not force and not claim_state.get("stale") and claim_state.get("candidates"):
             return claim_state
         if claim_state.get("inflight_fetches", 0) >= evidence_api.MAX_LIST_REQUESTS:
@@ -82,13 +108,14 @@ class EvidenceStore:
         claim_state["is_loading"] = True
         claim_state["inflight_fetches"] = claim_state.get("inflight_fetches", 0) + 1
         try:
+            resolved_claim_text = self._resolve_claim_text(claim_state, claim_text)
             payload = self.api.list_evidence(
                 claim_id,
                 limit=self._current_limit(claim_state),
                 label=claim_state["filters"].get("label"),
                 include_neutral=claim_state["filters"].get("include_neutral", True),
                 pinned_only=claim_state["filters"].get("pinned_only", False),
-                claim_text=claim_text,
+                claim_text=resolved_claim_text,
             )
             self.update_from_payload(claim_id, payload)
             claim_state["stale"] = False
@@ -148,9 +175,10 @@ class EvidenceStore:
             return rerun
         rerun["inflight"] = True
         try:
+            resolved_claim_text = self._resolve_claim_text(claim_state, claim_text)
             job = self.api.request_rerun(
                 claim_id,
-                claim_text=claim_text,
+                claim_text=resolved_claim_text,
                 note=note,
                 advanced_settings=advanced_settings or {},
             )

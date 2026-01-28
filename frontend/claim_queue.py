@@ -60,6 +60,7 @@ def register_claim(claim_id: Optional[str] = None, **metadata) -> dict:
     order = _registry_order()
     if claim_id not in order:
         order.append(claim_id)
+    _sync_evidence_store_metadata(record)
     return record
 
 
@@ -353,7 +354,9 @@ def _notify_evidence_refresh(
         return
     evidence_store.mark_claim_stale(claim_id, reason=event)
     if evidence_store.get_active_claim_id() == claim_id:
-        evidence_store.sync_for_claim(claim_id, force=True)
+        evidence_store.sync_for_claim(
+            claim_id, claim_text=_claim_text_for(claim_id), force=True
+        )
 
 
 def _should_refresh_evidence(event: str, detail: Optional[dict]) -> bool:
@@ -362,3 +365,26 @@ def _should_refresh_evidence(event: str, detail: Optional[dict]) -> bool:
         return True
     status = (detail or {}).get("status") if detail else None
     return status == "matched"
+
+
+def _claim_text_for(claim_id: str) -> Optional[str]:
+    record = get_claim_record(claim_id)
+    if not record:
+        return None
+    return record.get("claim")
+
+
+def _sync_evidence_store_metadata(record: dict) -> None:
+    claim_id = record.get("id")
+    if not claim_id:
+        return
+    metadata = {
+        "claim_text": record.get("claim"),
+        "callout": record.get("callout"),
+        "reference_hint": record.get("reference_hint"),
+        "doc_id": record.get("doc_id"),
+        "flags": record.get("flags"),
+    }
+    cleaned = {key: value for key, value in metadata.items() if value is not None}
+    if cleaned:
+        evidence_store.ensure_claim_state(claim_id, **cleaned)

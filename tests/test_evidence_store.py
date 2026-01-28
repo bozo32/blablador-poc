@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import types
+from typing import Any
 
 import pytest
 
@@ -14,6 +15,7 @@ class StubEvidenceApi:
         self.list_calls: list[tuple[str, dict[str, object]]] = []
         self.history_calls: list[tuple[str, int]] = []
         self.rerun_calls = 0
+        self.rerun_payloads: list[dict[str, Any]] = []
         self.total = 10
 
     def list_evidence(self, claim_id: str, **kwargs):
@@ -37,8 +39,14 @@ class StubEvidenceApi:
         self.history_calls.append((claim_id, limit))
         return {"runs": [{"run_id": f"run-{claim_id}"}]}
 
-    def request_rerun(self, claim_id: str, **_):
+    def request_rerun(self, claim_id: str, **kwargs):
         self.rerun_calls += 1
+        payload = {
+            "claim_text": kwargs.get("claim_text"),
+            "note": kwargs.get("note"),
+            "advanced_settings": kwargs.get("advanced_settings"),
+        }
+        self.rerun_payloads.append(payload)
         return {"job_id": f"job-{self.rerun_calls}", "status": "queued"}
 
 
@@ -170,3 +178,33 @@ def test_store_sync_marks_stale_from_attachment(stub_streamlit):
     store.sync_for_claim("claim-stale")
 
     assert len(api.list_calls) == first_call_count + 1
+
+
+def test_store_claim_metadata_fallbacks_to_cached_text(stub_streamlit):
+    api = StubEvidenceApi()
+    store = evidence_store.EvidenceStore(
+        session_state=stub_streamlit.session_state,
+        api=api,
+        ui=stub_streamlit,
+    )
+    store.ensure_claim_state("claim-fallback", claim_text="Seeded text")
+    store.sync_for_claim("claim-fallback")
+    assert api.list_calls[-1][1]["claim_text"] == "Seeded text"
+
+    store.sync_for_claim("claim-fallback", claim_text="Edited text")
+    assert api.list_calls[-1][1]["claim_text"] == "Edited text"
+
+    store.sync_for_claim("claim-fallback")
+    assert api.list_calls[-1][1]["claim_text"] == "Edited text"
+
+
+def test_store_queue_rerun_includes_cached_claim_text(stub_streamlit):
+    api = StubEvidenceApi()
+    store = evidence_store.EvidenceStore(
+        session_state=stub_streamlit.session_state,
+        api=api,
+        ui=stub_streamlit,
+    )
+    store.ensure_claim_state("claim-rerun", claim_text="Queued claim")
+    store.queue_rerun("claim-rerun")
+    assert api.rerun_payloads[-1]["claim_text"] == "Queued claim"

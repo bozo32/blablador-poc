@@ -101,6 +101,7 @@ def init_session_state():
         "auto_extract_on_upload": True,
         "auto_resolve_on_upload": True,
         "citation_debug": False,
+        "show_demo_claims": False,
     }
     for key, val in defaults.items():
         st.session_state.setdefault(key, val)
@@ -339,14 +340,28 @@ def handle_pdf_upload():
                     st.session_state["active_document"] = document
                     st.success("Resolution complete.")
                 except RuntimeError as exc:
-                    st.error(f"Resolution failed: {exc}")
-                    return
+                    st.warning(_resolution_error_message(exc))
 
 
 def stringify_value(value: object) -> str | int | float | bool | None:
     if isinstance(value, (dict, list)):
         return json.dumps(value, ensure_ascii=True)
     return value
+
+
+def _resolution_error_message(exc: Exception) -> str:
+    raw = str(exc)
+    try:
+        payload = json.loads(raw)
+        detail = payload.get("detail") or raw
+    except Exception:
+        detail = raw
+    if "404" in detail:
+        return (
+            "Reference resolution service could not find the cited DOI (404). "
+            "Continuing with extracted metadata; retry later if needed."
+        )
+    return detail
 
 
 def normalize_records(records: list[dict]) -> list[dict]:
@@ -566,7 +581,7 @@ def prepare_attachment_workspace() -> None:
     """Ensure attachment queue state and claim registry are hydrated."""
     attachment_queue.init_attachment_queue_state()
     claim_queue.sync_claims_from_results(st.session_state.get("results"))
-    if not claim_queue.get_claim_records():
+    if not claim_queue.get_claim_records() and st.session_state.get("show_demo_claims"):
         claim_queue.ensure_demo_claims()
     attachment_queue.sync_backend_state()
     attachment_queue.ensure_open_when_activity()
@@ -1521,6 +1536,15 @@ def draw_sidebar():
             help="Resolve references after extraction completes.",
         )
         st.checkbox(
+            "Seed sample claims when workspace is empty",
+            key="show_demo_claims",
+            help=(
+                "Populate demo claims only when no segmentation results exist. "
+                "Leave unchecked for a clean workspace once your Blablador token "
+                "is configured."
+            ),
+        )
+        st.checkbox(
             "Debug callouts",
             key="citation_debug",
             help="Show raw sentence + callout strings for troubleshooting.",
@@ -1681,7 +1705,7 @@ def draw_ingestion_panel():
                     document = load_selected_document(show_error=False)
                     st.success("Resolution complete.")
                 except RuntimeError as exc:
-                    st.error(f"Resolution failed: {exc}")
+                    st.warning(_resolution_error_message(exc))
     with col_status:
         st.write(
             {

@@ -685,10 +685,15 @@ def render_claim_card(claim: dict, active_target: Optional[str]) -> None:
     if timeline:
         with st.expander("Attachment timeline", expanded=False):
             for entry in timeline:
-                detail = entry.get("detail") or {}
-                summary = ", ".join(
-                    f"{k}: {v}" for k, v in detail.items() if v is not None
-                )
+                detail = entry.get("detail")
+                if isinstance(detail, dict):
+                    summary = ", ".join(
+                        f"{k}: {v}" for k, v in detail.items() if v is not None
+                    )
+                elif isinstance(detail, str):
+                    summary = detail.strip()
+                else:
+                    summary = ""
                 event_label = entry.get("event", "update").title()
                 detail_text = summary or "No detail"
                 timestamp = entry.get("at") or "unknown"

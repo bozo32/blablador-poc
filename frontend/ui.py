@@ -463,10 +463,14 @@ def _sentence_label(sentence: str, words: int = 4) -> str:
 
 
 def _citation_href(citation_index: int, target_id: Optional[str], anchor: str) -> str:
+    doc_id = st.session_state.get("selected_doc_id")
     target = normalize_target_id(target_id)
+    base = (
+        f"?doc={doc_id}&cite={citation_index}" if doc_id else f"?cite={citation_index}"
+    )
     if target:
-        return f"?cite={citation_index}&target={target}#{anchor}"
-    return f"?cite={citation_index}#{anchor}"
+        return f"{base}&target={target}#{anchor}"
+    return f"{base}#{anchor}"
 
 
 def normalize_callout_text(callout: str) -> str:
@@ -1834,6 +1838,18 @@ def draw_sidebar():
 
 
 def draw_ingestion_panel():
+    # Restore selected document from query params (clicking citation chips
+    # navigates with ?doc=...&cite=...).
+    try:
+        params = st.query_params  # type: ignore[attr-defined]
+        param_doc = params.get("doc")
+        if isinstance(param_doc, list):
+            param_doc = param_doc[0] if param_doc else None
+        if param_doc and param_doc != st.session_state.get("selected_doc_id"):
+            st.session_state["selected_doc_id"] = str(param_doc)
+            load_selected_document(show_error=False)
+    except Exception:
+        pass
     st.subheader("PDF Ingestion")
     docs = st.session_state.get("ingested_docs")
     if docs is None:
@@ -2025,12 +2041,19 @@ def draw_ingestion_panel():
             return st.experimental_get_query_params()
 
     params = _read_query_params()
+    param_doc = params.get("doc")
     param_cite = params.get("cite")
     param_target = params.get("target")
+    if isinstance(param_doc, list):
+        param_doc = param_doc[0] if param_doc else None
     if isinstance(param_cite, list):
         param_cite = param_cite[0] if param_cite else None
     if isinstance(param_target, list):
         param_target = param_target[0] if param_target else None
+
+    if param_doc and param_doc != st.session_state.get("selected_doc_id"):
+        st.session_state["selected_doc_id"] = str(param_doc)
+        load_selected_document(show_error=False)
     if param_cite is not None:
         try:
             select_citation(
@@ -2088,17 +2111,27 @@ def draw_ingestion_panel():
         )
         api_url = st.session_state.get("api_url", "http://localhost:8000")
 
-        for sentence, items in grouped.items():
-            anchor = _sentence_anchor(sentence)
-            label = _sentence_label(sentence)
-            selected_index = st.session_state.get("citation_selected_index")
-            sentence_selected = any(idx == selected_index for idx, _ in items)
-            with st.expander(label, expanded=sentence_selected):
+        selected_index = st.session_state.get("citation_selected_index")
+        selected_items = None
+        selected_sentence = None
+        if selected_index is not None:
+            for sentence, items in grouped.items():
+                if any(idx == selected_index for idx, _ in items):
+                    selected_items = items
+                    selected_sentence = sentence
+                    break
+
+        if not selected_items or selected_sentence is None:
+            st.info("Click an in-text citation chip to inspect and parse.")
+        else:
+            anchor = _sentence_anchor(selected_sentence)
+            label = _sentence_label(selected_sentence)
+            with st.expander(label, expanded=True):
                 st.markdown(f"[Jump to text](#{anchor})")
-                st.caption(f"{len(items)} citation(s) in this sentence")
+                st.caption(f"{len(selected_items)} citation(s) in this sentence")
 
                 context = None
-                if sentence_selected and selected_index is not None:
+                if selected_index is not None:
                     selected_target = normalize_target_id(
                         st.session_state.get("citation_selected_target")
                     )
@@ -2124,7 +2157,9 @@ def draw_ingestion_panel():
                             st.markdown("**Context**")
                             st.write(citing)
 
-                with st.expander("Parsing", expanded=False):
+                # Keep the parsing panel open after actions.
+                active_panel = st.session_state.get("workflow_active_panel")
+                with st.expander("Parsing", expanded=active_panel == "parsing"):
                     model = st.session_state.get("selected_model")
                     ta_key = f"citation-segments-{anchor}"
                     stored = (
@@ -2146,14 +2181,13 @@ def draw_ingestion_panel():
                             else ""
                         ),
                     ):
+                        st.session_state["workflow_active_panel"] = "parsing"
                         idx_seed = (selected_index or items[0][0]) + 1
-                        seg_source = (
-                            (context or {}).get("citing_sentence")
-                            if sentence_selected
-                            else None
-                        )
+                        seg_source = (context or {}).get("citing_sentence") or (
+                            context or {}
+                        ).get("sentence")
                         if not seg_source:
-                            seg_source = sentence
+                            seg_source = selected_sentence
                         segments = seg_via_llm(seg_source, idx_seed, model)
                         st.session_state.setdefault("citation_sentence_segments", {})[
                             anchor
@@ -2167,6 +2201,7 @@ def draw_ingestion_panel():
                         placeholder="Use 'Segment sentence' or paste/edit claims here",
                     )
                     if st.button("Save claims", key=f"save-claims-{anchor}"):
+                        st.session_state["workflow_active_panel"] = "parsing"
                         lines = [
                             ln.strip() for ln in seg_text.splitlines() if ln.strip()
                         ]
@@ -2174,7 +2209,7 @@ def draw_ingestion_panel():
                             anchor
                         ] = lines
 
-                        primary = items[0][1]
+                        primary = selected_items[0][1]
                         primary_callout = primary.get("callout") or "citation"
                         target_id = normalize_target_id(primary.get("target_id"))
                         reference_hint = {
@@ -2187,7 +2222,9 @@ def draw_ingestion_panel():
                             parsed = to_segment_dict(line)
                             segment_id = parsed.get("segment_id") or f"seg-{idx+1}"
                             claim_text = parsed.get("claim") or line
-                            claim_id = f"cite:{doc_id}:{items[0][0]}:{segment_id}"
+                            claim_id = (
+                                f"cite:{doc_id}:{selected_items[0][0]}:{segment_id}"
+                            )
                             claim_queue.register_claim(
                                 claim_id,
                                 claim=claim_text,
@@ -2202,9 +2239,9 @@ def draw_ingestion_panel():
                         else:
                             st.info("No claims to save yet.")
 
-                with st.expander("Retrieving", expanded=False):
+                with st.expander("Retrieving", expanded=active_panel == "retrieving"):
                     options = []
-                    for citation_index, citation in items:
+                    for citation_index, citation in selected_items:
                         callout = citation.get("callout") or "citation"
                         display_callout = format_callout(callout)["display"]
                         target_id = normalize_target_id(citation.get("target_id"))

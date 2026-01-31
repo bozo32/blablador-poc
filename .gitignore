@@ -11,6 +11,9 @@ __pycache__/
 *.meta.pkl
 output.json
 tmp.*
+
+# secrets
+.env
 *.pdf
 !fixtures/*.pdf
 *.xml

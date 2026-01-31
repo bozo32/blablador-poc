@@ -1,35 +1,16 @@
 import os
-os.environ["TRANSFORMERS_CACHE"] = str(os.path.expanduser("~/.cache/huggingface"))
 
-from backend import utils
-utils.set_sane_threads()
+from dotenv import load_dotenv
+
+load_dotenv()
+os.environ["TRANSFORMERS_CACHE"] = str(os.path.expanduser("~/.cache/huggingface"))
 
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict
 from backend import utils
 
-from transformers import (
-    AutoModelForSequenceClassification,
-    AutoTokenizer,
-    pipeline as hf_pipeline,
-)
-
-try:
-    from transformers import AdamW
-except ImportError:
-    import torch
-    import transformers
-    transformers.AdamW = torch.optim.AdamW
-
-
-def assess(model_name: str, premise: str, hypothesis: str):
-    from backend.nli import get_nli_pipeline
-
-    pipeline = get_nli_pipeline(model_name)
-    result = pipeline(f"{premise} </s></s> {hypothesis}")
-    return result
+utils.set_sane_threads()
 
 
 if __name__ == "__main__":
@@ -59,7 +40,7 @@ if __name__ == "__main__":
     if args.api_base:
         os.environ["API_BASE"] = args.api_base
     # Set backend URL for the UI to call
-    os.environ.setdefault("BACKEND_URL", f"http://localhost:8000")
+    os.environ.setdefault("BACKEND_URL", "http://localhost:8000")
 
     # Prebuild is now triggered later from UI after user uploads folder
     # Preprocess citations
@@ -81,9 +62,16 @@ if __name__ == "__main__":
     #     COLBERT_CONDA_ENV; default = "colbert-server" (see environment.yml).
     colbert_env = os.environ.get("COLBERT_CONDA_ENV", "colbert-server")
     colbert_cmd = [
-        "conda", "run", "-n", colbert_env,
-        "uvicorn", "colbert_server.colbert:app",
-        "--host", "localhost", "--port", "7001",
+        "conda",
+        "run",
+        "-n",
+        colbert_env,
+        "uvicorn",
+        "colbert_server.colbert:app",
+        "--host",
+        "localhost",
+        "--port",
+        "7001",
     ]
     # pass arguments to ui.py _after_ the `--` separator so Streamlit doesn't
     # try to parse them.
@@ -96,10 +84,7 @@ if __name__ == "__main__":
     ]
 
     def backend_ready(proc: subprocess.Popen) -> bool:
-        """
-        Poll the backend health‑check while also detecting early crashes.
-        Returns True when http://localhost:8000/docs is reachable.
-        """
+        """Return True when /docs is reachable."""
         import time
 
         import requests

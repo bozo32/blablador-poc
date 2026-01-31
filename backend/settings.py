@@ -41,6 +41,11 @@ class AppSettings(PydanticBaseSettings):
         description="Base URL of the Blablador API",
     )
 
+    DEFAULT_LLM_MODEL: str = Field(
+        "alias-huge",
+        description="Default Blablador model alias used by the UI",
+    )
+
     # — GROBID extraction defaults
     GROBID_URL: str = Field(
         "http://localhost:8070",

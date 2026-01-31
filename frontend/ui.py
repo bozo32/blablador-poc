@@ -68,7 +68,7 @@ def init_session_state():
     """Initialize Streamlit session state keys from settings."""
     defaults = {
         "api_url": settings.BACKEND_URL,
-        "api_key": settings.API_KEY,
+        "api_key": "" if settings.API_KEY == "..." else settings.API_KEY,
         "api_base": settings.API_BASE,
         "embed_model": settings.EMBED_MODEL,
         "max_sentences": settings.MAX_SENTENCES,
@@ -77,7 +77,7 @@ def init_session_state():
         "reranker_top_k": settings.RERANKER_TOP_K,
         "nli_model": settings.NLI_MODEL,
         "nli_threshold": settings.NLI_THRESHOLD,
-        "selected_model": None,
+        "selected_model": settings.DEFAULT_LLM_MODEL,
         "seg_cache": {},
         "results": {},
         "started": False,

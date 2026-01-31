@@ -24,6 +24,7 @@ from backend import (
     extraction,
     grobid_client,
     schemas,
+    tei_body,
     utils,
 )
 from backend.nli import assess
@@ -153,6 +154,19 @@ def get_ingested_extraction(doc_id: str):
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found")
     return document.get("extraction")
+
+
+@app.get("/ingest/{doc_id}/body", response_model=schemas.DocumentBodyResponse)
+def get_ingested_body(doc_id: str):
+    document = get_ingested_document(doc_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    try:
+        tei_xml = get_tei_xml(doc_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    payload = tei_body.build_document_body(tei_xml)
+    return {"document_id": doc_id, **payload}
 
 
 @app.post("/ingest/{doc_id}/resolve", response_model=schemas.ResolutionResponse)

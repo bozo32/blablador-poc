@@ -233,6 +233,27 @@ class CitationGraphResponse(BaseModel):
     edges: List[CitationGraphEdge]
 
 
+class DocumentBodySegment(BaseModel):
+    type: str
+    text: Optional[str] = None
+    citation_index: Optional[int] = None
+    target_id: Optional[str] = None
+    callout: Optional[str] = None
+    label: Optional[str] = None
+    sentence_id: Optional[str] = None
+
+
+class DocumentBodyParagraph(BaseModel):
+    paragraph_id: Optional[str] = None
+    segments: List[DocumentBodySegment]
+    citation_indices: List[int] = Field(default_factory=list)
+
+
+class DocumentBodyResponse(BaseModel):
+    document_id: str
+    paragraphs: List[DocumentBodyParagraph]
+
+
 class ReferenceRetrievalSource(BaseModel):
     label: str
     title: Optional[str] = None

@@ -121,6 +121,15 @@ def get_citation_graph(
     return _parse_response(response) or {}
 
 
+def get_document_body(api_url: str, doc_id: str) -> dict:
+    url = f"{api_url.rstrip('/')}/ingest/{doc_id}/body"
+    try:
+        response = requests.get(url, timeout=DEFAULT_TIMEOUT)
+    except requests.RequestException as exc:
+        raise RuntimeError(_request_error_message(url, exc)) from exc
+    return _parse_response(response) or {}
+
+
 def get_reference_retrieval(
     api_url: str,
     doc_id: str,

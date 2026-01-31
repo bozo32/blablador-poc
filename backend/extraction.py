@@ -41,7 +41,10 @@ def _text_with_marker(
 def _split_sentences(text: str) -> List[str]:
     if not text:
         return []
-    parts = re.split(r"(?<=[.!?])\s+", text.strip())
+    # Conservative sentence splitting.
+    # Avoid splitting on abbreviations like "et al." / "e.g." and on punctuation
+    # followed by a digit (common in citations like "et al. 2022").
+    parts = re.split(r"(?<=[.!?])\s+(?=[A-Z\"(])", text.strip())
     return [part.strip() for part in parts if part.strip()]
 
 

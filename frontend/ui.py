@@ -1878,10 +1878,13 @@ def draw_ingestion_panel():
     st.subheader("PDF Ingestion")
     docs = st.session_state.get("ingested_docs")
     if docs is None:
-        docs = refresh_ingested_docs(show_error=False)
+        docs = refresh_ingested_docs(show_error=True)
     if not docs:
-        st.info("Upload a PDF from the sidebar to begin.")
-        return
+        # One more attempt in case we landed here via a chip click.
+        docs = refresh_ingested_docs(show_error=True)
+        if not docs:
+            st.info("Upload a PDF from the sidebar to begin.")
+            return
     doc_id = st.session_state.get("selected_doc_id")
     if not doc_id:
         st.info("Select a PDF to view details.")

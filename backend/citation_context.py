@@ -70,7 +70,7 @@ def _text_with_marker(
 def _split_sentences(text: str) -> List[str]:
     if not text:
         return []
-    parts = re.split(r"(?<=[.!?])\s+", text.strip())
+    parts = re.split(r"(?<=[.!?])\s+(?=[A-Z\"(])", text.strip())
     return [part.strip() for part in parts if part.strip()]
 
 

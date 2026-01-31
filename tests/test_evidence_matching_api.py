@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import importlib.machinery
-import sys
 import threading
 import time
 import types
@@ -10,58 +8,7 @@ from typing import cast, Optional
 import pytest
 from fastapi.testclient import TestClient
 
-
-class _FakeFaissIndex:
-    def __init__(self, *_args, **_kwargs):
-        self._rows = 0
-
-    def add(self, *_args, **_kwargs):  # pragma: no cover - stubbed behavior
-        return None
-
-    def search(self, arr, k):  # pragma: no cover - stubbed behavior
-        try:
-            row_count = len(arr)
-        except TypeError:
-            row_count = 1
-        distances = [[0.0] * k for _ in range(row_count)]
-        indices = [[0] * k for _ in range(row_count)]
-        return distances, indices
-
-
-_fake_faiss = types.ModuleType("faiss")
-setattr(_fake_faiss, "IndexFlatIP", _FakeFaissIndex)
-setattr(_fake_faiss, "normalize_L2", lambda arr: arr)
-setattr(_fake_faiss, "write_index", lambda *_args, **_kwargs: None)
-setattr(_fake_faiss, "read_index", lambda *_args, **_kwargs: _FakeFaissIndex())
-setattr(_fake_faiss, "__spec__", importlib.machinery.ModuleSpec("faiss", loader=None))
-sys.modules.setdefault("faiss", _fake_faiss)
-
-
-_fake_retriever = types.ModuleType("backend.retriever")
-
-
-class _StubRetriever:  # pragma: no cover - stub for imports
-    def __init__(self, *args, **kwargs):
-        self.index = None
-
-    def build(self, *_args, **_kwargs):
-        return None
-
-    def load(self):
-        return None
-
-    def search(self, *_args, **_kwargs):
-        return [], []
-
-
-setattr(_fake_retriever, "Retriever", _StubRetriever)
-setattr(_fake_retriever, "build_all", lambda *args, **kwargs: {})
-setattr(
-    _fake_retriever,
-    "__spec__",
-    importlib.machinery.ModuleSpec("backend.retriever", loader=None),
-)
-sys.modules.setdefault("backend.retriever", _fake_retriever)
+# NOTE: Do not stub sys.modules at import time here; it leaks into other tests.
 
 
 from backend import attachment_pipeline, attachment_store

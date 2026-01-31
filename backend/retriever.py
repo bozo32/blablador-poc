@@ -1,10 +1,16 @@
-# backend/retriever.py
+"""FAISS-backed retriever for TEI chunks."""
 
-from backend import utils
+from __future__ import annotations
+
 from pathlib import Path
 from typing import Dict, List, Optional
 
-import faiss
+from backend import utils
+
+try:  # pragma: no cover - optional dependency
+    import faiss
+except Exception:  # pragma: no cover - faiss may be unavailable in lightweight envs
+    faiss = None
 import numpy as np
 
 from .parser import tei_and_csv_to_documents
@@ -17,8 +23,9 @@ class Retriever:
         max_sentences: Optional[int] = None,
         min_score: float = 0.20,
         embed_model: str = "infloat/multilingual-e5-base",  # HF default
-        docstore: dict[str, dict] | None = None,
+        docstore: Optional[Dict[str, dict]] = None,
     ):
+        """Create a retriever backed by an on-disk FAISS index."""
         self.index_path = index_path.with_suffix(".faiss")
         self.index = None
         self.chunks: List[Dict] = []
@@ -38,14 +45,17 @@ class Retriever:
             empty_scores = [[] for _ in vectors]
             return empty_ids, empty_scores
         arr = np.array(vectors, dtype="float32")
-        D, I = self.index.search(arr, k)
-        id_batches = [[self.id_list[pos] for pos in batch] for batch in I]
-        return id_batches, D.tolist()
+        distances, indices = self.index.search(arr, k)
+        id_batches = [[self.id_list[pos] for pos in batch] for batch in indices]
+        return id_batches, distances.tolist()
 
     def build(self, docs: List[Dict]) -> None:
+        if faiss is None:
+            raise RuntimeError("faiss is required to build retriever indices")
         # --- guard: no documents to index ---
         if not docs:
             import logging
+
             logging.warning("Retriever.build called with 0 docs; skipping index build")
             self.index = None
             self.chunks = []
@@ -73,9 +83,13 @@ class Retriever:
         faiss.write_index(self.index, str(self.index_path))
 
     def load(self):
+        if faiss is None:
+            raise RuntimeError("faiss is required to load retriever indices")
         self.index = faiss.read_index(str(self.index_path))
 
     def query(self, text: str, k: int = 5) -> List[Dict]:
+        if faiss is None:
+            raise RuntimeError("faiss is required to query retriever indices")
         if self.index is None or not self.chunks:
             raise ValueError(
                 "Index and chunks must be loaded or built before querying."
@@ -97,6 +111,8 @@ class Retriever:
         return results
 
     def query_many(self, texts: List[str], k: int = 5) -> List[List[Dict]]:
+        if faiss is None:
+            raise RuntimeError("faiss is required to query retriever indices")
         if self.index is None or not self.chunks:
             raise ValueError(
                 "Index and chunks must be loaded or built before querying."

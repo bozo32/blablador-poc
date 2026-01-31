@@ -2,7 +2,14 @@ import numpy as np
 import pytest
 
 import backend.utils as utils
+import backend.retriever as retriever_module
 from backend.retriever import Retriever
+
+
+if getattr(retriever_module, "faiss", None) is None:
+    pytest.skip(
+        "faiss not installed; skipping retriever tests", allow_module_level=True
+    )
 
 
 @pytest.fixture
@@ -18,7 +25,7 @@ def test_max_sentences_cap(tmp_path, monkeypatch, dummy_chunks):
     idx_base = tmp_path / "idx"
 
     # monkey‐patch the real embed to just return random vectors
-    def fake_embed(texts):
+    def fake_embed(texts, **_):
         # one‐dimensional embeddings so index.dim = 1
         arr = np.arange(len(texts), dtype="float32").reshape(-1, 1)
         # normalize for cosine
@@ -41,7 +48,7 @@ def test_faiss_min_score(tmp_path, monkeypatch, dummy_chunks):
     idx_base = tmp_path / "idx2"
 
     # fake embed that returns unit vectors where chunk 0 matches query perfectly
-    def fake_embed(texts):
+    def fake_embed(texts, **_):
         # if text contains "0" return [1.0], else [0.0]
         arr = np.array(
             [[1.0] if "sentence 0" in t else [0.0] for t in texts], dtype="float32"

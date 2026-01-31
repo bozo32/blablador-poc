@@ -1,27 +1,14 @@
-from transformers import (
-    AutoModelForSequenceClassification,
-    AutoTokenizer,
+"""Legacy debug script placeholder.
+
+This file was previously a one-off local experiment and isn't a deterministic
+unit test (it downloads models and references undefined variables).
+
+We keep the filename for historical context but skip it in automated runs.
+"""
+
+import pytest
+
+
+pytest.skip(
+    "Non-deterministic local debug script (not a unit test)", allow_module_level=True
 )
-from transformers import pipeline as hf_pipeline
-
-_LOCAL_NLI_MODELS = {}
-
-try:
-    for name, path in {
-        "deberta-base": "cross-encoder/nli-deberta-v3-base",
-        "deberta-large": "microsoft/deberta-v3-large",
-    }.items():
-        tok = AutoTokenizer.from_pretrained(path)
-        model = AutoModelForSequenceClassification.from_pretrained(path)
-        _LOCAL_NLI_MODELS[name] = hf_pipeline(
-            "text-classification",
-            model=model,
-            tokenizer=tok,
-            return_all_scores=True,
-            device=0,
-        )
-except Exception as e:
-    print(f"Warning: could not load local NLI models: {e}")
-    _LOCAL_NLI_MODELS = {}
-
-assert "text" in first_ev

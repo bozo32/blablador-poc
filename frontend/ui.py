@@ -462,8 +462,12 @@ def _sentence_label(sentence: str, words: int = 4) -> str:
     return f"{head}{suffix}"
 
 
-def _citation_href(citation_index: int, target_id: Optional[str], anchor: str) -> str:
-    doc_id = st.session_state.get("selected_doc_id")
+def _citation_href(
+    doc_id: Optional[str],
+    citation_index: int,
+    target_id: Optional[str],
+    anchor: str,
+) -> str:
     target = normalize_target_id(target_id)
     base = (
         f"?doc={doc_id}&cite={citation_index}" if doc_id else f"?cite={citation_index}"
@@ -595,6 +599,7 @@ def render_sentence_with_callouts(
 def _render_sentence_with_citation_chips(
     sentence: str,
     *,
+    doc_id: Optional[str],
     citation_indices: list[int],
     anchor: str,
     target_id: Optional[str],
@@ -608,33 +613,53 @@ def _render_sentence_with_citation_chips(
         return ""
 
     href = _citation_href(
+        doc_id,
         citation_indices[0] if citation_indices else 0,
         target_id,
         anchor,
     )
-    chip = (
-        f'<a class="citation-chip citation-chip-link" href="{html.escape(href)}">'
-        "citations"
-        "</a>"
-    )
 
-    # Replace any bracketed span that looks like a citation cluster.
-    pattern = re.compile(r"(\([^\)]*\d{4}[^\)]*\)|\[[^\]]*\d{4}[^\]]*\])")
-    replaced = 0
+    def make_chip(label: str) -> str:
+        cleaned = re.sub(r"\s+", " ", (label or "").strip())
+        if not cleaned:
+            cleaned = "citation"
+        return (
+            f'<a class="citation-chip citation-chip-link" href="{html.escape(href)}">'
+            f"{html.escape(cleaned)}"
+            "</a>"
+        )
 
-    def _sub(match: re.Match) -> str:
-        nonlocal replaced
-        replaced += 1
-        return chip
+    # Replace citation clusters like (Author 2018; Author2 2022) or [12, 13].
+    span_re = re.compile(r"\([^\)]{2,240}\)|\[[^\]]{2,240}\]")
+    spans: list[tuple[int, int, str]] = []
+    for match in span_re.finditer(sentence):
+        span = match.group(0)
+        lowered = span.lower()
+        looks_like_citation = (
+            any(char.isdigit() for char in lowered)
+            or ";" in lowered
+            or "et al" in lowered
+        )
+        if looks_like_citation:
+            spans.append((match.start(), match.end(), span))
 
-    rendered = pattern.sub(_sub, sentence)
-    if replaced:
-        return html.escape(rendered).replace(html.escape(chip), chip)
+    if not spans:
+        return (
+            f"{html.escape(sentence)} {make_chip('citation')}"
+            if citation_indices
+            else html.escape(sentence)
+        )
 
-    # Fallback: append chip if we can't find a citation span.
-    return (
-        f"{html.escape(sentence)} {chip}" if citation_indices else html.escape(sentence)
-    )
+    chunks: list[str] = []
+    cursor = 0
+    for start, end, label in spans:
+        if start > cursor:
+            chunks.append(html.escape(sentence[cursor:start]))
+        chunks.append(make_chip(label))
+        cursor = end
+    if cursor < len(sentence):
+        chunks.append(html.escape(sentence[cursor:]))
+    return "".join(chunks)
 
 
 def _render_sentence_with_citation_cluster(
@@ -2028,10 +2053,22 @@ def draw_ingestion_panel():
     inject_citation_styles()
     main_col, rail_col = st.columns([7, 5], gap="large")
 
-    grouped: dict[str, list[tuple[int, dict]]] = {}
+    grouped: dict[str, dict] = {}
     for idx, citation in enumerate(citations):
         sentence = (citation.get("sentence") or "Sentence unavailable").strip()
-        grouped.setdefault(sentence, []).append((idx, citation))
+        sentence_id = citation.get("sentence_id")
+        key = str(sentence_id) if sentence_id else sentence
+        entry = grouped.setdefault(
+            key,
+            {
+                "sentence": sentence,
+                "sentence_id": sentence_id,
+                "items": [],
+            },
+        )
+        entry["items"].append((idx, citation))
+        if len(sentence) > len(entry.get("sentence") or ""):
+            entry["sentence"] = sentence
 
     def _read_query_params() -> dict:
         try:
@@ -2066,7 +2103,9 @@ def draw_ingestion_panel():
         st.markdown("#### Citing statements")
         st.caption("Click the in-text citation chip to inspect context.")
 
-        for sentence, items in grouped.items():
+        for entry in grouped.values():
+            sentence = entry["sentence"]
+            items = entry["items"]
             anchor = _sentence_anchor(sentence)
             st.markdown(f'<a id="{anchor}"></a>', unsafe_allow_html=True)
 
@@ -2077,6 +2116,7 @@ def draw_ingestion_panel():
             target_id = items[0][1].get("target_id")
             rendered_sentence = _render_sentence_with_citation_chips(
                 sentence,
+                doc_id=doc_id,
                 citation_indices=citation_indices,
                 anchor=anchor,
                 target_id=target_id,
@@ -2115,7 +2155,9 @@ def draw_ingestion_panel():
         selected_items = None
         selected_sentence = None
         if selected_index is not None:
-            for sentence, items in grouped.items():
+            for entry in grouped.values():
+                sentence = entry["sentence"]
+                items = entry["items"]
                 if any(idx == selected_index for idx, _ in items):
                     selected_items = items
                     selected_sentence = sentence

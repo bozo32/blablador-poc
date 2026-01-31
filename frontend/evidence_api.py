@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any, Dict, Optional
+from typing import Any, Dict, MutableMapping, Optional
 
 import requests
 import streamlit as st
@@ -27,7 +27,7 @@ def show_api_error(message: str, *, icon: str = "⚠️") -> None:
     st.error(message)
 
 
-def _session_state() -> Dict[str, Any]:
+def _session_state() -> MutableMapping[str, Any]:
     return st.session_state
 
 
@@ -193,9 +193,36 @@ def export_rank_json(claim_id: str) -> Dict[str, Any]:
     return _request("get", f"/claims/{claim_id}/evidence/export")
 
 
+def fetch_span_excerpt(
+    attachment_id: str,
+    span_id: str,
+    *,
+    before: int = 2,
+    after: int = 1,
+) -> Dict[str, Any]:
+    params = {"before": max(0, int(before)), "after": max(0, int(after))}
+    return _request(
+        "get",
+        f"/attachments/{attachment_id}/spans/{span_id}/excerpt",
+        params=params,
+    )
+
+
+def fetch_span_jump(attachment_id: str, span_id: str) -> Dict[str, Any]:
+    return _request("get", f"/attachments/{attachment_id}/spans/{span_id}/jump")
+
+
 def jump_to_pdf_span(attachment_id: str, span_id: str) -> Dict[str, Any]:
     """Return viewer metadata for jumping to a PDF span."""
-    return _request("get", f"/attachments/{attachment_id}/spans/{span_id}/jump")
+    return fetch_span_jump(attachment_id, span_id)
+
+
+def get_evidence_selection(claim_id: str) -> Dict[str, Any]:
+    return _request("get", f"/claims/{claim_id}/evidence/selection")
+
+
+def put_evidence_selection(claim_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    return _request("put", f"/claims/{claim_id}/evidence/selection", json=payload)
 
 
 __all__ = [
@@ -206,6 +233,10 @@ __all__ = [
     "request_rerun",
     "fetch_history",
     "export_rank_json",
+    "fetch_span_excerpt",
+    "fetch_span_jump",
     "jump_to_pdf_span",
+    "get_evidence_selection",
+    "put_evidence_selection",
     "show_api_error",
 ]

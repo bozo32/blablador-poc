@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import streamlit as st
 
@@ -199,6 +199,121 @@ class EvidenceStore:
             rerun["inflight"] = False
         return rerun
 
+    def sync_selection(
+        self, claim_id: str, *, force: bool = False
+    ) -> Optional[Dict[str, Any]]:
+        """Fetch persisted evidence selection for a claim and cache it in session."""
+        claim_state = self.ensure_claim_state(claim_id)
+        if (
+            not force
+            and claim_state.get("selection") is not None
+            and not claim_state.get("selection_stale", True)
+        ):
+            return claim_state.get("selection")
+        claim_state["selection_error"] = None
+        try:
+            selection = self.api.get_evidence_selection(claim_id)
+        except evidence_api.EvidenceApiError as exc:
+            claim_state["selection_error"] = str(exc)
+            return None
+        claim_state["selection"] = selection
+        claim_state["selection_stale"] = False
+        return selection
+
+    def save_selection(
+        self,
+        claim_id: str,
+        *,
+        verdict: str,
+        primary_candidate_id: Optional[str] = None,
+        secondary: Optional[List[Dict[str, Any]]] = None,
+        note: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Persist reviewer verdict and selected candidates to the backend."""
+        claim_state = self.ensure_claim_state(claim_id)
+        claim_state["selection_error"] = None
+        payload: Dict[str, Any] = {
+            "verdict": verdict,
+            "primary": None,
+            "secondary": [],
+            "note": note,
+        }
+        if primary_candidate_id:
+            primary = self._find_candidate(claim_state, primary_candidate_id)
+            if not primary:
+                _toast(self.ui, "Primary selection candidate not found.", icon="⚠️")
+                return None
+            primary_span = self._candidate_span(primary)
+            if not primary_span:
+                return None
+            payload["primary"] = {
+                "candidate_id": primary_candidate_id,
+                **primary_span,
+            }
+
+        secondary_payload: List[Dict[str, Any]] = []
+        for entry in secondary or []:
+            candidate_id = (entry or {}).get("candidate_id")
+            if not candidate_id:
+                continue
+            candidate = self._find_candidate(claim_state, candidate_id)
+            if not candidate:
+                continue
+            span = self._candidate_span(candidate)
+            if not span:
+                continue
+            secondary_payload.append(
+                {
+                    "candidate_id": candidate_id,
+                    **span,
+                    "rationale": (entry or {}).get("rationale") or "",
+                }
+            )
+        payload["secondary"] = secondary_payload
+
+        try:
+            stored = self.api.put_evidence_selection(claim_id, payload)
+        except evidence_api.EvidenceApiError as exc:
+            claim_state["selection_error"] = str(exc)
+            return None
+
+        claim_state["selection"] = stored
+        claim_state["selection_stale"] = False
+        _toast(self.ui, "Evidence selection saved.", icon="✅")
+        return stored
+
+    def preview_excerpt(
+        self,
+        claim_id: str,
+        candidate: Dict[str, Any],
+        *,
+        before: int = 2,
+        after: int = 1,
+        force: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        """Fetch and cache paragraph-bounded excerpt context for a candidate."""
+        claim_state = self.ensure_claim_state(claim_id)
+        span = self._candidate_span(candidate)
+        if not span:
+            return None
+        attachment_id = span["attachment_id"]
+        span_id = span["span_id"]
+        cache_key = f"{attachment_id}:{span_id}:{int(before)}:{int(after)}"
+        cache = claim_state.setdefault("excerpt_cache", {})
+        if not force and cache_key in cache:
+            return cache.get(cache_key)
+        try:
+            excerpt = self.api.fetch_span_excerpt(
+                attachment_id,
+                span_id,
+                before=before,
+                after=after,
+            )
+        except evidence_api.EvidenceApiError:
+            return None
+        cache[cache_key] = excerpt
+        return excerpt
+
     def _mark_review_state(
         self, claim_id: str, candidate_id: str, status: str
     ) -> Dict[str, Any]:
@@ -309,7 +424,16 @@ class EvidenceStore:
         if not payload:
             return claim_state
         claim_state["last_payload"] = payload
-        claim_state["candidates"] = payload.get("candidates", [])
+        candidates = payload.get("candidates", [])
+        for candidate in candidates or []:
+            label = (candidate.get("label") or "").strip().lower()
+            if label in {"entails", "entailment"}:
+                candidate["label"] = "entail"
+            elif label in {"contradicts", "contradiction", "refutes", "refute"}:
+                candidate["label"] = "contradict"
+            elif label in {"neutral", "unknown", "none"}:
+                candidate["label"] = "neutral"
+        claim_state["candidates"] = candidates
         claim_state["total"] = payload.get("total", claim_state.get("total", 0))
         claim_state["offset"] = payload.get("offset", claim_state.get("offset", 0))
         claim_state["run"] = payload.get("run")
@@ -321,6 +445,19 @@ class EvidenceStore:
         for candidate in claim_state.get("candidates", []):
             candidate["is_pinned"] = candidate.get("id") in pinned_lookup
         return claim_state
+
+    def _candidate_span(self, candidate: Dict[str, Any]) -> Optional[Dict[str, str]]:
+        metadata = (candidate or {}).get("metadata") or {}
+        attachment_id = (
+            metadata.get("attachment_id")
+            or candidate.get("attachment_id")
+            or metadata.get("document_id")
+        )
+        span_id = metadata.get("span_id") or metadata.get("anchor_id")
+        if not attachment_id or not span_id:
+            _toast(self.ui, "Candidate is missing attachment/span metadata.", icon="⚠️")
+            return None
+        return {"attachment_id": str(attachment_id), "span_id": str(span_id)}
 
     def mark_claim_stale(
         self, claim_id: str, *, reason: Optional[str] = None
@@ -363,6 +500,10 @@ class EvidenceStore:
             "rerun": self._default_rerun_state(),
             "share_target": None,
             "pdf_jump": None,
+            "selection": None,
+            "selection_stale": True,
+            "selection_error": None,
+            "excerpt_cache": {},
         }
 
     @staticmethod
@@ -452,12 +593,53 @@ def mark_claim_stale(claim_id: str, *, reason: Optional[str] = None) -> Dict[str
     return _get_store().mark_claim_stale(claim_id, reason=reason)
 
 
+def sync_selection(claim_id: str, *, force: bool = False) -> Optional[Dict[str, Any]]:
+    return _get_store().sync_selection(claim_id, force=force)
+
+
+def save_selection(
+    claim_id: str,
+    *,
+    verdict: str,
+    primary_candidate_id: Optional[str] = None,
+    secondary: Optional[List[Dict[str, Any]]] = None,
+    note: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    return _get_store().save_selection(
+        claim_id,
+        verdict=verdict,
+        primary_candidate_id=primary_candidate_id,
+        secondary=secondary,
+        note=note,
+    )
+
+
+def preview_excerpt(
+    claim_id: str,
+    candidate: Dict[str, Any],
+    *,
+    before: int = 2,
+    after: int = 1,
+    force: bool = False,
+) -> Optional[Dict[str, Any]]:
+    return _get_store().preview_excerpt(
+        claim_id,
+        candidate,
+        before=before,
+        after=after,
+        force=force,
+    )
+
+
 __all__ = [
     "EvidenceStore",
     "ensure_claim_state",
     "set_active_claim",
     "get_active_claim_id",
     "sync_for_claim",
+    "sync_selection",
+    "save_selection",
+    "preview_excerpt",
     "apply_filter",
     "load_more",
     "queue_rerun",

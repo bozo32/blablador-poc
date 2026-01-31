@@ -19,9 +19,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend import (
     attachment_pipeline,
     attachment_store,
+    attachment_spans,
     citation_context,
     citation_graph,
     extraction,
+    evidence_selection_store,
     grobid_client,
     schemas,
     tei_body,
@@ -29,6 +31,7 @@ from backend import (
 )
 from backend.nli import assess
 from backend.evidence_matching.service import evidence_service
+from pydantic import ValidationError
 
 try:
     from transformers import AdamW  # noqa: F401
@@ -298,6 +301,60 @@ def get_attachment_status(attachment_id: str):
     return {"attachment": _serialize_attachment(public_record)}
 
 
+@app.get(
+    "/attachments/{attachment_id}/spans/{span_id}/jump",
+    response_model=schemas.AttachmentSpanJumpResponse,
+)
+def get_attachment_span_jump(attachment_id: str, span_id: str):
+    try:
+        index = attachment_spans.AttachmentSpanIndex.for_attachment(attachment_id)
+    except attachment_store.AttachmentNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (FileNotFoundError, RuntimeError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    try:
+        jump = index.jump(span_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Span not found") from exc
+    return schemas.AttachmentSpanJumpResponse(
+        attachment_id=attachment_id, span_id=span_id, **jump
+    )
+
+
+@app.get(
+    "/attachments/{attachment_id}/spans/{span_id}/excerpt",
+    response_model=schemas.AttachmentSpanExcerptResponse,
+)
+def get_attachment_span_excerpt(
+    attachment_id: str,
+    span_id: str,
+    before: int = 2,
+    after: int = 1,
+):
+    if before < 0 or after < 0:
+        raise HTTPException(status_code=422, detail="before/after must be >= 0")
+
+    try:
+        index = attachment_spans.AttachmentSpanIndex.for_attachment(attachment_id)
+    except attachment_store.AttachmentNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (FileNotFoundError, RuntimeError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    try:
+        sentences = index.excerpt(span_id, before=before, after=after)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Span not found") from exc
+    return schemas.AttachmentSpanExcerptResponse(
+        attachment_id=attachment_id,
+        span_id=span_id,
+        before=before,
+        after=after,
+        sentences=sentences,
+    )
+
+
 @app.post(
     "/attachments/{attachment_id}/retry", response_model=schemas.AttachmentResponse
 )
@@ -511,6 +568,34 @@ def list_evidence_history(
         for run in runs
     ]
     return schemas.EvidenceHistoryResponse(claim_id=claim_id, runs=entries)
+
+
+@app.get(
+    "/claims/{claim_id}/evidence/selection",
+    response_model=schemas.EvidenceSelectionPayload,
+)
+def get_evidence_selection(claim_id: str):
+    try:
+        stored = evidence_selection_store.selection_store.read(claim_id)
+    except ValidationError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    if stored is None:
+        return schemas.EvidenceSelectionPayload(claim_id=claim_id, verdict="none")
+    return stored
+
+
+@app.put(
+    "/claims/{claim_id}/evidence/selection",
+    response_model=schemas.EvidenceSelectionPayload,
+)
+def put_evidence_selection(
+    claim_id: str, payload: schemas.EvidenceSelectionUpsertRequest
+):
+    try:
+        stored = evidence_selection_store.selection_store.upsert(claim_id, payload)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return stored
 
 
 # ---------- /segment endpoint ----------

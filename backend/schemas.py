@@ -1,6 +1,6 @@
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class Evidence(BaseModel):
@@ -429,3 +429,103 @@ class EvidenceRerunResponse(BaseModel):
     status: str
     position: int
     locked: bool
+
+
+class AttachmentSpanJumpResponse(BaseModel):
+    attachment_id: str
+    span_id: str
+    page: str
+    section_path: str
+    paragraph_id: str
+    sentence_id: str
+    sentence_index: int
+
+
+class AttachmentSpanExcerptSentence(BaseModel):
+    sentence_id: str
+    text: str
+    is_highlight: bool
+    page: str
+    section_path: str
+    paragraph_id: str
+
+
+class AttachmentSpanExcerptResponse(BaseModel):
+    attachment_id: str
+    span_id: str
+    before: int
+    after: int
+    sentences: List[AttachmentSpanExcerptSentence]
+
+
+EvidenceSelectionVerdict = Literal["support", "contradict", "uncertain", "none"]
+
+
+class EvidenceSelectionPrimary(BaseModel):
+    candidate_id: str
+    attachment_id: str
+    span_id: str
+
+
+class EvidenceSelectionSecondary(BaseModel):
+    candidate_id: str
+    attachment_id: str
+    span_id: str
+    rationale: str
+
+    @field_validator("rationale")
+    def validate_rationale(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("Secondary rationale is required")
+        return text
+
+
+class EvidenceSelectionUpsertRequest(BaseModel):
+    verdict: EvidenceSelectionVerdict
+    primary: Optional[EvidenceSelectionPrimary] = None
+    secondary: List[EvidenceSelectionSecondary] = Field(default_factory=list)
+    note: Optional[str] = None
+
+    @field_validator("note")
+    def normalize_note(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
+    @model_validator(mode="after")
+    def validate_rules(self) -> "EvidenceSelectionUpsertRequest":
+        if self.verdict == "uncertain" and not self.note:
+            raise ValueError("note is required when verdict is uncertain")
+        if self.verdict in ("support", "contradict") and self.primary is None:
+            raise ValueError("primary selection is required for support/contradict")
+        if self.verdict == "none" and self.primary is not None:
+            raise ValueError("primary must be null when verdict is none")
+        return self
+
+
+class EvidenceSelectionPayload(BaseModel):
+    claim_id: str
+    updated_at: Optional[str] = None
+    verdict: EvidenceSelectionVerdict = "none"
+    primary: Optional[EvidenceSelectionPrimary] = None
+    secondary: List[EvidenceSelectionSecondary] = Field(default_factory=list)
+    note: Optional[str] = None
+
+    @field_validator("note")
+    def normalize_note(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
+    @model_validator(mode="after")
+    def validate_rules(self) -> "EvidenceSelectionPayload":
+        if self.verdict == "uncertain" and not self.note:
+            raise ValueError("note is required when verdict is uncertain")
+        if self.verdict in ("support", "contradict") and self.primary is None:
+            raise ValueError("primary selection is required for support/contradict")
+        if self.verdict == "none" and self.primary is not None:
+            raise ValueError("primary must be null when verdict is none")
+        return self

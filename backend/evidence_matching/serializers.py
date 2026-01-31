@@ -28,6 +28,10 @@ def serialize_candidate(
     metadata.setdefault("page", candidate.primary_page)
     metadata.setdefault("section", metadata.get("section") or "Unknown")
     metadata.setdefault("attachment_id", candidate.attachment_id)
+    if candidate.spans:
+        anchor = candidate.spans[0].sentence_id
+        metadata.setdefault("span_id", anchor)
+        metadata.setdefault("anchor_id", anchor)
     metadata["bbox_count"] = _bbox_count(candidate)
 
     payload = {

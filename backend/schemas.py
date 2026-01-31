@@ -198,8 +198,11 @@ class CitationContextPayload(BaseModel):
     target_id: Optional[str] = None
     callout: Optional[str] = None
     sentence: Optional[str] = None
+    citing_sentence: Optional[str] = None
+    citing_snippet: Optional[str] = None
     previous_sentence: Optional[str] = None
     next_sentence: Optional[str] = None
+    sentence_id: Optional[str] = None
     reference: Optional[CitationContextReference] = None
     resolution: Optional[ResolvedReference] = None
 

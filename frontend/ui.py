@@ -421,6 +421,14 @@ def inject_citation_styles() -> None:
         .citation-chip:hover {
             background: #dce7ff;
         }
+        .citation-chip-link {
+            text-decoration: none;
+        }
+        .citation-selected {
+            background: rgba(255, 242, 179, 0.35);
+            border-radius: 10px;
+            padding: 8px 10px;
+        }
         .citation-divider {
             height: 1px;
             background: #e6e6e6;
@@ -452,6 +460,13 @@ def _sentence_label(sentence: str, words: int = 4) -> str:
     head = " ".join(tokens[:words])
     suffix = "…" if len(tokens) > words else ""
     return f"{head}{suffix}"
+
+
+def _citation_href(citation_index: int, target_id: Optional[str], anchor: str) -> str:
+    target = normalize_target_id(target_id)
+    if target:
+        return f"?cite={citation_index}&target={target}#{anchor}"
+    return f"?cite={citation_index}#{anchor}"
 
 
 def normalize_callout_text(callout: str) -> str:
@@ -573,7 +588,12 @@ def render_sentence_with_callouts(
     return rendered, unmatched
 
 
-def _render_sentence_with_citation_cluster(sentence: str, callouts: list[dict]) -> str:
+def _render_sentence_with_citation_cluster(
+    sentence: str,
+    callouts: list[dict],
+    *,
+    href: Optional[str] = None,
+) -> str:
     """Render a sentence with a single in-text citation chip.
 
     This is a UI helper for cases where TEI sentence nodes are very long
@@ -585,6 +605,15 @@ def _render_sentence_with_citation_cluster(sentence: str, callouts: list[dict]) 
         return ""
     if not callouts:
         return html.escape(sentence)
+
+    chip_inner = "citations"
+    if href:
+        chip = (
+            f'<a class="citation-chip citation-chip-link" href="{html.escape(href)}">'
+            f"{chip_inner}</a>"
+        )
+    else:
+        chip = f'<span class="citation-chip">{chip_inner}</span>'
 
     spans: list[tuple[int, int]] = []
     for callout in callouts:
@@ -601,8 +630,8 @@ def _render_sentence_with_citation_cluster(sentence: str, callouts: list[dict]) 
                 break
 
     if not spans:
-        rendered, _ = render_sentence_with_callouts(sentence, callouts)
-        return rendered
+        base = html.escape(sentence)
+        return f"{base} {chip}" if callouts else base
 
     spans.sort(key=lambda item: item[0])
     cluster_start, cluster_end = spans[0]
@@ -637,7 +666,6 @@ def _render_sentence_with_citation_cluster(sentence: str, callouts: list[dict]) 
 
     rel_start = max(0, cluster_start - focus_offset)
     rel_end = max(rel_start, cluster_end - focus_offset)
-    chip = '<span class="citation-chip">citations</span>'
     return (
         html.escape(focus_sentence[:rel_start])
         + chip
@@ -1944,22 +1972,54 @@ def draw_ingestion_panel():
         sentence = (citation.get("sentence") or "Sentence unavailable").strip()
         grouped.setdefault(sentence, []).append((idx, citation))
 
+    def _read_query_params() -> dict:
+        try:
+            raw = st.query_params  # type: ignore[attr-defined]
+            return {key: raw.get(key) for key in raw.keys()}
+        except Exception:
+            return st.experimental_get_query_params()
+
+    params = _read_query_params()
+    param_cite = params.get("cite")
+    param_target = params.get("target")
+    if isinstance(param_cite, list):
+        param_cite = param_cite[0] if param_cite else None
+    if isinstance(param_target, list):
+        param_target = param_target[0] if param_target else None
+    if param_cite is not None:
+        try:
+            select_citation(
+                int(str(param_cite)), str(param_target) if param_target else None
+            )
+        except ValueError:
+            pass
+
     with main_col:
         st.markdown("#### Citing statements")
-        st.caption("Click the callout badges to choose a cited work.")
+        st.caption("Click the in-text citation chip to inspect context.")
 
         for sentence, items in grouped.items():
             anchor = _sentence_anchor(sentence)
             st.markdown(f'<a id="{anchor}"></a>', unsafe_allow_html=True)
 
+            selected_index = st.session_state.get("citation_selected_index")
+            is_selected = any(idx == selected_index for idx, _ in items)
+
             callouts = [
                 format_callout(item[1].get("callout") or "citation") for item in items
             ]
             rendered_sentence = _render_sentence_with_citation_cluster(
-                sentence, callouts
+                sentence,
+                callouts,
+                href=_citation_href(items[0][0], items[0][1].get("target_id"), anchor),
+            )
+            wrapper_class = (
+                "citation-sentence citation-selected"
+                if is_selected
+                else "citation-sentence"
             )
             st.markdown(
-                f'<div class="citation-sentence">{rendered_sentence}</div>',
+                f'<div class="{wrapper_class}">{rendered_sentence}</div>',
                 unsafe_allow_html=True,
             )
             if st.session_state.get("citation_debug"):
@@ -1972,27 +2032,6 @@ def draw_ingestion_panel():
                 ]
                 st.caption(f"Raw sentence: {sentence}")
                 st.json(debug_rows)
-            max_per_row = 4
-            for offset in range(0, len(items), max_per_row):
-                row_items = items[offset : offset + max_per_row]
-                cols = st.columns(len(row_items))
-                for col, (citation_index, citation) in zip(cols, row_items):
-                    callout = citation.get("callout") or "citation"
-                    display_callout = format_callout(callout)["display"]
-                    target_id = normalize_target_id(citation.get("target_id"))
-                    selected = (
-                        st.session_state.get("citation_selected_index")
-                        == citation_index
-                        and st.session_state.get("citation_selected_target")
-                        == target_id
-                    )
-                    label = f"{display_callout} ✓" if selected else display_callout
-                    if col.button(
-                        label,
-                        key=f"citation-callout-{citation_index}",
-                        type="secondary",
-                    ):
-                        select_citation(citation_index, target_id)
             st.markdown('<div class="citation-divider"></div>', unsafe_allow_html=True)
 
     with rail_col:
@@ -2007,9 +2046,38 @@ def draw_ingestion_panel():
         for sentence, items in grouped.items():
             anchor = _sentence_anchor(sentence)
             label = _sentence_label(sentence)
-            with st.expander(label, expanded=False):
+            selected_index = st.session_state.get("citation_selected_index")
+            sentence_selected = any(idx == selected_index for idx, _ in items)
+            with st.expander(label, expanded=sentence_selected):
                 st.markdown(f"[Jump to text](#{anchor})")
                 st.caption(f"{len(items)} citation(s) in this sentence")
+
+                context = None
+                if sentence_selected and selected_index is not None:
+                    selected_target = normalize_target_id(
+                        st.session_state.get("citation_selected_target")
+                    )
+                    context_request = {
+                        "api_url": api_url,
+                        "doc_id": doc_id,
+                        "citation_index": selected_index,
+                        "target_id": selected_target,
+                    }
+                    current_key = (
+                        context_request["doc_id"],
+                        context_request["citation_index"],
+                        context_request.get("target_id"),
+                    )
+                    if st.session_state.get("citation_context_key") != current_key:
+                        load_citation_context(context_request)
+                    context = st.session_state.get("citation_context")
+                    if context:
+                        citing = context.get("citing_sentence") or context.get(
+                            "citing_snippet"
+                        )
+                        if citing:
+                            st.markdown("**Context**")
+                            st.write(citing)
 
                 with st.expander("Parsing", expanded=False):
                     model = st.session_state.get("selected_model")
@@ -2033,8 +2101,15 @@ def draw_ingestion_panel():
                             else ""
                         ),
                     ):
-                        idx_seed = items[0][0] + 1
-                        segments = seg_via_llm(sentence, idx_seed, model)
+                        idx_seed = (selected_index or items[0][0]) + 1
+                        seg_source = (
+                            (context or {}).get("citing_sentence")
+                            if sentence_selected
+                            else None
+                        )
+                        if not seg_source:
+                            seg_source = sentence
+                        segments = seg_via_llm(seg_source, idx_seed, model)
                         st.session_state.setdefault("citation_sentence_segments", {})[
                             anchor
                         ] = segments
@@ -2154,6 +2229,7 @@ def draw_ingestion_panel():
                                 api_url=api_url,
                                 doc_id=doc_id,
                                 reference_id=reference_id,
+                                key_prefix=anchor,
                             )
 
         st.divider()

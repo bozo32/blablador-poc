@@ -276,6 +276,8 @@ def render_retrieval_instructions(
     api_url: str,
     doc_id: str,
     reference_id: str,
+    *,
+    key_prefix: str = "",
 ) -> None:
     dossier = _get_cached_dossier(api_url, doc_id, reference_id)
     if not dossier:
@@ -294,26 +296,38 @@ def render_retrieval_instructions(
 
     col_open, col_copy = st.columns(2)
     copy_result: Optional[dict] = None
+    key_suffix = key_prefix.strip() or "default"
+    open_source_key = f"open_source::{doc_id}::{reference_id}::{key_suffix}"
+    copy_key = f"retrieval_copy::{doc_id}::{reference_id}::{key_suffix}"
     with col_open:
         if primary:
-            st.link_button(
-                "Open source",
-                primary,
-                width="stretch",
-                help="Opens the publisher/best available link",
-            )
+            try:
+                st.link_button(
+                    "Open source",
+                    primary,
+                    width="stretch",
+                    help="Opens the publisher/best available link",
+                    key=open_source_key,
+                )
+            except TypeError:
+                st.link_button(
+                    "Open source",
+                    primary,
+                    width="stretch",
+                    help="Opens the publisher/best available link",
+                )
         else:
             st.button(
                 "Open source",
                 disabled=True,
                 help="No direct link resolved yet",
-                key=f"open_source_{reference_id}",
+                key=open_source_key,
             )
     with col_copy:
         copy_result = render_copy_to_clipboard(
             "Copy instructions",
             manual,
-            key=f"{doc_id}_{reference_id}",
+            key=copy_key,
             toast=f"Copied retrieval instructions for {reference_id}",
             help_text="Copies the full retrieval instructions to your clipboard.",
         )

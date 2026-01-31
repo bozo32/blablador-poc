@@ -243,10 +243,15 @@ class DocumentBodySegment(BaseModel):
     sentence_id: Optional[str] = None
 
 
-class DocumentBodyParagraph(BaseModel):
-    paragraph_id: Optional[str] = None
+class DocumentBodySentence(BaseModel):
+    sentence_id: Optional[str] = None
     segments: List[DocumentBodySegment]
     citation_indices: List[int] = Field(default_factory=list)
+
+
+class DocumentBodyParagraph(BaseModel):
+    paragraph_id: Optional[str] = None
+    sentences: List[DocumentBodySentence]
 
 
 class DocumentBodyResponse(BaseModel):

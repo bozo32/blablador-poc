@@ -425,6 +425,10 @@ def inject_citation_styles() -> None:
         .citation-chip-link {
             text-decoration: none;
         }
+        .citation-chip-selected {
+            background: rgba(255, 242, 179, 0.55);
+            border-color: rgba(160, 120, 0, 0.25);
+        }
         .citation-selected {
             background: rgba(255, 242, 179, 0.35);
             border-radius: 10px;
@@ -438,6 +442,14 @@ def inject_citation_styles() -> None:
         .citation-paragraph {
             margin-bottom: 0.9rem;
             padding: 2px 0;
+        }
+        .citation-sentence-row {
+            display: inline;
+        }
+        .citation-sentence-selected {
+            background: rgba(255, 242, 179, 0.35);
+            border-radius: 8px;
+            padding: 2px 4px;
         }
         .citation-workflow-rail {
             position: sticky;
@@ -2199,6 +2211,8 @@ def draw_ingestion_panel():
                     seg_source = (
                         context.get("citing_sentence") or context.get("sentence") or ""
                     )
+                    st.caption("Parsing input")
+                    st.write(seg_source)
                     segments = seg_via_llm(seg_source, int(selected_index) + 1, model)
                     st.session_state.setdefault("citation_sentence_segments", {})[
                         str(selected_index)

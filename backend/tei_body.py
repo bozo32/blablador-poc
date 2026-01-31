@@ -93,19 +93,47 @@ def build_document_body(tei_xml: str | bytes) -> Dict[str, Any]:
                     segments.append({"type": "text", "text": tail})
 
     for para in para_nodes:
-        segments: List[Dict[str, Any]] = []
-        walk(para, segments)
-        citation_indices = [
-            seg.get("citation_index")
-            for seg in segments
-            if seg.get("type") == "citation" and seg.get("citation_index") is not None
-        ]
-        paragraphs.append(
-            {
-                "paragraph_id": _get_xml_id(para),
-                "segments": segments,
-                "citation_indices": citation_indices,
-            }
-        )
+        paragraph_id = _get_xml_id(para)
+        sentence_nodes = para.xpath(".//tei:s", namespaces=NS)
+        sentences: List[Dict[str, Any]] = []
+
+        if sentence_nodes:
+            for sent in sentence_nodes:
+                sentence_id = _get_xml_id(sent) or paragraph_id
+                segments: List[Dict[str, Any]] = []
+                walk(sent, segments)
+                citation_indices = [
+                    seg.get("citation_index")
+                    for seg in segments
+                    if seg.get("type") == "citation"
+                    and seg.get("citation_index") is not None
+                ]
+                sentences.append(
+                    {
+                        "sentence_id": sentence_id,
+                        "segments": segments,
+                        "citation_indices": citation_indices,
+                    }
+                )
+        else:
+            # Fallback: paragraph has no explicit sentence nodes.
+            sentence_id = paragraph_id
+            segments = []
+            walk(para, segments)
+            citation_indices = [
+                seg.get("citation_index")
+                for seg in segments
+                if seg.get("type") == "citation"
+                and seg.get("citation_index") is not None
+            ]
+            sentences.append(
+                {
+                    "sentence_id": sentence_id,
+                    "segments": segments,
+                    "citation_indices": citation_indices,
+                }
+            )
+
+        paragraphs.append({"paragraph_id": paragraph_id, "sentences": sentences})
 
     return {"paragraphs": paragraphs}

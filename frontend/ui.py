@@ -2115,40 +2115,68 @@ def draw_ingestion_panel():
 
         selected_index = st.session_state.get("citation_selected_index")
         for para in paragraphs:
-            segments = para.get("segments") or []
-            para_citations = set(para.get("citation_indices") or [])
-            highlight = selected_index is not None and selected_index in para_citations
-            wrapper_class = (
-                "citation-paragraph citation-selected"
-                if highlight
-                else "citation-paragraph"
-            )
+            para_sentences = para.get("sentences") or []
+            if not para_sentences:
+                # Backward compatibility: older backend may return flat segments.
+                para_sentences = [
+                    {
+                        "segments": para.get("segments") or [],
+                        "citation_indices": para.get("citation_indices") or [],
+                    }
+                ]
 
-            parts: list[str] = []
-            for seg in segments:
-                seg_type = seg.get("type")
-                if seg_type == "text":
-                    parts.append(html.escape(seg.get("text") or ""))
-                    continue
-                if seg_type != "citation":
-                    continue
-                cite_index = seg.get("citation_index")
-                if cite_index is None:
-                    continue
-                cite_index = int(cite_index)
-                anchor = f"cite-idx-{cite_index}"
-                target_id = seg.get("target_id")
-                label = seg.get("label") or seg.get("callout") or "citation"
-                href = _citation_href(doc_id, cite_index, target_id, anchor)
-                parts.append(f'<a id="{anchor}"></a>')
-                parts.append(
-                    f'<a class="citation-chip citation-chip-link" '
-                    f'href="{html.escape(href)}">{html.escape(str(label))}</a>'
+            sentence_html: list[str] = []
+            for sent in para_sentences:
+                segments = sent.get("segments") or []
+                sent_citations = set(sent.get("citation_indices") or [])
+                sent_selected = (
+                    selected_index is not None and selected_index in sent_citations
+                )
+                sent_text_len = sum(
+                    len(seg.get("text") or "")
+                    for seg in segments
+                    if seg.get("type") == "text"
+                )
+                # If TEI sentence nodes are paragraph-sized, highlighting the whole
+                # block is distracting. Prefer chip-only highlighting for long spans.
+                use_sentence_highlight = sent_selected and sent_text_len <= 320
+                sent_class = (
+                    "citation-sentence-row citation-sentence-selected"
+                    if use_sentence_highlight
+                    else "citation-sentence-row"
+                )
+                parts: list[str] = []
+                for seg in segments:
+                    seg_type = seg.get("type")
+                    if seg_type == "text":
+                        parts.append(html.escape(seg.get("text") or ""))
+                        continue
+                    if seg_type != "citation":
+                        continue
+                    cite_index = seg.get("citation_index")
+                    if cite_index is None:
+                        continue
+                    cite_index = int(cite_index)
+                    anchor = f"cite-idx-{cite_index}"
+                    target_id = seg.get("target_id")
+                    label = seg.get("label") or seg.get("callout") or "citation"
+                    href = _citation_href(doc_id, cite_index, target_id, anchor)
+                    chip_class = "citation-chip citation-chip-link"
+                    if selected_index == cite_index:
+                        chip_class += " citation-chip-selected"
+                    parts.append(f'<a id="{anchor}"></a>')
+                    parts.append(
+                        f'<a class="{chip_class}" '
+                        f'href="{html.escape(href)}">{html.escape(str(label))}</a>'
+                    )
+                rendered_sentence = " ".join(part for part in parts if part)
+                sentence_html.append(
+                    f'<span class="{sent_class}">{rendered_sentence}</span>'
                 )
 
-            rendered = " ".join(part for part in parts if part)
+            rendered_para = " ".join(sentence_html)
             st.markdown(
-                f'<div class="{wrapper_class}">{rendered}</div>',
+                f'<div class="citation-paragraph">{rendered_para}</div>',
                 unsafe_allow_html=True,
             )
 
@@ -2165,7 +2193,6 @@ def draw_ingestion_panel():
                 st.session_state.get("citation_selected_target")
             )
             anchor = f"cite-idx-{int(selected_index)}"
-            st.markdown(f"[Jump to text](#{anchor})")
 
             context_request = {
                 "api_url": api_url,
@@ -2182,94 +2209,106 @@ def draw_ingestion_panel():
                 load_citation_context(context_request)
             context = st.session_state.get("citation_context") or {}
 
-            if context:
-                st.markdown("**Context**")
-                st.write(context.get("previous_sentence") or "")
-                st.write(
-                    context.get("citing_sentence") or context.get("sentence") or ""
-                )
-                st.write(context.get("next_sentence") or "")
-            if st.session_state.get("citation_debug"):
-                st.caption("Raw context payload")
-                st.json(context)
+            cite_text = context.get("citing_sentence") or context.get("sentence") or ""
+            cite_label = _sentence_label(cite_text) if cite_text else "Selected"
 
-            active_panel = st.session_state.get("workflow_active_panel")
-            with st.expander("Parsing", expanded=active_panel == "parsing"):
-                model = st.session_state.get("selected_model")
-                ta_key = f"citation-segments-{selected_index}"
-                stored = st.session_state.get("citation_sentence_segments", {}).get(
-                    str(selected_index),
-                    [],
-                )
-                st.session_state.setdefault(ta_key, "\n".join(stored))
-                if st.button(
-                    "Segment sentence",
-                    key=f"segment-sentence-{selected_index}",
-                    disabled=not model,
-                ):
-                    st.session_state["workflow_active_panel"] = "parsing"
-                    seg_source = (
-                        context.get("citing_sentence") or context.get("sentence") or ""
+            with st.expander(cite_label, expanded=True):
+                st.markdown(f"[Jump to text](#{anchor})")
+
+                if context:
+                    st.markdown("**Context**")
+                    st.write(context.get("previous_sentence") or "")
+                    st.write(cite_text)
+                    st.write(context.get("next_sentence") or "")
+                if st.session_state.get("citation_debug"):
+                    st.caption("Raw context payload")
+                    st.json(context)
+
+                active_panel = st.session_state.get("workflow_active_panel")
+                with st.expander("Parsing", expanded=active_panel == "parsing"):
+                    model = st.session_state.get("selected_model")
+                    ta_key = f"citation-segments-{selected_index}"
+                    stored = st.session_state.get("citation_sentence_segments", {}).get(
+                        str(selected_index),
+                        [],
                     )
-                    st.caption("Parsing input")
-                    st.write(seg_source)
-                    segments = seg_via_llm(seg_source, int(selected_index) + 1, model)
-                    st.session_state.setdefault("citation_sentence_segments", {})[
-                        str(selected_index)
-                    ] = segments
-                    st.session_state[ta_key] = "\n".join(segments)
+                    st.session_state.setdefault(ta_key, "\n".join(stored))
 
-                seg_text = st.text_area(
-                    "Parsed claims (one per line)",
-                    key=ta_key,
-                    height=160,
-                )
-                if st.button("Save claims", key=f"save-claims-{selected_index}"):
-                    st.session_state["workflow_active_panel"] = "parsing"
-                    lines = [ln.strip() for ln in seg_text.splitlines() if ln.strip()]
-                    st.session_state.setdefault("citation_sentence_segments", {})[
-                        str(selected_index)
-                    ] = lines
-                    primary_callout = context.get("callout") or "citation"
-                    reference_hint = {
-                        "callout": primary_callout,
-                        "reference_id": selected_target,
-                    }
-                    saved = 0
-                    for idx, line in enumerate(lines):
-                        parsed = to_segment_dict(line)
-                        segment_id = parsed.get("segment_id") or f"seg-{idx+1}"
-                        claim_text = parsed.get("claim") or line
-                        claim_id = f"cite:{doc_id}:{selected_index}:{segment_id}"
-                        claim_queue.register_claim(
-                            claim_id,
-                            claim=claim_text,
-                            callout=primary_callout,
-                            doc_id=doc_id,
-                            reference_id=selected_target,
-                            reference_hint=reference_hint,
+                    if st.button(
+                        "Segment sentence",
+                        key=f"segment-sentence-{selected_index}",
+                        disabled=not model,
+                    ):
+                        st.session_state["workflow_active_panel"] = "parsing"
+                        st.session_state["last_parsing_input"] = cite_text
+                        segments = seg_via_llm(
+                            cite_text,
+                            int(selected_index) + 1,
+                            model,
                         )
-                        saved += 1
-                    if saved:
-                        st.success(f"Saved {saved} claim(s) to the workspace.")
+                        st.session_state.setdefault("citation_sentence_segments", {})[
+                            str(selected_index)
+                        ] = segments
+                        st.session_state[ta_key] = "\n".join(segments)
 
-            with st.expander("Retrieving", expanded=active_panel == "retrieving"):
-                if not selected_target:
-                    st.info("No target ID available for this citation.")
-                else:
-                    reference = context.get("reference") or {}
-                    resolution = context.get("resolution") or {}
-                    summary = format_reference_summary(reference, resolution)
-                    if summary:
-                        st.markdown("**Reference summary**")
-                        st.markdown(summary)
-                    with st.expander("Retrieval instructions", expanded=False):
-                        claim_queue.render_retrieval_instructions(
-                            api_url=api_url,
-                            doc_id=doc_id,
-                            reference_id=selected_target,
-                            key_prefix=str(selected_index),
-                        )
+                    parsing_input = st.session_state.get("last_parsing_input")
+                    if parsing_input:
+                        st.caption("Parsing input")
+                        st.write(parsing_input)
+
+                    seg_text = st.text_area(
+                        "Parsed claims (one per line)",
+                        key=ta_key,
+                        height=160,
+                    )
+                    if st.button("Save claims", key=f"save-claims-{selected_index}"):
+                        st.session_state["workflow_active_panel"] = "parsing"
+                        lines = [
+                            ln.strip() for ln in seg_text.splitlines() if ln.strip()
+                        ]
+                        st.session_state.setdefault("citation_sentence_segments", {})[
+                            str(selected_index)
+                        ] = lines
+                        primary_callout = context.get("callout") or "citation"
+                        reference_hint = {
+                            "callout": primary_callout,
+                            "reference_id": selected_target,
+                        }
+                        saved = 0
+                        for idx, line in enumerate(lines):
+                            parsed = to_segment_dict(line)
+                            segment_id = parsed.get("segment_id") or f"seg-{idx+1}"
+                            claim_text = parsed.get("claim") or line
+                            claim_id = f"cite:{doc_id}:{selected_index}:{segment_id}"
+                            claim_queue.register_claim(
+                                claim_id,
+                                claim=claim_text,
+                                callout=primary_callout,
+                                doc_id=doc_id,
+                                reference_id=selected_target,
+                                reference_hint=reference_hint,
+                            )
+                            saved += 1
+                        if saved:
+                            st.success(f"Saved {saved} claim(s) to the workspace.")
+
+                with st.expander("Retrieving", expanded=active_panel == "retrieving"):
+                    if not selected_target:
+                        st.info("No target ID available for this citation.")
+                    else:
+                        reference = context.get("reference") or {}
+                        resolution = context.get("resolution") or {}
+                        summary = format_reference_summary(reference, resolution)
+                        if summary:
+                            st.markdown("**Reference summary**")
+                            st.markdown(summary)
+                        with st.expander("Retrieval instructions", expanded=False):
+                            claim_queue.render_retrieval_instructions(
+                                api_url=api_url,
+                                doc_id=doc_id,
+                                reference_id=selected_target,
+                                key_prefix=str(selected_index),
+                            )
 
         st.divider()
         st.markdown("#### Citation Graph")

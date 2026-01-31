@@ -2259,7 +2259,9 @@ def draw_ingestion_panel():
             anchor = f"cite-idx-{cite_idx}"
             context = _get_context_cached(cite_idx, tgt)
             cite_text = context.get("citing_sentence") or context.get("sentence") or ""
-            label = _sentence_label(cite_text) if cite_text else f"Citation {cite_idx}"
+            label = (
+                _sentence_label(cite_text) if cite_text else f"Citation {cite_idx + 1}"
+            )
 
             expanded = cite_idx == selected_index or cite_idx == active_cite
             with st.expander(label, expanded=expanded):

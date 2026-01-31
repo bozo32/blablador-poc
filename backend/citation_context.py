@@ -98,32 +98,46 @@ def get_citation_context(
     sentence_elem_list = callout.get("sentence_elem") or []
     sentence_elem = sentence_elem_list[0] if sentence_elem_list else None
 
-    if sentence_elem is None or sentence_elem not in sentence_lookup:
+    context_elem = sentence_elem
+    if context_elem is None and ref_elem is not None:
+        para_elem_list = ref_elem.xpath("ancestor::tei:p[1]", namespaces=TEI_NS)
+        context_elem = para_elem_list[0] if para_elem_list else None
+
+    if context_elem is None:
         return {
             "target_id": callout.get("target_id"),
             "callout": callout.get("callout"),
             "sentence": None,
             "citing_sentence": None,
+            "citing_snippet": None,
             "previous_sentence": None,
             "next_sentence": None,
             "sentence_id": None,
         }
 
-    sentence_idx = sentence_lookup[sentence_elem]
-    sentences = list(sentence_lookup.keys())
-    prev_sentence = sentences[sentence_idx - 1] if sentence_idx > 0 else None
-    next_sentence = (
-        sentences[sentence_idx + 1] if sentence_idx + 1 < len(sentences) else None
-    )
-    sentence_id = sentence_elem.get(
-        "{http://www.w3.org/XML/1998/namespace}id"
-    ) or sentence_elem.get("xml:id")
+    prev_sentence = None
+    next_sentence = None
+    sentence_id = None
+    if sentence_elem is not None and sentence_elem in sentence_lookup:
+        sentence_idx = sentence_lookup[sentence_elem]
+        sentences = list(sentence_lookup.keys())
+        prev_sentence = sentences[sentence_idx - 1] if sentence_idx > 0 else None
+        next_sentence = (
+            sentences[sentence_idx + 1] if sentence_idx + 1 < len(sentences) else None
+        )
+        sentence_id = sentence_elem.get(
+            "{http://www.w3.org/XML/1998/namespace}id"
+        ) or sentence_elem.get("xml:id")
+    else:
+        sentence_id = context_elem.get(
+            "{http://www.w3.org/XML/1998/namespace}id"
+        ) or context_elem.get("xml:id")
 
     citing_sentence = None
     snippet = None
     if ref_elem is not None:
         token = "<<<CITATION_MARKER>>>"
-        marked = _text_with_marker(sentence_elem, ref_elem, token)
+        marked = _text_with_marker(context_elem, ref_elem, token)
         candidates = _split_sentences(marked)
         for candidate in candidates:
             if token in candidate:
@@ -137,7 +151,7 @@ def get_citation_context(
     return {
         "target_id": callout.get("target_id"),
         "callout": callout.get("callout"),
-        "sentence": _text_content(sentence_elem),
+        "sentence": _text_content(context_elem),
         "citing_sentence": citing_sentence,
         "citing_snippet": snippet,
         "previous_sentence": _text_content(prev_sentence) if prev_sentence else None,

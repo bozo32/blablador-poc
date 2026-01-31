@@ -110,7 +110,10 @@ Plans:
 **Success Criteria** (what must be TRUE):
   1. User sees evidence spans highlighted in the cited PDF.
   2. User can select an entailing span or choose "none of the above".
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 06-01-PLAN.md — Backend excerpt/jump APIs + selection persistence
+- [ ] 06-02-PLAN.md — Streamlit evidence review UI (source highlights + selection)
 
 ### Phase 7: Validation + Export
 **Goal**: Users can record verdicts, annotate them, and export results.

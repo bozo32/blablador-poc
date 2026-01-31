@@ -101,7 +101,7 @@ Plans:
 - [x] 05-03-PLAN.md — Evidence store + claim sync wiring
 - [x] 05-04-PLAN.md — Evidence board UI and rationale sidebar
 - [x] 05-05-PLAN.md — Backend claim_text plumbing for evidence runs
-- [ ] 05-06-PLAN.md — Frontend claim_text wiring + reviewer guidance
+- [x] 05-06-PLAN.md — Frontend claim_text wiring + reviewer guidance
 
 ### Phase 6: Evidence Review + Selection
 **Goal**: Users can inspect evidence in-context and choose the best match.
@@ -112,7 +112,7 @@ Plans:
   2. User can select an entailing span or choose "none of the above".
 **Plans**: 2 plans
 Plans:
-- [ ] 06-01-PLAN.md — Backend excerpt/jump APIs + selection persistence
+- [x] 06-01-PLAN.md — Backend excerpt/jump APIs + selection persistence
 - [ ] 06-02-PLAN.md — Streamlit evidence review UI (source highlights + selection)
 
 ### Phase 7: Validation + Export
@@ -146,7 +146,7 @@ Phases execute in numeric order: 2 → 2.1 → 2.2 → 3 → 3.1 → 4
 | 2. Citation Context Navigation | 6/6 | Complete | 2026-01-24 |
 | 3. Claim Selection + Editing | 3/3 | Complete | 2026-01-25 |
 | 4. Evidence Attachment | 6/6 | Complete | 2026-01-27 |
-| 5. Evidence Matching + Ranking | 5/6 | In progress | - |
-| 6. Evidence Review + Selection | 0/TBD | Not started | - |
+| 5. Evidence Matching + Ranking | 6/6 | Complete | 2026-01-28 |
+| 6. Evidence Review + Selection | 1/2 | In progress | - |
 | 7. Validation + Export | 0/TBD | Not started | - |
 | 8. Workspace Organization | 0/TBD | Not started | - |

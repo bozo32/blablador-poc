@@ -5,14 +5,14 @@
 See: .planning/PROJECT.md (updated 2026-01-23)
 
 **Core value:** Readers can validate a citation by linking a claim to supporting (or contradicting) evidence from the cited source, with the judgment captured and reusable.
-**Current focus:** Phase 5 - Evidence Matching + Ranking
+**Current focus:** Phase 6 - Evidence Review + Selection
 
 ## Current Position
 
-Phase: 5 of 8 (Evidence Matching + Ranking)
-Plan: 6 of 6 in current phase
-Status: Phase complete
-Last activity: 2026-01-28 — Completed 05-06-PLAN.md
+Phase: 6 of 8 (Evidence Review + Selection)
+Plan: 1 of 2 in current phase
+Status: In progress
+Last activity: 2026-01-31 — Completed 06-01-PLAN.md
 
 Progress: ██████████░░ 88%
 
@@ -63,7 +63,10 @@ Recent decisions affecting current work:
 -  - EvidenceMatchingService resolves claim_text from attachment metadata before raising 409 so new claims succeed (05-05).
   - Cache claim_text metadata in the EvidenceStore via claim_queue registry updates so background refreshes and reruns always have the text (05-06).
   - Surface an explicit remediation path whenever the backend rejects evidence fetches for missing claim_text and reuse the cached or edited text to recover (05-06).
-  - Send claim_text from attachment uploads so backend auto reruns triggered after parsing have the data they need (05-06).
+ - Send claim_text from attachment uploads so backend auto reruns triggered after parsing have the data they need (05-06).
+
+ - Span excerpt/jump anchors use TEI sentence_id as span_id so the UI can request stable jump metadata (06-01).
+ - Evidence selections are persisted on disk under data/evidence_selections keyed by claim_id (06-01).
 
 - Use local citation graph data when DOI resolution is unavailable to avoid OpenAlex 404s (02-02).
 - Prefer GROBID consolidation when resolver sources disagree; warn that OpenAlex may return citing articles (02-06).
@@ -79,6 +82,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-01-28 22:28
-Stopped at: Completed 05-06-PLAN.md
+Last session: 2026-01-31 21:52
+Stopped at: Completed 06-01-PLAN.md
 Resume file: None

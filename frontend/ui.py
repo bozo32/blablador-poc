@@ -784,6 +784,24 @@ ATTACHMENT_STATUS_LABELS = {
 }
 
 
+# === Evidence Review (Phase 06) Styles ===
+EVIDENCE_REVIEW_CSS_PATH = (
+    pathlib.Path(__file__).resolve().parent / "assets" / "evidence_review.css"
+)
+
+
+def inject_evidence_review_styles() -> None:
+    key = "_evidence_review_styles_loaded"
+    if st.session_state.get(key):
+        return
+    if EVIDENCE_REVIEW_CSS_PATH.exists():
+        st.markdown(
+            f"<style>{EVIDENCE_REVIEW_CSS_PATH.read_text()}</style>",
+            unsafe_allow_html=True,
+        )
+    st.session_state[key] = True
+
+
 def inject_attachment_panel_styles() -> None:
     """Load CSS for the attachment queue workspace."""
     if st.session_state.get("attachment_panel_styles_loaded"):
@@ -1173,6 +1191,7 @@ def render_queue_item(item: dict) -> None:
 
 
 def render_evidence_panel() -> None:
+    inject_evidence_review_styles()
     st.subheader("Ranked evidence preview")
     claims = claim_queue.get_claim_records()
     if not claims:
@@ -1498,6 +1517,187 @@ def render_evidence_panel() -> None:
                         lock_state=state.get("lock_state"),
                     )
 
+        def _render_source_review() -> None:
+            candidates = state.get("candidates") or []
+            if not candidates:
+                st.info("None found. Request a rerun or check attachment status.")
+                return
+
+            def _candidate_confidence(candidate: Dict[str, Any]) -> Optional[float]:
+                raw = candidate.get("confidence")
+                if raw is None:
+                    scores = candidate.get("scores") or {}
+                    raw = scores.get("combined") or scores.get("confidence")
+                try:
+                    return float(raw) if raw is not None else None
+                except (TypeError, ValueError):
+                    return None
+
+            def _format_candidate_option(candidate: Dict[str, Any]) -> str:
+                cid = candidate.get("id") or "(missing id)"
+                label = (candidate.get("label") or "neutral").strip().lower()
+                conf = _candidate_confidence(candidate)
+                snippet = (candidate.get("text") or "").strip()
+                preview = re.sub(r"\s+", " ", snippet)[:120]
+                conf_label = f" {conf:.2f}" if conf is not None else ""
+                return f"[{label}{conf_label}] {preview} ({cid[:8]})"
+
+            def _is_muted(candidate: Dict[str, Any]) -> bool:
+                label = (candidate.get("label") or "neutral").strip().lower()
+                conf = _candidate_confidence(candidate)
+                if label == "neutral":
+                    return True
+                if conf is not None and conf < 0.55:
+                    return True
+                return False
+
+            def _section_path(candidate: Dict[str, Any]) -> str:
+                meta = candidate.get("metadata") or {}
+                value = meta.get("section_path") or meta.get("section") or ""
+                cleaned = str(value or "").strip()
+                if not cleaned or cleaned.lower() in {"unknown", "none"}:
+                    return "Body"
+                return cleaned
+
+            top_n = 5
+            top_hits = list(candidates[:top_n])
+            rest = list(candidates[top_n:])
+
+            st.markdown("### Evidence Review")
+            st.caption(
+                "Source view shows TEI paragraph-bounded excerpt windows "
+                "with highlights."
+            )
+
+            st.markdown("#### Top hits")
+            for candidate in top_hits:
+                label = _format_candidate_option(candidate)
+                with st.expander(label, expanded=False):
+                    excerpt = store.preview_excerpt(selected_claim, candidate)
+                    if not excerpt:
+                        st.info(
+                            "Excerpt unavailable yet (attachment may still be parsing)."
+                        )
+                        continue
+                    sentences = excerpt.get("sentences") or []
+                    meta = candidate.get("metadata") or {}
+                    badge_bits = []
+                    cand_label = (candidate.get("label") or "neutral").strip().lower()
+                    tone = (
+                        "entail"
+                        if cand_label == "entail"
+                        else "contrad"
+                        if cand_label == "contradict"
+                        else "neutral"
+                    )
+                    badge_bits.append(
+                        (
+                            (
+                                '<span class="evidence-badge evidence-badge--{tone}">'
+                                "{label}</span>"
+                            ).format(
+                                tone=tone,
+                                label=html.escape(cand_label.title()),
+                            )
+                        )
+                    )
+                    conf = _candidate_confidence(candidate)
+                    if conf is not None:
+                        badge_bits.append(
+                            (
+                                '<span class="evidence-badge evidence-badge--rank">'
+                                f"{conf:.2f}" + "</span>"
+                            )
+                        )
+                    page = meta.get("page")
+                    if page:
+                        badge_bits.append(
+                            (
+                                '<span class="evidence-badge evidence-badge--info">'
+                                "Page " + html.escape(str(page)) + "</span>"
+                            )
+                        )
+                    meta_html = (
+                        '<div class="evidence-review__candidate-meta">'
+                        + "".join(badge_bits)
+                        + "</div>"
+                    )
+                    st.markdown(
+                        meta_html,
+                        unsafe_allow_html=True,
+                    )
+
+                    highlight_class = "evidence-review__sentence--highlight"
+                    rendered_sentences = []
+                    for sentence in sentences:
+                        text = html.escape(str(sentence.get("text") or ""))
+                        classes = ["evidence-review__sentence"]
+                        if sentence.get("is_highlight"):
+                            classes.append(highlight_class)
+                        rendered_sentences.append(
+                            f'<div class="{" ".join(classes)}">{text}</div>'
+                        )
+                    excerpt_html = (
+                        '<div class="evidence-review__excerpt">'
+                        + "".join(rendered_sentences)
+                        + "</div>"
+                    )
+                    st.markdown(
+                        excerpt_html,
+                        unsafe_allow_html=True,
+                    )
+                    if sentences:
+                        first_sentence = sentences[0]
+                        section_label = first_sentence.get("section_path")
+                        if not section_label:
+                            section_label = _section_path(candidate)
+                        st.caption(f"Section: {section_label}")
+
+            from collections import defaultdict
+
+            grouped: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+            for candidate in rest:
+                grouped[_section_path(candidate)].append(candidate)
+            if grouped:
+                st.markdown("#### By section")
+            for section, items in sorted(grouped.items(), key=lambda pair: pair[0]):
+                st.markdown(f"**{section}**")
+                for candidate in items:
+                    muted = _is_muted(candidate)
+                    label = _format_candidate_option(candidate)
+                    with st.expander(label, expanded=False):
+                        classes = ["evidence-review__candidate"]
+                        if muted:
+                            classes.append("evidence-review__candidate--muted")
+                        highlight_class = "evidence-review__sentence--highlight"
+                        excerpt = store.preview_excerpt(selected_claim, candidate)
+                        if not excerpt:
+                            st.info(
+                                "Excerpt unavailable yet (attachment may still be "
+                                "parsing)."
+                            )
+                            continue
+                        sentences = excerpt.get("sentences") or []
+                        rendered = []
+                        for sentence in sentences:
+                            text = html.escape(str(sentence.get("text") or ""))
+                            s_classes = ["evidence-review__sentence"]
+                            if sentence.get("is_highlight"):
+                                s_classes.append(highlight_class)
+                            rendered.append(
+                                f'<div class="{" ".join(s_classes)}">{text}</div>'
+                            )
+                        grouped_excerpt_html = (
+                            '<div class="{classes}">'.format(classes=" ".join(classes))
+                            + '<div class="evidence-review__excerpt">'
+                            + "".join(rendered)
+                            + "</div></div>"
+                        )
+                        st.markdown(
+                            grouped_excerpt_html,
+                            unsafe_allow_html=True,
+                        )
+
         def _render_share_panel() -> None:
             share_state = state.get("share_target")
             if not share_state:
@@ -1539,17 +1739,190 @@ def render_evidence_panel() -> None:
         _render_filter_chips()
         _render_rerun_controls()
         _render_progress_glance()
-        _render_evidence_lists()
+        view_mode = st.radio(
+            "Evidence view",
+            ["Citing", "Source"],
+            horizontal=True,
+            key=f"evidence-view-mode-{selected_claim}",
+        )
+        if view_mode == "Source":
+            _render_source_review()
+        else:
+            _render_evidence_lists()
         _render_share_panel()
         _render_pdf_notice()
 
     focus_order = state.get("focus_order") or []
     with layout_sidebar:
-        render_rationale_sidebar(
-            state,
-            selected_candidate_id=focus_order[0] if focus_order else None,
-            config=SidebarConfig(ui=layout_sidebar),
+        attachment = attachment_queue.get_claim_attachment(selected_claim) or {}
+        attachment_status = (attachment.get("status") or "").strip().lower()
+        has_candidates = bool(state.get("candidates"))
+        selection_disabled = attachment_status not in {"matched"} or not has_candidates
+
+        selection = store.sync_selection(selected_claim)
+        current_verdict = (selection or {}).get("verdict") or "none"
+        current_primary = ((selection or {}).get("primary") or {}).get("candidate_id")
+        current_secondaries = (selection or {}).get("secondary") or []
+        current_note = (selection or {}).get("note") or ""
+
+        st.markdown('<div class="evidence-review__controls">', unsafe_allow_html=True)
+        st.subheader("Evidence selection")
+
+        if attachment_status and attachment_status != "matched":
+            st.info(
+                "Selection is disabled until attachments are matched "
+                f"(status: {attachment_status})."
+            )
+        if not has_candidates:
+            st.info("No candidates available yet. Rerun evidence or check attachments.")
+        if state.get("selection_error"):
+            st.error(f"Selection fetch/save failed: {state['selection_error']}")
+
+        primary_text = current_primary or "(none)"
+        st.markdown(
+            """
+            <div class="evidence-review__selection-summary">
+              <p><strong>Current verdict:</strong> {verdict}</p>
+              <p><strong>Primary:</strong> {primary}</p>
+              <p><strong>Secondary:</strong> {secondary}</p>
+            </div>
+            """.format(
+                verdict=html.escape(str(current_verdict)),
+                primary=html.escape(str(primary_text)),
+                secondary=html.escape(str(len(current_secondaries))),
+            ),
+            unsafe_allow_html=True,
         )
+
+        verdict = st.radio(
+            "Verdict",
+            ["support", "contradict", "uncertain", "none"],
+            index=["support", "contradict", "uncertain", "none"].index(
+                current_verdict
+                if current_verdict in {"support", "contradict", "uncertain", "none"}
+                else "none"
+            ),
+            horizontal=True,
+            disabled=selection_disabled,
+            key=f"evidence-verdict-{selected_claim}",
+        )
+
+        candidates = state.get("candidates") or []
+        candidate_lookup = {
+            cand.get("id"): cand for cand in candidates if cand.get("id")
+        }
+        top_hit_ids = [cand.get("id") for cand in candidates[:5] if cand.get("id")]
+
+        def _format_candidate_choice(candidate_id: str) -> str:
+            candidate = candidate_lookup.get(candidate_id) or {}
+            label = (candidate.get("label") or "neutral").strip().lower()
+            snippet = re.sub(r"\s+", " ", str(candidate.get("text") or "")).strip()
+            preview = snippet[:90]
+            return f"[{label}] {preview} ({candidate_id[:8]})"
+
+        primary_id: Optional[str] = None
+        if verdict in {"support", "contradict"}:
+            primary_options = top_hit_ids or list(candidate_lookup.keys())
+            if not primary_options:
+                st.info("No candidates available for primary selection yet.")
+                primary_id = None
+            else:
+                primary_index = 0
+                if current_primary in primary_options:
+                    primary_index = primary_options.index(current_primary)
+                primary_id = st.selectbox(
+                    "Primary candidate",
+                    options=primary_options,
+                    index=primary_index,
+                    format_func=_format_candidate_choice,
+                    disabled=selection_disabled,
+                    key=f"evidence-primary-{selected_claim}",
+                )
+
+        note = st.text_area(
+            "Note (required for uncertain)",
+            value=current_note,
+            height=90,
+            disabled=selection_disabled,
+            key=f"evidence-note-{selected_claim}",
+        )
+
+        secondary_options = [
+            cid for cid in candidate_lookup.keys() if cid != primary_id
+        ]
+        secondary_default = [
+            (item or {}).get("candidate_id")
+            for item in current_secondaries
+            if (item or {}).get("candidate_id") in secondary_options
+        ]
+        secondary_ids = st.multiselect(
+            "Secondary candidates",
+            options=secondary_options,
+            default=secondary_default,
+            format_func=_format_candidate_choice,
+            disabled=selection_disabled,
+            key=f"evidence-secondary-{selected_claim}",
+        )
+        secondary_payload: List[Dict[str, Any]] = []
+        for candidate_id in secondary_ids:
+            existing = next(
+                (
+                    entry
+                    for entry in current_secondaries
+                    if (entry or {}).get("candidate_id") == candidate_id
+                ),
+                None,
+            )
+            default_rationale = (existing or {}).get("rationale") or ""
+            rationale = st.text_input(
+                f"Rationale for {candidate_id[:8]}",
+                value=default_rationale,
+                disabled=selection_disabled,
+                key=f"evidence-secondary-rationale-{selected_claim}-{candidate_id}",
+            )
+            secondary_payload.append(
+                {"candidate_id": candidate_id, "rationale": rationale}
+            )
+
+        def _validate_selection() -> Optional[str]:
+            if selection_disabled:
+                return "Selection is disabled until evidence candidates are available."
+            if verdict == "uncertain" and not str(note or "").strip():
+                return "Add a short note before saving an uncertain verdict."
+            if verdict in {"support", "contradict"} and not primary_id:
+                return "Choose a primary candidate for support/contradict."
+            for entry in secondary_payload:
+                if not str((entry or {}).get("rationale") or "").strip():
+                    return "Each secondary candidate requires a rationale."
+            return None
+
+        validation_error = _validate_selection()
+        if validation_error:
+            st.warning(validation_error)
+
+        if st.button(
+            "Save selection",
+            key=f"evidence-save-{selected_claim}",
+            disabled=bool(validation_error),
+            type="primary",
+            width="stretch",
+        ):
+            store.save_selection(
+                selected_claim,
+                verdict=verdict,
+                primary_candidate_id=primary_id,
+                secondary=secondary_payload,
+                note=note,
+            )
+            st.experimental_rerun()
+
+        with st.expander("Ranking rationale", expanded=False):
+            render_rationale_sidebar(
+                state,
+                selected_candidate_id=focus_order[0] if focus_order else None,
+                config=SidebarConfig(ui=layout_sidebar),
+            )
+        st.markdown("</div>", unsafe_allow_html=True)
 
 
 def format_reference_summary(reference: dict, resolution: dict) -> str:

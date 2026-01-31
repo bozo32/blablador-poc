@@ -2214,39 +2214,75 @@ def draw_ingestion_panel():
     with rail_col:
         st.markdown('<div class="citation-workflow-rail">', unsafe_allow_html=True)
         st.markdown("#### Workflow")
-        st.caption("Click a citation chip to populate this panel.")
+        st.caption("Click citation chips to follow them here.")
 
         selected_index = st.session_state.get("citation_selected_index")
-        if selected_index is None:
+        selected_target = normalize_target_id(
+            st.session_state.get("citation_selected_target")
+        )
+        if selected_index is not None:
+            _follow_citation(int(selected_index), selected_target)
+
+        followed = [
+            entry
+            for entry in (st.session_state.get("followed_citations") or [])
+            if entry.get("doc_id") == doc_id
+        ]
+        if not followed:
             st.info("Click an in-text citation chip to inspect and parse.")
-        else:
-            selected_target = normalize_target_id(
-                st.session_state.get("citation_selected_target")
-            )
-            anchor = f"cite-idx-{int(selected_index)}"
 
-            context_request = {
-                "api_url": api_url,
-                "doc_id": doc_id,
-                "citation_index": selected_index,
-                "target_id": selected_target,
-            }
-            current_key = (
-                context_request["doc_id"],
-                context_request["citation_index"],
-                context_request.get("target_id"),
-            )
-            if st.session_state.get("citation_context_key") != current_key:
-                load_citation_context(context_request)
-            context = st.session_state.get("citation_context") or {}
+        def _get_context_cached(citation_index: int, target_id: str | None) -> dict:
+            cache = st.session_state.get("citation_context_cache") or {}
+            key = (doc_id, int(citation_index), normalize_target_id(target_id))
+            if key in cache:
+                return cache[key] or {}
+            try:
+                response = get_citation_context(
+                    api_url,
+                    doc_id,
+                    int(citation_index),
+                    target_id=normalize_target_id(target_id),
+                )
+                context = response.get("context") or {}
+            except RuntimeError as exc:
+                context = {"error": str(exc)}
+            cache[key] = context
+            st.session_state["citation_context_cache"] = cache
+            return context
 
+        active_panel = st.session_state.get("workflow_active_panel")
+        active_cite = st.session_state.get("workflow_active_citation")
+
+        for entry in followed:
+            cite_idx = int(entry.get("citation_index"))
+            tgt = normalize_target_id(entry.get("target_id"))
+            anchor = f"cite-idx-{cite_idx}"
+            context = _get_context_cached(cite_idx, tgt)
             cite_text = context.get("citing_sentence") or context.get("sentence") or ""
-            cite_label = _sentence_label(cite_text) if cite_text else "Selected"
+            label = _sentence_label(cite_text) if cite_text else f"Citation {cite_idx}"
 
-            with st.expander(cite_label, expanded=True):
-                st.markdown(f"[Jump to text](#{anchor})")
+            expanded = cite_idx == selected_index or cite_idx == active_cite
+            with st.expander(label, expanded=expanded):
+                cols = st.columns([1, 1, 3])
+                with cols[0]:
+                    st.markdown(f"[Jump to text](#{anchor})")
+                with cols[1]:
+                    if st.button("Unfollow", key=f"unfollow-{cite_idx}"):
+                        st.session_state["followed_citations"] = [
+                            item
+                            for item in (
+                                st.session_state.get("followed_citations") or []
+                            )
+                            if not (
+                                item.get("doc_id") == doc_id
+                                and int(item.get("citation_index")) == cite_idx
+                            )
+                        ]
+                        continue
 
-                if context:
+                if context.get("error"):
+                    st.error(f"Failed to load context: {context.get('error')}")
+                else:
                     st.markdown("**Context**")
                     st.write(context.get("previous_sentence") or "")
                     st.write(cite_text)
@@ -2255,34 +2291,37 @@ def draw_ingestion_panel():
                     st.caption("Raw context payload")
                     st.json(context)
 
-                active_panel = st.session_state.get("workflow_active_panel")
-                with st.expander("Parsing", expanded=active_panel == "parsing"):
+                with st.expander(
+                    "Parsing",
+                    expanded=(active_panel == "parsing" and cite_idx == active_cite),
+                ):
                     model = st.session_state.get("selected_model")
-                    ta_key = f"citation-segments-{selected_index}"
+                    ta_key = f"citation-segments-{cite_idx}"
                     stored = st.session_state.get("citation_sentence_segments", {}).get(
-                        str(selected_index),
+                        str(cite_idx),
                         [],
                     )
                     st.session_state.setdefault(ta_key, "\n".join(stored))
 
                     if st.button(
                         "Segment sentence",
-                        key=f"segment-sentence-{selected_index}",
-                        disabled=not model,
+                        key=f"segment-sentence-{cite_idx}",
+                        disabled=not model or not cite_text,
                     ):
                         st.session_state["workflow_active_panel"] = "parsing"
-                        st.session_state["last_parsing_input"] = cite_text
-                        segments = seg_via_llm(
-                            cite_text,
-                            int(selected_index) + 1,
-                            model,
-                        )
+                        st.session_state["workflow_active_citation"] = cite_idx
+                        st.session_state.setdefault("citation_parsing_inputs", {})[
+                            str(cite_idx)
+                        ] = cite_text
+                        segments = seg_via_llm(cite_text, cite_idx + 1, model)
                         st.session_state.setdefault("citation_sentence_segments", {})[
-                            str(selected_index)
+                            str(cite_idx)
                         ] = segments
                         st.session_state[ta_key] = "\n".join(segments)
 
-                    parsing_input = st.session_state.get("last_parsing_input")
+                    parsing_input = st.session_state.get(
+                        "citation_parsing_inputs", {}
+                    ).get(str(cite_idx))
                     if parsing_input:
                         st.caption("Parsing input")
                         st.write(parsing_input)
@@ -2292,39 +2331,44 @@ def draw_ingestion_panel():
                         key=ta_key,
                         height=160,
                     )
-                    if st.button("Save claims", key=f"save-claims-{selected_index}"):
+                    if st.button("Save claims", key=f"save-claims-{cite_idx}"):
                         st.session_state["workflow_active_panel"] = "parsing"
+                        st.session_state["workflow_active_citation"] = cite_idx
                         lines = [
                             ln.strip() for ln in seg_text.splitlines() if ln.strip()
                         ]
                         st.session_state.setdefault("citation_sentence_segments", {})[
-                            str(selected_index)
+                            str(cite_idx)
                         ] = lines
                         primary_callout = context.get("callout") or "citation"
                         reference_hint = {
                             "callout": primary_callout,
-                            "reference_id": selected_target,
+                            "reference_id": tgt,
                         }
                         saved = 0
                         for idx, line in enumerate(lines):
                             parsed = to_segment_dict(line)
                             segment_id = parsed.get("segment_id") or f"seg-{idx+1}"
                             claim_text = parsed.get("claim") or line
-                            claim_id = f"cite:{doc_id}:{selected_index}:{segment_id}"
+                            claim_id = f"cite:{doc_id}:{cite_idx}:{segment_id}"
                             claim_queue.register_claim(
                                 claim_id,
                                 claim=claim_text,
                                 callout=primary_callout,
                                 doc_id=doc_id,
-                                reference_id=selected_target,
+                                reference_id=tgt,
                                 reference_hint=reference_hint,
                             )
                             saved += 1
                         if saved:
                             st.success(f"Saved {saved} claim(s) to the workspace.")
 
-                with st.expander("Retrieving", expanded=active_panel == "retrieving"):
-                    if not selected_target:
+                with st.expander(
+                    "Retrieving",
+                    expanded=(active_panel == "retrieving" and cite_idx == active_cite),
+                ):
+                    reference_id = tgt or (context.get("reference") or {}).get("id")
+                    if not reference_id:
                         st.info("No target ID available for this citation.")
                     else:
                         reference = context.get("reference") or {}
@@ -2337,8 +2381,8 @@ def draw_ingestion_panel():
                             claim_queue.render_retrieval_instructions(
                                 api_url=api_url,
                                 doc_id=doc_id,
-                                reference_id=selected_target,
-                                key_prefix=str(selected_index),
+                                reference_id=reference_id,
+                                key_prefix=str(cite_idx),
                             )
 
         st.divider()

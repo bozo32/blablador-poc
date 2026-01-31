@@ -338,7 +338,7 @@ class EvidenceCardRenderer:
                     key=key,
                     type="primary" if primary else "secondary",
                     disabled=not enabled or callback is None,
-                    use_container_width=True,
+                    width="stretch",
                     on_click=callback,
                     args=(candidate,),
                 )

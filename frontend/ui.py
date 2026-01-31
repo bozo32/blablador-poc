@@ -573,6 +573,78 @@ def render_sentence_with_callouts(
     return rendered, unmatched
 
 
+def _render_sentence_with_citation_cluster(sentence: str, callouts: list[dict]) -> str:
+    """Render a sentence with a single in-text citation chip.
+
+    This is a UI helper for cases where TEI sentence nodes are very long
+    (sometimes paragraph-like) and where multiple citations appear together.
+    We collapse the citation span into a single chip instead of rendering one
+    chip per callout.
+    """
+    if not sentence:
+        return ""
+    if not callouts:
+        return html.escape(sentence)
+
+    spans: list[tuple[int, int]] = []
+    for callout in callouts:
+        for needle in (callout.get("raw"), callout.get("match")):
+            if not needle:
+                continue
+            normalized = re.sub(r"\s+", " ", str(needle)).strip()
+            if not normalized:
+                continue
+            pattern = re.escape(normalized).replace(r"\ ", r"\\s+")
+            match = re.search(pattern, sentence, flags=re.IGNORECASE)
+            if match:
+                spans.append(match.span())
+                break
+
+    if not spans:
+        rendered, _ = render_sentence_with_callouts(sentence, callouts)
+        return rendered
+
+    spans.sort(key=lambda item: item[0])
+    cluster_start, cluster_end = spans[0]
+    for start, end in spans[1:]:
+        if start <= cluster_end + 10:
+            cluster_end = max(cluster_end, end)
+        else:
+            break
+
+    # Expand to include surrounding brackets when present.
+    if cluster_start > 0 and sentence[cluster_start - 1] in "([":
+        opener = sentence[cluster_start - 1]
+        closer = ")" if opener == "(" else "]"
+        if cluster_end < len(sentence) and sentence[cluster_end] == closer:
+            cluster_start -= 1
+            cluster_end += 1
+
+    focus_sentence = sentence
+    focus_offset = 0
+    if len(sentence) > 480:
+        before = sentence[:cluster_start]
+        after = sentence[cluster_end:]
+        left_boundary = 0
+        for m in re.finditer(r"[.!?]\s", before):
+            left_boundary = m.end()
+        right_boundary = len(sentence)
+        m_after = re.search(r"\s[.!?]", after)
+        if m_after:
+            right_boundary = cluster_end + m_after.start() + 2
+        focus_sentence = sentence[left_boundary:right_boundary].strip()
+        focus_offset = left_boundary
+
+    rel_start = max(0, cluster_start - focus_offset)
+    rel_end = max(rel_start, cluster_end - focus_offset)
+    chip = '<span class="citation-chip">citations</span>'
+    return (
+        html.escape(focus_sentence[:rel_start])
+        + chip
+        + html.escape(focus_sentence[rel_end:])
+    )
+
+
 # === Attachment Helpers ===
 ATTACHMENT_CSS_PATH = (
     pathlib.Path(__file__).resolve().parent / "assets" / "attachment_panel.css"
@@ -1749,7 +1821,7 @@ def draw_ingestion_panel():
                 {"Field": key, "Value": stringify_value(value)}
                 for key, value in metadata.items()
             ]
-            st.dataframe(pd.DataFrame(rows), use_container_width=True)
+            st.dataframe(pd.DataFrame(rows), width="stretch")
         else:
             st.info(
                 "No metadata available yet. Run extraction to populate this section."
@@ -1760,7 +1832,7 @@ def draw_ingestion_panel():
         if citations:
             st.dataframe(
                 pd.DataFrame(normalize_records(citations)),
-                use_container_width=True,
+                width="stretch",
             )
         else:
             st.info("No citations extracted yet.")
@@ -1770,7 +1842,7 @@ def draw_ingestion_panel():
         if references:
             st.dataframe(
                 pd.DataFrame(normalize_records(references)),
-                use_container_width=True,
+                width="stretch",
             )
         else:
             st.info("No bibliography entries extracted yet.")
@@ -1779,7 +1851,7 @@ def draw_ingestion_panel():
         if resolution_data:
             st.dataframe(
                 pd.DataFrame(normalize_records(resolution_data)),
-                use_container_width=True,
+                width="stretch",
             )
         else:
             st.info("No resolved references yet. Run resolution after extraction.")
@@ -1883,7 +1955,7 @@ def draw_ingestion_panel():
             callouts = [
                 format_callout(item[1].get("callout") or "citation") for item in items
             ]
-            rendered_sentence, unmatched = render_sentence_with_callouts(
+            rendered_sentence = _render_sentence_with_citation_cluster(
                 sentence, callouts
             )
             st.markdown(
@@ -1900,16 +1972,6 @@ def draw_ingestion_panel():
                 ]
                 st.caption(f"Raw sentence: {sentence}")
                 st.json(debug_rows)
-            if unmatched:
-                overflow = " ".join(
-                    f'<span class="citation-chip">{item.get("display")}</span>'
-                    for item in unmatched
-                )
-                st.markdown(
-                    f'<div style="margin-top:6px;">{overflow}</div>',
-                    unsafe_allow_html=True,
-                )
-
             max_per_row = 4
             for offset in range(0, len(items), max_per_row):
                 row_items = items[offset : offset + max_per_row]

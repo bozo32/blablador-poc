@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from typing import Optional
 
@@ -35,6 +36,7 @@ def render_copy_to_clipboard(
     """
     payload_text = (payload or "").strip()
     session_key = _session_prefix(key)
+    js_key = re.sub(r"[^A-Za-z0-9_]", "_", key)
     event_state_key = f"{session_key}::event"
     fallback_state_key = f"{session_key}::fallback"
     copied_key = f"{session_key}::copied_at"
@@ -58,30 +60,39 @@ def render_copy_to_clipboard(
             "snippet": "",
         }
 
-    component_value = components.html(
-        f"""
+    html_payload = f"""
 <div class='clipboard-control'>
-  <button class='clipboard-button' onclick="copyPayload_{key}()"{help_attr}>
+  <button class='clipboard-button' onclick="copyPayload_{js_key}()"{help_attr}>
     {label}
   </button>
 </div>
 <script>
-const payload_{key} = {json.dumps(payload_text)};
-function copyPayload_{key}() {{
+const payload_{js_key} = {json.dumps(payload_text)};
+function copyPayload_{js_key}() {{
   if (!navigator.clipboard) {{
     Streamlit.setComponentValue("fallback");
     return;
   }}
-  navigator.clipboard.writeText(payload_{key}).then(
+  navigator.clipboard.writeText(payload_{js_key}).then(
     () => Streamlit.setComponentValue("success"),
     () => Streamlit.setComponentValue("fallback")
   );
 }}
 </script>
-        """,
-        height=70,
-        key=f"{session_key}::component",
-    )
+    """
+
+    # Streamlit versions differ: some accept `key=`, older ones don't.
+    try:
+        component_value = components.html(
+            html_payload,
+            height=70,
+            key=f"{session_key}::component",
+        )
+    except TypeError:
+        component_value = components.html(
+            html_payload,
+            height=70,
+        )
 
     last_event = st.session_state.get(event_state_key)
     new_event = component_value if component_value != last_event else None

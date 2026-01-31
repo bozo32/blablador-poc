@@ -97,6 +97,9 @@ def init_session_state():
         "citation_graph": None,
         "citation_graph_error": None,
         "citation_last_graph_request": None,
+        "followed_citations": [],
+        "citation_context_cache": {},
+        "citation_parsing_inputs": {},
         "citation_graph_depth": 1,
         "citation_graph_max_nodes": 10,
         "citation_sentence_segments": {},
@@ -219,6 +222,10 @@ SEGMENT_PROMPT_TEMPLATE = (
     "Do not output any explanation, commentary, or extra text. "
     "Only list the segments generated from the original sentence. "
     "Your output must end after the last segment.\n\n"
+    "Hard constraint: every content word in your segments must appear in the "
+    "Sentence (case-insensitive). Do not invent facts, entities, or new words. "
+    "If you cannot comply, output exactly one segment that repeats the Sentence "
+    "verbatim.\n\n"
     "List each segment on its own line, numbered {row_idx}a, {row_idx}b, etc., "
     "continuing alphabetically.\n\n"
     "Sentence:\n"
@@ -2019,6 +2026,9 @@ def draw_ingestion_panel():
         st.session_state["citation_graph_error"] = None
         st.session_state["citation_last_graph_request"] = None
 
+        # Persist the selection in the workflow rail.
+        st.session_state["workflow_active_citation"] = index
+
     def load_citation_context(request: dict) -> None:
         st.session_state["citation_context_error"] = None
         st.session_state["citation_context"] = None
@@ -2104,6 +2114,27 @@ def draw_ingestion_panel():
     if param_cite is not None:
         try:
             select_citation(
+                int(str(param_cite)),
+                str(param_target) if param_target else None,
+            )
+        except ValueError:
+            pass
+
+    def _follow_citation(citation_index: int, target_id: str | None) -> None:
+        followed = st.session_state.get("followed_citations") or []
+        normalized_target = normalize_target_id(target_id)
+        entry = {
+            "doc_id": doc_id,
+            "citation_index": int(citation_index),
+            "target_id": normalized_target,
+        }
+        if entry not in followed:
+            followed.append(entry)
+            st.session_state["followed_citations"] = followed
+
+    if param_cite is not None:
+        try:
+            _follow_citation(
                 int(str(param_cite)), str(param_target) if param_target else None
             )
         except ValueError:

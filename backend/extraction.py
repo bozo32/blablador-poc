@@ -18,6 +18,33 @@ def _text_content(elem: etree._Element) -> str:
     return _collapse_ws("".join(elem.itertext()))
 
 
+def _text_with_marker(
+    root: etree._Element, marker_elem: etree._Element, token: str
+) -> str:
+    parts: List[str] = []
+
+    def walk(elem: etree._Element) -> None:
+        if elem.text:
+            parts.append(elem.text)
+        for child in elem:
+            if child is marker_elem:
+                parts.append(token)
+            else:
+                walk(child)
+            if child.tail:
+                parts.append(child.tail)
+
+    walk(root)
+    return _collapse_ws("".join(parts))
+
+
+def _split_sentences(text: str) -> List[str]:
+    if not text:
+        return []
+    parts = re.split(r"(?<=[.!?])\s+", text.strip())
+    return [part.strip() for part in parts if part.strip()]
+
+
 def _first_text(root: etree._Element, xpath: str) -> Optional[str]:
     matches = root.xpath(xpath, namespaces=NS)
     for match in matches:
@@ -156,12 +183,29 @@ def parse_citations(tei_root: etree._Element) -> List[Dict[str, Any]]:
     for ref in refs:
         target = (ref.get("target") or "").lstrip("#") or None
         callout = _text_content(ref)
+
+        # Drop footnote-like numeric callouts without a resolvable target.
+        if target is None and callout.strip().isdigit():
+            continue
+
         sentence_elem = ref.xpath("ancestor::tei:s[1]", namespaces=NS)
         paragraph_elem = ref.xpath("ancestor::tei:p[1]", namespaces=NS)
         context_elem = sentence_elem[0] if sentence_elem else None
         if context_elem is None and paragraph_elem:
             context_elem = paragraph_elem[0]
-        context_text = _text_content(context_elem) if context_elem is not None else None
+
+        context_text = None
+        if context_elem is not None:
+            token = "<<<CITATION_MARKER>>>"
+            marked = _text_with_marker(context_elem, ref, token)
+            candidates = _split_sentences(marked)
+            for candidate in candidates:
+                if token in candidate:
+                    context_text = candidate.replace(token, callout)
+                    break
+            if context_text is None:
+                context_text = marked.replace(token, callout)
+
         sentence_id = None
         if context_elem is not None:
             sentence_id = context_elem.get(f"{{{XML_NS}}}id") or context_elem.get(

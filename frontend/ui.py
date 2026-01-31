@@ -588,6 +588,51 @@ def render_sentence_with_callouts(
     return rendered, unmatched
 
 
+def _render_sentence_with_citation_chips(
+    sentence: str,
+    *,
+    citation_indices: list[int],
+    anchor: str,
+    target_id: Optional[str],
+) -> str:
+    """Replace in-text citation spans with a single clickable chip.
+
+    Uses heuristic sentence patterns (parenthetical/bracket citations). The chip
+    click selects the first citation index for the span.
+    """
+    if not sentence:
+        return ""
+
+    href = _citation_href(
+        citation_indices[0] if citation_indices else 0,
+        target_id,
+        anchor,
+    )
+    chip = (
+        f'<a class="citation-chip citation-chip-link" href="{html.escape(href)}">'
+        "citations"
+        "</a>"
+    )
+
+    # Replace any bracketed span that looks like a citation cluster.
+    pattern = re.compile(r"(\([^\)]*\d{4}[^\)]*\)|\[[^\]]*\d{4}[^\]]*\])")
+    replaced = 0
+
+    def _sub(match: re.Match) -> str:
+        nonlocal replaced
+        replaced += 1
+        return chip
+
+    rendered = pattern.sub(_sub, sentence)
+    if replaced:
+        return html.escape(rendered).replace(html.escape(chip), chip)
+
+    # Fallback: append chip if we can't find a citation span.
+    return (
+        f"{html.escape(sentence)} {chip}" if citation_indices else html.escape(sentence)
+    )
+
+
 def _render_sentence_with_citation_cluster(
     sentence: str,
     callouts: list[dict],
@@ -2005,13 +2050,13 @@ def draw_ingestion_panel():
             selected_index = st.session_state.get("citation_selected_index")
             is_selected = any(idx == selected_index for idx, _ in items)
 
-            callouts = [
-                format_callout(item[1].get("callout") or "citation") for item in items
-            ]
-            rendered_sentence = _render_sentence_with_citation_cluster(
+            citation_indices = [idx for idx, _ in items]
+            target_id = items[0][1].get("target_id")
+            rendered_sentence = _render_sentence_with_citation_chips(
                 sentence,
-                callouts,
-                href=_citation_href(items[0][0], items[0][1].get("target_id"), anchor),
+                citation_indices=citation_indices,
+                anchor=anchor,
+                target_id=target_id,
             )
             wrapper_class = (
                 "citation-sentence citation-selected"

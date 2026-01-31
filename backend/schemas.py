@@ -200,6 +200,8 @@ class CitationContextPayload(BaseModel):
     sentence: Optional[str] = None
     citing_sentence: Optional[str] = None
     citing_snippet: Optional[str] = None
+    citing_prefix: Optional[str] = None
+    citing_suffix: Optional[str] = None
     previous_sentence: Optional[str] = None
     next_sentence: Optional[str] = None
     sentence_id: Optional[str] = None

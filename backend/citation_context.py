@@ -135,16 +135,24 @@ def get_citation_context(
 
     citing_sentence = None
     snippet = None
+    prefix = None
+    suffix = None
     if ref_elem is not None:
         token = "<<<CITATION_MARKER>>>"
         marked = _text_with_marker(context_elem, ref_elem, token)
         candidates = _split_sentences(marked)
         for candidate in candidates:
             if token in candidate:
+                before, after = candidate.split(token, 1)
+                prefix = before.strip() or None
+                suffix = after.strip() or None
                 citing_sentence = candidate.replace(token, callout.get("callout") or "")
                 snippet = candidate.replace(token, "[citation]")
                 break
         if citing_sentence is None:
+            before, after = marked.split(token, 1) if token in marked else (marked, "")
+            prefix = before.strip() or None
+            suffix = after.strip() or None
             citing_sentence = marked.replace(token, callout.get("callout") or "")
             snippet = marked.replace(token, "[citation]")
 
@@ -154,6 +162,8 @@ def get_citation_context(
         "sentence": _text_content(context_elem),
         "citing_sentence": citing_sentence,
         "citing_snippet": snippet,
+        "citing_prefix": prefix,
+        "citing_suffix": suffix,
         "previous_sentence": _text_content(prev_sentence) if prev_sentence else None,
         "next_sentence": _text_content(next_sentence) if next_sentence else None,
         "sentence_id": sentence_id,

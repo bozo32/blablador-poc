@@ -2258,7 +2258,12 @@ def draw_ingestion_panel():
             tgt = normalize_target_id(entry.get("target_id"))
             anchor = f"cite-idx-{cite_idx}"
             context = _get_context_cached(cite_idx, tgt)
-            cite_text = context.get("citing_sentence") or context.get("sentence") or ""
+            cite_text = (
+                context.get("citing_prefix")
+                or context.get("citing_sentence")
+                or context.get("sentence")
+                or ""
+            )
             label = (
                 _sentence_label(cite_text) if cite_text else f"Citation {cite_idx + 1}"
             )
@@ -2286,9 +2291,18 @@ def draw_ingestion_panel():
                     st.error(f"Failed to load context: {context.get('error')}")
                 else:
                     st.markdown("**Context**")
-                    st.write(context.get("previous_sentence") or "")
-                    st.write(cite_text)
-                    st.write(context.get("next_sentence") or "")
+                    edit_key = f"context-edit::{doc_id}::{cite_idx}"
+                    st.session_state.setdefault(edit_key, cite_text)
+                    edited = st.text_area(
+                        "Context (editable)",
+                        key=edit_key,
+                        height=160,
+                        help=(
+                            "Edit the claim text to segment; defaults to the text "
+                            "preceding the clicked citation."
+                        ),
+                    )
+                    cite_text = (edited or "").strip()
                 if st.session_state.get("citation_debug"):
                     st.caption("Raw context payload")
                     st.json(context)
@@ -2320,13 +2334,6 @@ def draw_ingestion_panel():
                             str(cite_idx)
                         ] = segments
                         st.session_state[ta_key] = "\n".join(segments)
-
-                    parsing_input = st.session_state.get(
-                        "citation_parsing_inputs", {}
-                    ).get(str(cite_idx))
-                    if parsing_input:
-                        st.caption("Parsing input")
-                        st.write(parsing_input)
 
                     seg_text = st.text_area(
                         "Parsed claims (one per line)",

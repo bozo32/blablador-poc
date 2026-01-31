@@ -2,7 +2,8 @@ from typing import Dict, Optional, Union
 
 import requests
 
-DEFAULT_TIMEOUT = 30
+# Extraction (GROBID) can take >30s on first run.
+DEFAULT_TIMEOUT = 180
 
 
 def _parse_response(response: requests.Response) -> Optional[dict]:
@@ -22,7 +23,7 @@ def upload_pdf(api_url: str, file) -> dict:
     try:
         response = requests.post(url, files=files, timeout=DEFAULT_TIMEOUT)
     except requests.RequestException as exc:
-        raise RuntimeError(f"Failed to reach ingestion API at {url}") from exc
+        raise RuntimeError(_request_error_message(url, exc)) from exc
     payload = _parse_response(response) or {}
     return payload.get("document") or {}
 
@@ -32,7 +33,7 @@ def list_documents(api_url: str) -> list[dict]:
     try:
         response = requests.get(url, timeout=DEFAULT_TIMEOUT)
     except requests.RequestException as exc:
-        raise RuntimeError(f"Failed to reach ingestion API at {url}") from exc
+        raise RuntimeError(_request_error_message(url, exc)) from exc
     payload = _parse_response(response) or {}
     return payload.get("documents") or []
 
@@ -42,7 +43,7 @@ def get_document(api_url: str, doc_id: str) -> dict:
     try:
         response = requests.get(url, timeout=DEFAULT_TIMEOUT)
     except requests.RequestException as exc:
-        raise RuntimeError(f"Failed to reach ingestion API at {url}") from exc
+        raise RuntimeError(_request_error_message(url, exc)) from exc
     payload = _parse_response(response) or {}
     return payload
 
@@ -52,7 +53,7 @@ def trigger_extraction(api_url: str, doc_id: str) -> dict:
     try:
         response = requests.post(url, timeout=DEFAULT_TIMEOUT)
     except requests.RequestException as exc:
-        raise RuntimeError(f"Failed to reach ingestion API at {url}") from exc
+        raise RuntimeError(_request_error_message(url, exc)) from exc
     return _parse_response(response) or {}
 
 
@@ -61,7 +62,7 @@ def trigger_resolution(api_url: str, doc_id: str) -> dict:
     try:
         response = requests.post(url, timeout=DEFAULT_TIMEOUT)
     except requests.RequestException as exc:
-        raise RuntimeError(f"Failed to reach ingestion API at {url}") from exc
+        raise RuntimeError(_request_error_message(url, exc)) from exc
     return _parse_response(response) or {}
 
 
@@ -73,7 +74,7 @@ def submit_resolution_choice(
     try:
         response = requests.post(url, json=payload, timeout=DEFAULT_TIMEOUT)
     except requests.RequestException as exc:
-        raise RuntimeError(f"Failed to reach ingestion API at {url}") from exc
+        raise RuntimeError(_request_error_message(url, exc)) from exc
     return _parse_response(response) or {}
 
 
@@ -91,7 +92,7 @@ def get_citation_context(
     try:
         response = requests.get(url, params=params, timeout=DEFAULT_TIMEOUT)
     except requests.RequestException as exc:
-        raise RuntimeError(f"Failed to reach ingestion API at {url}") from exc
+        raise RuntimeError(_request_error_message(url, exc)) from exc
     return _parse_response(response) or {}
 
 
@@ -116,7 +117,7 @@ def get_citation_graph(
     try:
         response = requests.get(url, params=params, timeout=DEFAULT_TIMEOUT)
     except requests.RequestException as exc:
-        raise RuntimeError(f"Failed to reach ingestion API at {url}") from exc
+        raise RuntimeError(_request_error_message(url, exc)) from exc
     return _parse_response(response) or {}
 
 
@@ -130,5 +131,15 @@ def get_reference_retrieval(
     try:
         response = requests.get(url, timeout=DEFAULT_TIMEOUT)
     except requests.RequestException as exc:
-        raise RuntimeError(f"Failed to reach ingestion API at {url}") from exc
+        raise RuntimeError(_request_error_message(url, exc)) from exc
     return _parse_response(response) or {}
+
+
+def _request_error_message(url: str, exc: requests.RequestException) -> str:
+    if isinstance(exc, requests.Timeout):
+        return (
+            f"Request to ingestion API timed out ({DEFAULT_TIMEOUT}s): {url}. "
+            "The backend may still be processing (e.g., GROBID extraction); "
+            "try refreshing the document status in a moment."
+        )
+    return f"Failed to reach ingestion API at {url}"

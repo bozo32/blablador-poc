@@ -3,6 +3,7 @@
 # === Imports ===
 import html
 import json
+import hashlib
 import os
 import pathlib
 import re
@@ -46,7 +47,6 @@ from frontend.ingestion_api import (
     get_citation_graph,
     get_document,
     list_documents,
-    submit_resolution_choice,
     trigger_extraction,
     trigger_resolution,
     upload_pdf,
@@ -98,6 +98,7 @@ def init_session_state():
         "citation_last_graph_request": None,
         "citation_graph_depth": 1,
         "citation_graph_max_nodes": 10,
+        "citation_sentence_segments": {},
         "auto_extract_on_upload": True,
         "auto_resolve_on_upload": True,
         "citation_debug": False,
@@ -404,7 +405,6 @@ def inject_citation_styles() -> None:
         .citation-sentence {
             font-size: 0.96rem;
             line-height: 1.6;
-            color: #1f2933;
         }
         .citation-chip {
             display: inline-block;
@@ -426,11 +426,32 @@ def inject_citation_styles() -> None:
             background: #e6e6e6;
             margin: 12px 0 16px;
         }
+        .citation-workflow-rail {
+            position: sticky;
+            top: 0.75rem;
+            max-height: calc(100vh - 2rem);
+            overflow: auto;
+            padding-right: 0.25rem;
+        }
         </style>
         """,
         unsafe_allow_html=True,
     )
     st.session_state["citation_styles_loaded"] = True
+
+
+def _sentence_anchor(sentence: str) -> str:
+    digest = hashlib.sha1(sentence.encode("utf-8")).hexdigest()[:10]
+    return f"cite-sent-{digest}"
+
+
+def _sentence_label(sentence: str, words: int = 4) -> str:
+    tokens = [tok for tok in (sentence or "").strip().split() if tok]
+    if not tokens:
+        return "(empty sentence)"
+    head = " ".join(tokens[:words])
+    suffix = "…" if len(tokens) > words else ""
+    return f"{head}{suffix}"
 
 
 def normalize_callout_text(callout: str) -> str:
@@ -1844,17 +1865,21 @@ def draw_ingestion_panel():
         st.session_state["citation_graph"] = response
 
     inject_citation_styles()
-    left_col, right_col = st.columns([5, 7])
+    main_col, rail_col = st.columns([7, 5], gap="large")
 
-    with left_col:
-        st.markdown("#### Callouts")
-        st.caption("Click the badges below each sentence to open context.")
-        grouped: dict[str, list[tuple[int, dict]]] = {}
-        for idx, citation in enumerate(citations):
-            sentence = (citation.get("sentence") or "Sentence unavailable").strip()
-            grouped.setdefault(sentence, []).append((idx, citation))
+    grouped: dict[str, list[tuple[int, dict]]] = {}
+    for idx, citation in enumerate(citations):
+        sentence = (citation.get("sentence") or "Sentence unavailable").strip()
+        grouped.setdefault(sentence, []).append((idx, citation))
+
+    with main_col:
+        st.markdown("#### Citing statements")
+        st.caption("Click the callout badges to choose a cited work.")
 
         for sentence, items in grouped.items():
+            anchor = _sentence_anchor(sentence)
+            st.markdown(f'<a id="{anchor}"></a>', unsafe_allow_html=True)
+
             callouts = [
                 format_callout(item[1].get("callout") or "citation") for item in items
             ]
@@ -1884,6 +1909,7 @@ def draw_ingestion_panel():
                     f'<div style="margin-top:6px;">{overflow}</div>',
                     unsafe_allow_html=True,
                 )
+
             max_per_row = 4
             for offset in range(0, len(items), max_per_row):
                 row_items = items[offset : offset + max_per_row]
@@ -1907,195 +1933,174 @@ def draw_ingestion_panel():
                         select_citation(citation_index, target_id)
             st.markdown('<div class="citation-divider"></div>', unsafe_allow_html=True)
 
-    with right_col:
-        st.markdown("#### Context")
-        selected_index = st.session_state.get("citation_selected_index")
-        selected_target = normalize_target_id(
-            st.session_state.get("citation_selected_target")
+    with rail_col:
+        st.markdown('<div class="citation-workflow-rail">', unsafe_allow_html=True)
+        st.markdown("#### Workflow")
+        st.caption(
+            "Pick a citing statement, then open Parsing or Retrieving. The citation "
+            "graph stays available at the bottom of this panel."
         )
-        if selected_index is None:
-            st.info("Select a citation callout to view its context.")
-            st.button(
-                "Retrieval instructions",
-                key="retrieval-disabled",
-                disabled=True,
-                help="Select a citation to load retrieval guidance",
-            )
-        else:
-            context_request = {
-                "api_url": st.session_state.get("api_url", "http://localhost:8000"),
-                "doc_id": doc_id,
-                "citation_index": selected_index,
-                "target_id": selected_target,
-            }
-            current_key = (
-                context_request["doc_id"],
-                context_request["citation_index"],
-                context_request.get("target_id"),
-            )
-            if st.session_state.get("citation_context_key") != current_key:
-                load_citation_context(context_request)
+        api_url = st.session_state.get("api_url", "http://localhost:8000")
 
-            context = st.session_state.get("citation_context")
-            if context:
-                reference = context.get("reference") or {}
-                reference_id = reference.get("id") or selected_target
-                doc_identifier = context.get("document_id") or doc_id
-                show_retrieval = st.button(
-                    "Retrieval instructions",
-                    key="retrieval-instructions-button",
-                    help="Open canonical citation, DOI links, and fallback steps",
-                )
-                st.markdown(
-                    highlight_callout(context.get("previous_sentence"), None),
-                    unsafe_allow_html=True,
-                )
-                st.markdown(
-                    highlight_callout(context.get("sentence"), context.get("callout")),
-                    unsafe_allow_html=True,
-                )
-                st.markdown(
-                    highlight_callout(context.get("next_sentence"), None),
-                    unsafe_allow_html=True,
-                )
-                follow_label = (
-                    "Hide citation details"
-                    if st.session_state.get("citation_follow_open")
-                    else "Follow citation"
-                )
-                if st.button(follow_label, key="citation-follow-toggle"):
-                    st.session_state["citation_follow_open"] = not st.session_state.get(
-                        "citation_follow_open", False
+        for sentence, items in grouped.items():
+            anchor = _sentence_anchor(sentence)
+            label = _sentence_label(sentence)
+            with st.expander(label, expanded=False):
+                st.markdown(f"[Jump to text](#{anchor})")
+                st.caption(f"{len(items)} citation(s) in this sentence")
+
+                with st.expander("Parsing", expanded=False):
+                    model = st.session_state.get("selected_model")
+                    ta_key = f"citation-segments-{anchor}"
+                    stored = (
+                        st.session_state.get("citation_sentence_segments", {}).get(
+                            anchor
+                        )
+                        or []
                     )
-                if st.session_state.get("citation_follow_open"):
-                    reference = context.get("reference")
-                    resolution = context.get("resolution")
-                    if not reference and not resolution:
-                        st.info("Citation metadata unavailable.")
-                    summary = format_reference_summary(
-                        reference or {}, resolution or {}
+                    st.session_state.setdefault(ta_key, "\n".join(stored))
+
+                    segment_disabled = not model
+                    if st.button(
+                        "Segment sentence",
+                        key=f"segment-sentence-{anchor}",
+                        disabled=segment_disabled,
+                        help=(
+                            "Select an LLM model in the sidebar first"
+                            if segment_disabled
+                            else ""
+                        ),
+                    ):
+                        idx_seed = items[0][0] + 1
+                        segments = seg_via_llm(sentence, idx_seed, model)
+                        st.session_state.setdefault("citation_sentence_segments", {})[
+                            anchor
+                        ] = segments
+                        st.session_state[ta_key] = "\n".join(segments)
+
+                    seg_text = st.text_area(
+                        "Parsed claims (one per line)",
+                        key=ta_key,
+                        height=160,
+                        placeholder="Use 'Segment sentence' or paste/edit claims here",
                     )
-                    if summary:
-                        st.markdown("**Reference summary**")
-                        st.markdown(summary)
-                    else:
-                        st.caption("Reference summary unavailable.")
-                    if not resolution:
-                        st.caption("Resolution missing — run Resolve References.")
-                    else:
-                        status = resolution.get("status")
-                        if status in ("mismatch", "needs_review"):
-                            reference_id = resolution.get("reference_id")
-                            st.caption("Resolution needs review.")
-                            if resolution.get("mismatch_reason"):
-                                st.caption(
-                                    f"Reason: {resolution.get('mismatch_reason')}"
-                                )
-                            (
-                                citing_summary,
-                                has_consolidated,
-                            ) = build_citing_bibliography_summary(
-                                reference or {}, resolution or {}
+                    if st.button("Save claims", key=f"save-claims-{anchor}"):
+                        lines = [
+                            ln.strip() for ln in seg_text.splitlines() if ln.strip()
+                        ]
+                        st.session_state.setdefault("citation_sentence_segments", {})[
+                            anchor
+                        ] = lines
+
+                        primary = items[0][1]
+                        primary_callout = primary.get("callout") or "citation"
+                        target_id = normalize_target_id(primary.get("target_id"))
+                        reference_hint = {
+                            "callout": primary_callout,
+                            "reference_id": target_id,
+                        }
+
+                        saved = 0
+                        for idx, line in enumerate(lines):
+                            parsed = to_segment_dict(line)
+                            segment_id = parsed.get("segment_id") or f"seg-{idx+1}"
+                            claim_text = parsed.get("claim") or line
+                            claim_id = f"cite:{doc_id}:{items[0][0]}:{segment_id}"
+                            claim_queue.register_claim(
+                                claim_id,
+                                claim=claim_text,
+                                callout=primary_callout,
+                                doc_id=doc_id,
+                                reference_id=target_id,
+                                reference_hint=reference_hint,
                             )
-                            if citing_summary:
-                                st.markdown("**Citing bibliography**")
-                                st.markdown(citing_summary)
-                            else:
-                                st.caption("Citing bibliography unavailable.")
-                            if not has_consolidated:
-                                st.warning(
-                                    "Consolidated metadata missing for this reference."
-                                )
-                            if resolution.get("openalex"):
-                                st.caption(
-                                    "OpenAlex may resolve to the citing article; "
-                                    "review before selecting."
-                                )
-                            candidate_options = build_resolution_candidates(resolution)
-                            if reference_id and candidate_options:
-                                option_keys = list(candidate_options.keys())
-                                default_key = resolution.get("selected_source")
-                                if default_key not in option_keys:
-                                    default_key = option_keys[0]
-                                selected_source = st.selectbox(
-                                    "Select source",
-                                    option_keys,
-                                    index=option_keys.index(default_key),
-                                    format_func=lambda key: candidate_options.get(
-                                        key, key
-                                    ),
-                                    key=f"resolution-select-{reference_id}",
-                                )
-                                if st.button(
-                                    "Apply selection",
-                                    key=f"resolution-apply-{reference_id}",
-                                ):
-                                    api_url = st.session_state.get(
-                                        "api_url", "http://localhost:8000"
-                                    )
-                                    try:
-                                        submit_resolution_choice(
-                                            api_url,
-                                            doc_id,
-                                            reference_id,
-                                            selected_source,
-                                        )
-                                        load_selected_document(show_error=False)
-                                        load_citation_context(context_request)
-                                        st.success("Resolution updated.")
-                                    except RuntimeError as exc:
-                                        st.error(f"Failed to update resolution: {exc}")
-                            else:
-                                st.caption("No resolution candidates available.")
-                    with st.expander("Show raw metadata"):
-                        if reference:
-                            st.markdown("**Bibliography entry**")
-                            st.json(reference)
+                            saved += 1
+                        if saved:
+                            st.success(f"Saved {saved} claim(s) to the workspace.")
                         else:
-                            st.caption("Bibliography entry unavailable.")
-                        if resolution:
-                            st.markdown("**Resolved metadata**")
-                            st.json(resolution)
+                            st.info("No claims to save yet.")
+
+                with st.expander("Retrieving", expanded=False):
+                    options = []
+                    for citation_index, citation in items:
+                        callout = citation.get("callout") or "citation"
+                        display_callout = format_callout(callout)["display"]
+                        target_id = normalize_target_id(citation.get("target_id"))
+                        if not target_id:
+                            continue
+                        options.append(
+                            {
+                                "key": f"{citation_index}:{target_id}",
+                                "citation_index": citation_index,
+                                "target_id": target_id,
+                                "label": display_callout,
+                            }
+                        )
+
+                    if not options:
+                        st.info(
+                            "No target IDs available for retrieval in this sentence."
+                        )
+                    else:
+                        option_map = {opt["key"]: opt for opt in options}
+                        picked = st.selectbox(
+                            "Cited work",
+                            [opt["key"] for opt in options],
+                            format_func=lambda key: option_map[key]["label"],
+                            key=f"retrieve-pick-{anchor}",
+                        )
+                        picked_opt = option_map[picked]
+                        selected_index = st.session_state.get("citation_selected_index")
+                        selected_target = normalize_target_id(
+                            st.session_state.get("citation_selected_target")
+                        )
+                        if (
+                            selected_index != picked_opt["citation_index"]
+                            or selected_target != picked_opt["target_id"]
+                        ):
+                            select_citation(
+                                picked_opt["citation_index"], picked_opt["target_id"]
+                            )
+
+                        context_request = {
+                            "api_url": api_url,
+                            "doc_id": doc_id,
+                            "citation_index": picked_opt["citation_index"],
+                            "target_id": picked_opt["target_id"],
+                        }
+                        current_key = (
+                            context_request["doc_id"],
+                            context_request["citation_index"],
+                            context_request.get("target_id"),
+                        )
+                        if st.session_state.get("citation_context_key") != current_key:
+                            load_citation_context(context_request)
+
+                        context = st.session_state.get("citation_context") or {}
+                        reference = context.get("reference") or {}
+                        resolution = context.get("resolution") or {}
+                        summary = format_reference_summary(reference, resolution)
+                        if summary:
+                            st.markdown("**Reference summary**")
+                            st.markdown(summary)
                         else:
-                            st.caption("Resolved metadata unavailable.")
-                if show_retrieval:
-                    with st.expander("Retrieval instructions", expanded=True):
-                        if reference_id:
+                            st.caption("Reference summary unavailable.")
+
+                        reference_id = reference.get("id") or picked_opt["target_id"]
+                        with st.expander("Retrieval instructions", expanded=False):
                             claim_queue.render_retrieval_instructions(
-                                api_url=context_request["api_url"],
-                                doc_id=doc_identifier,
+                                api_url=api_url,
+                                doc_id=doc_id,
                                 reference_id=reference_id,
                             )
-                        else:
-                            st.warning(
-                                "Reference metadata missing — run resolution to fetch"
-                                " dossiers."
-                            )
-            else:
-                st.info("Context unavailable yet. Try running extraction/resolution.")
-                fallback = None
-                if selected_index is not None and 0 <= selected_index < len(citations):
-                    fallback = citations[selected_index]
-                if fallback:
-                    fallback_sentence = fallback.get("sentence") or ""
-                    callout = fallback.get("callout")
-                    callouts = [format_callout(callout)] if callout else []
-                    rendered, _ = render_sentence_with_callouts(
-                        fallback_sentence, callouts
-                    )
-                    st.markdown(rendered, unsafe_allow_html=True)
-                if st.session_state.get("citation_context_error"):
-                    if st.button("Retry context", key="citation-context-retry"):
-                        last_request = st.session_state.get(
-                            "citation_last_context_request"
-                        )
-                        if last_request:
-                            load_citation_context(last_request)
 
         st.divider()
         st.markdown("#### Citation Graph")
+        selected_target = normalize_target_id(
+            st.session_state.get("citation_selected_target")
+        )
         if selected_target is None:
-            st.info("Select a citation with a target ID to view the graph.")
+            st.info("Select a citation callout to view the graph.")
         else:
             context_snapshot = st.session_state.get("citation_context") or {}
             resolution_entry = context_snapshot.get("resolution") or {}
@@ -2110,8 +2115,7 @@ def draw_ingestion_panel():
                 st.caption(f"Resolved identifier: {resolved_identifier}")
             else:
                 st.caption("No DOI resolved for this citation yet.")
-            if selected_target:
-                st.caption(f"Target ID: {selected_target}")
+            st.caption(f"Target ID: {selected_target}")
             st.slider(
                 "Depth",
                 min_value=1,
@@ -2125,7 +2129,7 @@ def draw_ingestion_panel():
                 key="citation_graph_max_nodes",
             )
             graph_request = {
-                "api_url": st.session_state.get("api_url", "http://localhost:8000"),
+                "api_url": api_url,
                 "doc_id": doc_id,
                 "target_id": selected_target,
                 "doi": resolved_identifier,
@@ -2158,13 +2162,15 @@ def draw_ingestion_panel():
                 if "OpenAlex request failed (404)" in error_message:
                     st.caption(
                         "OpenAlex could not find this work. "
-                        "Check that reference resolution populated a DOI "
-                        "or OpenAlex ID."
+                        "Check that reference resolution populated a DOI or OpenAlex "
+                        "ID."
                     )
                 if st.button("Retry graph", key="citation-graph-retry"):
                     last_request = st.session_state.get("citation_last_graph_request")
                     if last_request:
                         load_citation_graph(last_request)
+
+        st.markdown("</div>", unsafe_allow_html=True)
 
 
 def draw_main():

@@ -299,7 +299,7 @@ def render_retrieval_instructions(
             st.link_button(
                 "Open source",
                 primary,
-                use_container_width=True,
+                width="stretch",
                 help="Opens the publisher/best available link",
             )
         else:

@@ -164,8 +164,9 @@ Plans:
 **Success Criteria** (what must be TRUE):
   1. A small PDF corpus (5–15 docs) with a known citation graph is packaged with the repo (or downloadable via a script).
   2. Ground-truth review artifacts exist (attachments parsed, evidence selections, judgments) to demonstrate the full workflow.
-  3. A “trace” (event log) can replay a realistic walk + annotation session for the demo.
-  4. Demo exports produce non-empty claim/callout JSON/CSV showing the captured judgments.
+  3. A “trace” (event log) can replay a realistic walk + annotation session for the demo, and a Record mode can capture a real session into that trace format.
+  4. Demo includes synthetic multi-actor graph behaviors: disputed-edge (orange) consensus with forward propagation; stacked supporting sources; and dotted contradiction links across alternate paths.
+  5. Demo exports produce non-empty claim/callout JSON/CSV showing the captured judgments.
 **Plans**: TBD
 
 ## Progress

@@ -119,6 +119,11 @@ Requirements for initial release. Each maps to roadmap phases.
   - Dataset includes 5–15 PDFs with a known citation graph.
   - Includes seeded artifacts (attachments parsed, evidence selections, judgments) to avoid waiting during demos.
   - Includes a replayable “trace” (event log) of a realistic walk + annotate session.
+  - Record mode captures an actual human review session and writes a trace suitable for replay and light editing.
+  - Demo includes multi-actor/aggregate behaviors (synthetic is OK):
+    - Edge consensus visualization: if a minority marks an edge “red” while most mark it “green”, render it “orange” (disputed) and propagate the dispute forward to downstream citing nodes.
+    - Evidence stacking: when multiple cited sources support the same claim, render their evidence cards stacked with slight offsets to save space.
+    - Counterfactual navigation: when the reviewer backtracks and follows a different edge leading to a contradicting claim, render a dotted red link from the off-path contradiction back to the original citing claim.
 
 ## v2 Requirements
 

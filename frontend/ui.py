@@ -32,6 +32,7 @@ from frontend import (
     claim_queue,
     clipboard,
     evidence_store,
+    judgment_api,
     judgment_store,
 )
 from frontend.components import chase_queue as chase_queue_component
@@ -2302,6 +2303,89 @@ def render_evidence_panel() -> None:
         _render_pdf_notice()
 
     with layout_sidebar:
+        st.subheader("Export")
+
+        include_drafts = st.checkbox(
+            "Include drafts",
+            value=False,
+            key="judgment-export-include-drafts",
+            help="Default exports include only final judgments.",
+        )
+        export_mode = st.selectbox(
+            "Mode",
+            ["core", "verbose"],
+            index=0,
+            key="judgment-export-mode",
+        )
+
+        export_cache = st.session_state.setdefault("_judgment_export_cache", {})
+        cache_namespace = (bool(include_drafts), str(export_mode))
+        if st.button(
+            "Refresh exports",
+            key="judgment-export-refresh",
+            help="Refetch export payloads from the backend.",
+        ):
+            for key in list(export_cache.keys()):
+                if isinstance(key, tuple) and key[:2] == cache_namespace:
+                    export_cache.pop(key, None)
+            st.session_state["_judgment_export_cache"] = export_cache
+
+        def _get_export(shape: str, fmt: str) -> Optional[dict]:
+            key = (bool(include_drafts), str(export_mode), str(shape), str(fmt))
+            if key in export_cache:
+                return export_cache.get(key)
+            try:
+                payload = judgment_api.download_export(
+                    shape=shape,
+                    format=fmt,
+                    include_drafts=bool(include_drafts),
+                    mode=str(export_mode),
+                )
+            except judgment_api.JudgmentApiError:
+                payload = None
+            export_cache[key] = payload
+            st.session_state["_judgment_export_cache"] = export_cache
+            return payload
+
+        claim_json = _get_export("claim", "json")
+        callout_json = _get_export("callout", "json")
+        claim_csv = _get_export("claim", "csv")
+        callout_csv = _get_export("callout", "csv")
+
+        st.download_button(
+            "Export claims (JSON)",
+            data=(claim_json or {}).get("content") or "",
+            file_name=(claim_json or {}).get("filename") or "judgments_claim.json",
+            mime=(claim_json or {}).get("mime") or "application/json",
+            disabled=claim_json is None,
+            use_container_width=True,
+        )
+        st.download_button(
+            "Export callouts (JSON)",
+            data=(callout_json or {}).get("content") or "",
+            file_name=(callout_json or {}).get("filename") or "judgments_callout.json",
+            mime=(callout_json or {}).get("mime") or "application/json",
+            disabled=callout_json is None,
+            use_container_width=True,
+        )
+        st.download_button(
+            "Export claims (CSV)",
+            data=(claim_csv or {}).get("content") or b"",
+            file_name=(claim_csv or {}).get("filename") or "judgments_claim.csv",
+            mime=(claim_csv or {}).get("mime") or "text/csv",
+            disabled=claim_csv is None,
+            use_container_width=True,
+        )
+        st.download_button(
+            "Export callouts (CSV)",
+            data=(callout_csv or {}).get("content") or b"",
+            file_name=(callout_csv or {}).get("filename") or "judgments_callout.csv",
+            mime=(callout_csv or {}).get("mime") or "text/csv",
+            disabled=callout_csv is None,
+            use_container_width=True,
+        )
+
+        st.divider()
         st.subheader("Run history")
         runs = state.get("history") or []
         if not runs:
@@ -3255,6 +3339,11 @@ def draw_ingestion_panel():
         if center_view == "Document text":
             st.caption("Click an in-text citation chip to inspect context.")
 
+            j_store = judgment_store.JudgmentStore()
+            j_doc_state = j_store.sync_doc(str(doc_id), include_drafts=True)
+            if j_doc_state.get("error"):
+                st.caption(f"Judgments unavailable: {j_doc_state['error']}")
+
             for para in paragraphs:
                 para_sentences = para.get("sentences") or []
                 if not para_sentences:
@@ -3321,9 +3410,30 @@ def draw_ingestion_panel():
                         chip_class = "citation-chip"
                         if selected_index == cite_index:
                             chip_class += " citation-chip-selected"
-                        parts.append(f'<a id="{anchor}"></a>')
-
                         normalized_target = normalize_target_id(target_id)
+
+                        status_snapshot = j_store.callout_status(
+                            str(doc_id), cite_index, normalized_target
+                        )
+                        validated = bool(status_snapshot.get("validated"))
+                        outcome = status_snapshot.get("outcome") if validated else None
+                        if validated:
+                            chip_class += " citation-chip--validated"
+                            if outcome in {"support", "contradict", "uncertain"}:
+                                chip_class += f" citation-chip--{outcome}"
+                        else:
+                            chip_class += " citation-chip--unvalidated"
+
+                        icon = "o"
+                        if validated:
+                            if outcome == "support":
+                                icon = "v"
+                            elif outcome == "contradict":
+                                icon = "x"
+                            else:
+                                icon = "?"
+
+                        parts.append(f'<a id="{anchor}"></a>')
                         entry_key = f"{cite_index}:{normalized_target or ''}"
                         sentence_id = seg.get("sentence_id") or sent.get("sentence_id")
 
@@ -3340,9 +3450,15 @@ def draw_ingestion_panel():
                             )
 
                         # Render chip; selection via buttons below.
+                        indicator_html = (
+                            '<span class="citation-chip__indicator">'
+                            f"{html.escape(icon)}"
+                            "</span>"
+                        )
                         parts.append(
                             (
                                 f'<span class="{chip_class}">'
+                                f"{indicator_html}"
                                 f"{html.escape(label_text)}"
                                 "</span>"
                             )
@@ -3372,25 +3488,70 @@ def draw_ingestion_panel():
                                 f"doc-cite-btn::{doc_id}::{cite_idx}::"
                                 f"{tgt or ''}::{idx}"
                             )
-                            if st.button(
-                                btn_label,
-                                key=cite_button_key,
-                                use_container_width=True,
-                            ):
-                                st.session_state["pending_callout_tuple"] = {
-                                    "doc_id": doc_id,
-                                    "citation_index": cite_idx,
-                                    "target_id": tgt,
-                                    "sentence_id": item.get("sentence_id"),
-                                }
-                                # Route through query params to reuse the existing
-                                # unsaved-edits prompt logic.
-                                _set_query_params(
-                                    doc=doc_id,
-                                    cite=cite_idx,
-                                    target=tgt,
+                            status_snapshot = j_store.callout_status(
+                                str(doc_id), cite_idx, tgt
+                            )
+                            validated = bool(status_snapshot.get("validated"))
+                            outcome = (
+                                status_snapshot.get("outcome") if validated else None
+                            )
+
+                            icon = "o"
+                            if validated:
+                                if outcome == "support":
+                                    icon = "v"
+                                elif outcome == "contradict":
+                                    icon = "x"
+                                else:
+                                    icon = "?"
+
+                            left, right = st.columns([5, 1], gap="small")
+                            with left:
+                                if st.button(
+                                    btn_label,
+                                    key=cite_button_key,
+                                    use_container_width=True,
+                                ):
+                                    st.session_state["pending_callout_tuple"] = {
+                                        "doc_id": doc_id,
+                                        "citation_index": cite_idx,
+                                        "target_id": tgt,
+                                        "sentence_id": item.get("sentence_id"),
+                                    }
+                                    _set_query_params(
+                                        doc=doc_id,
+                                        cite=cite_idx,
+                                        target=tgt,
+                                    )
+                                    _rerun()
+
+                            with right:
+                                open_key = (
+                                    f"doc-cite-open::{doc_id}::{cite_idx}::"
+                                    f"{tgt or ''}::{idx}"
                                 )
-                                _rerun()
+                                if st.button(
+                                    icon,
+                                    key=open_key,
+                                    help="Open judgment details",
+                                    use_container_width=True,
+                                ):
+                                    claim_ids = status_snapshot.get("claim_ids") or []
+                                    if claim_ids:
+                                        st.session_state[
+                                            "evidence-claim-select"
+                                        ] = claim_ids[0]
+                                        _rerun()
+                                    else:
+                                        st.session_state[
+                                            "center_view"
+                                        ] = "Chasing claims"
+                                        _set_query_params(
+                                            doc=doc_id,
+                                            cite=cite_idx,
+                                            target=tgt,
+                                        )
+                                        _rerun()
 
         elif center_view == "Chasing claims":
             st.markdown("#### Chasing claims")

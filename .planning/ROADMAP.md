@@ -145,7 +145,16 @@ Plans:
   5. After claims are saved, the system begins evidence runs automatically for the relevant sources so results are ready by the time the user opens the evidence view.
   6. Chasing claims view offers a “View PDF” affordance that copies a short excerpt snippet for Cmd-F (and opens the PDF).
   7. Layout is space-efficient: the big header is removed; settings are moved behind a gear/drawer; dense mode reduces vertical padding while keeping controls discoverable.
-**Plans**: TBD
+**Plans**: 8 plans
+Plans:
+- [ ] 08-01-PLAN.md — Add robust TEI sentence fallback segmentation (SEG-01)
+- [ ] 08-02-PLAN.md — Add global background pause/resume state and wiring
+- [ ] 08-03-PLAN.md — Add backend Source Bin attachment endpoints (unassigned + archive + placement)
+- [ ] 08-04-PLAN.md — Rework Streamlit into dense 3-pane workspace shell (UX-02)
+- [ ] 08-05-PLAN.md — Make citations inline-clickable and remove end-of-block citation rows (UX-01)
+- [ ] 08-06-PLAN.md — Implement Source Bin UI + auto background processing + View PDF snippet UX (ATT-01/02, PDF-01)
+- [ ] 08-07-PLAN.md — Add execution profiles (Fast/Best) including ColBERT path (ML-01)
+- [ ] 08-08-PLAN.md — Add optional Hugging Face Inference API mode for HF steps (ML-02)
 
 ### Phase 8.1: Recursive Retrieval + Node Graph (INSERTED)
 **Goal**: Users can recursively chase a citation tree across multiple documents, with the node graph serving as a real navigation surface (not a dead-end tab).

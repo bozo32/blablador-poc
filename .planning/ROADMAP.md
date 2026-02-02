@@ -14,11 +14,11 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Ingestion + Extraction** - PDFs ingested, parsed, and references normalized.
 - [x] **Phase 2: Citation Context Navigation** - Citation callouts and trees are navigable.
-- [ ] **Phase 3: Claim Selection + Editing** - Claims are extracted and editable for review.
-- [ ] **Phase 4: Evidence Attachment** - Cited PDFs are attached and parsed for evidence search.
-- [ ] **Phase 5: Evidence Matching + Ranking** - Evidence candidates are matched and ranked.
-- [ ] **Phase 6: Evidence Review + Selection** - Evidence is highlighted and selectable.
-- [ ] **Phase 7: Validation + Export** - Judgments are recorded and exportable.
+- [x] **Phase 3: Claim Selection + Editing** - Claims are extracted and editable for review.
+- [x] **Phase 4: Evidence Attachment** - Cited PDFs are attached and parsed for evidence search.
+- [x] **Phase 5: Evidence Matching + Ranking** - Evidence candidates are matched and ranked.
+- [x] **Phase 6: Evidence Review + Selection** - Evidence is highlighted and selectable.
+- [x] **Phase 7: Validation + Export** - Judgments are recorded and exportable.
 - [ ] **Phase 8: Workspace Organization** - Folder browsing and retrieval utilities round out the workflow.
 
 ## Phase Details
@@ -108,12 +108,13 @@ Plans:
 **Depends on**: Phase 5
 **Requirements**: EVD-07, EVD-08
 **Success Criteria** (what must be TRUE):
-  1. User sees evidence spans highlighted in the cited PDF.
-  2. User can select an entailing span or choose "none of the above".
+  1. User can view paragraph-bounded excerpt previews for candidate evidence spans (with the nominated span highlighted).
+  2. User can label candidates (supports/neutral/contradicts) and save an overall per-source assessment (supports/contradicts/inconsistent/silent).
+  3. Saved assessment persists for the claim and is visible after reruns/reloads.
 **Plans**: 2 plans
 Plans:
 - [x] 06-01-PLAN.md — Backend excerpt/jump APIs + selection persistence
-- [ ] 06-02-PLAN.md — Streamlit evidence review UI (source highlights + selection)
+- [x] 06-02-PLAN.md — Streamlit evidence review UI (excerpt previews + assessment)
 
 ### Phase 7: Validation + Export
 **Goal**: Users can record verdicts, annotate them, and export results.
@@ -124,7 +125,11 @@ Plans:
   2. User can add notes to a judgment.
   3. Citation callouts show validated vs unvalidated status.
   4. User can export judgments and metadata as CSV or JSON.
-**Plans**: TBD
+**Plans**: 3 plans
+Plans:
+- [x] 07-01-PLAN.md — Backend judgment persistence + export endpoints
+- [x] 07-02-PLAN.md — Frontend judgment store + API helpers
+- [x] 07-03-PLAN.md — Streamlit judgment UI, callout indicators, and export downloads
 
 ### Phase 8: Workspace Organization
 **Goal**: Users can navigate their PDF workspace and copy retrieval details.
@@ -147,6 +152,6 @@ Phases execute in numeric order: 2 → 2.1 → 2.2 → 3 → 3.1 → 4
 | 3. Claim Selection + Editing | 3/3 | Complete | 2026-01-25 |
 | 4. Evidence Attachment | 6/6 | Complete | 2026-01-27 |
 | 5. Evidence Matching + Ranking | 6/6 | Complete | 2026-01-28 |
-| 6. Evidence Review + Selection | 1/2 | In progress | - |
-| 7. Validation + Export | 0/TBD | Not started | - |
+| 6. Evidence Review + Selection | 2/2 | Complete | 2026-02-01 |
+| 7. Validation + Export | 3/3 | Complete | 2026-02-02 |
 | 8. Workspace Organization | 0/TBD | Not started | - |

@@ -36,10 +36,10 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Validation + Judgment
 
-- [ ] **VAL-01**: User can record a verdict for a claim vs cited source (support/contradict/uncertain)
-- [ ] **VAL-02**: User can add annotations/notes to a judgment
-- [ ] **VAL-03**: Citation shows validation status (validated vs unvalidated)
-- [ ] **VAL-04**: User can export judgments and metadata (CSV/JSON)
+- [x] **VAL-01**: User can record a verdict for a claim vs cited source (support/contradict/uncertain)
+- [x] **VAL-02**: User can add annotations/notes to a judgment
+- [x] **VAL-03**: Citation shows validation status (validated vs unvalidated)
+- [x] **VAL-04**: User can export judgments and metadata (CSV/JSON)
 
 ### Workspace + Organization
 
@@ -99,10 +99,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | EVD-06 | Phase 5 | Pending |
 | EVD-07 | Phase 6 | Pending |
 | EVD-08 | Phase 6 | Pending |
-| VAL-01 | Phase 7 | Pending |
-| VAL-02 | Phase 7 | Pending |
-| VAL-03 | Phase 7 | Pending |
-| VAL-04 | Phase 7 | Pending |
+| VAL-01 | Phase 7 | Complete |
+| VAL-02 | Phase 7 | Complete |
+| VAL-03 | Phase 7 | Complete |
+| VAL-04 | Phase 7 | Complete |
 | WS-01 | Phase 8 | Pending |
 | WS-02 | Phase 8 | Pending |
 
@@ -113,4 +113,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 ---
 *Requirements defined: 2026-01-23*
-*Last updated: 2026-01-27 after Phase 4 gap closure*
+*Last updated: 2026-02-02 after Phase 7 completion*

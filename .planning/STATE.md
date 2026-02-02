@@ -9,17 +9,17 @@ See: .planning/PROJECT.md (updated 2026-01-23)
 
 ## Current Position
 
-Phase: 7 of 8 (Validation + Export)
-Plan: 3 of 3 in current phase
-Status: Phase 7 verified
-Last activity: 2026-02-02 — Phase 7 verification passed
+Phase: 8 of 8 (Workspace + Fast-Path Review UX)
+Plan: 2 of 8 in current phase
+Status: In progress
+Last activity: 2026-02-02 — Completed 08-01-PLAN.md
 
-Progress: ███████████░ 90%
+Progress: █████████░░░ 74%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 27
+- Total plans completed: 29
 - Average duration: 14 min
 - Total execution time: 3.6 hours
 
@@ -43,6 +43,10 @@ Progress: ███████████░ 90%
 
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
+
+  - TEI body falls back to deterministic sentence segmentation when TEI/GROBID <s> boundaries are suspicious, generating stable sentence_id values (08-01).
+
+  - Global background pause state is persisted under data/ and exposed via /background/* endpoints to gate new background work (08-02).
 
  - Evidence pipeline caches attachment sentences centrally so deterministic windows reuse a single source of truth (05-01).
  - BM25 seeding now carries provenance/badge metadata with spaCy tokenization and regex fallback for deterministic output (05-01).
@@ -85,6 +89,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-02-02T18:52:45Z
-Stopped at: Phase 7 verification passed
+Last session: 2026-02-02T22:24:58Z
+Stopped at: Completed 08-01-PLAN.md
 Resume file: None

@@ -27,13 +27,20 @@ PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from frontend import attachment_queue, claim_queue, clipboard, evidence_store
+from frontend import (
+    attachment_queue,
+    claim_queue,
+    clipboard,
+    evidence_store,
+    judgment_store,
+)
+from frontend.components import chase_queue as chase_queue_component
+from frontend.components import chasing_panel
+from frontend.state_keys import canonical_segments_key
 from frontend.components.evidence_card import CardActionCallbacks, EvidenceCardRenderer
 from frontend.components.rationale_sidebar import (
-    SidebarConfig,
     build_filter_chip_config,
     build_progress_summary,
-    render_rationale_sidebar,
 )
 from frontend.evidence_api import MAX_LIST_REQUESTS, show_api_error
 
@@ -88,6 +95,8 @@ def init_session_state():
         "active_document": None,
         "citation_selected_index": None,
         "citation_selected_target": None,
+        "citation_selected_sentence_id": None,
+        "selected_callout_tuple": None,
         "citation_context_key": None,
         "citation_context": None,
         "citation_context_error": None,
@@ -194,6 +203,19 @@ def reset_segmentation():
     st.session_state.pop("seg_cache", None)
     # force a fresh FAISS build next time
     st.session_state.pop("faiss_started", None)
+
+
+def _rerun() -> None:
+    """Streamlit rerun helper across versions."""
+    rerun = getattr(st, "rerun", None)
+    if callable(rerun):
+        rerun()
+        return
+    experimental = getattr(st, "experimental_rerun", None)
+    if callable(experimental):
+        experimental()
+        return
+    raise RuntimeError("Streamlit rerun is unavailable in this version")
 
 
 # Constants for segmentation helper
@@ -790,6 +812,10 @@ EVIDENCE_REVIEW_CSS_PATH = (
 )
 
 
+# === Judgment (Phase 07) Styles ===
+JUDGMENT_CSS_PATH = pathlib.Path(__file__).resolve().parent / "assets" / "judgment.css"
+
+
 def inject_evidence_review_styles() -> None:
     key = "_evidence_review_styles_loaded"
     if st.session_state.get(key):
@@ -797,6 +823,18 @@ def inject_evidence_review_styles() -> None:
     if EVIDENCE_REVIEW_CSS_PATH.exists():
         st.markdown(
             f"<style>{EVIDENCE_REVIEW_CSS_PATH.read_text()}</style>",
+            unsafe_allow_html=True,
+        )
+    st.session_state[key] = True
+
+
+def inject_judgment_styles() -> None:
+    key = "_judgment_styles_loaded"
+    if st.session_state.get(key):
+        return
+    if JUDGMENT_CSS_PATH.exists():
+        st.markdown(
+            f"<style>{JUDGMENT_CSS_PATH.read_text()}</style>",
             unsafe_allow_html=True,
         )
     st.session_state[key] = True
@@ -1150,7 +1188,7 @@ def render_queue_item(item: dict) -> None:
                 via="auto-suggestion",
                 score=suggestion.get("score"),
             )
-            st.experimental_rerun()
+            _rerun()
     if needs_assignment:
         options = claim_queue.get_claim_options()
         if options:
@@ -1166,7 +1204,7 @@ def render_queue_item(item: dict) -> None:
                 attachment_queue.attach_to_claim(
                     selected_option["id"], item["id"], via="manual"
                 )
-                st.experimental_rerun()
+                _rerun()
         else:
             st.info(
                 "No claims available yet. Generate claims before assigning attachments."
@@ -1174,7 +1212,7 @@ def render_queue_item(item: dict) -> None:
     if status == "error":
         if st.button("Retry parse", key=f"queue-retry-{item['id']}"):
             attachment_queue.retry_attachment(item["id"])
-            st.experimental_rerun()
+            _rerun()
     history = item.get("history") or []
     if history:
         with st.expander("Timeline", expanded=False):
@@ -1192,6 +1230,7 @@ def render_queue_item(item: dict) -> None:
 
 def render_evidence_panel() -> None:
     inject_evidence_review_styles()
+    inject_judgment_styles()
     st.subheader("Ranked evidence preview")
     claims = claim_queue.get_claim_records()
     if not claims:
@@ -1227,6 +1266,10 @@ def render_evidence_panel() -> None:
     active_claim_text_payload = active_claim_text or None
     rerun_state = state.get("rerun", {})
     summary = build_progress_summary(state.get("candidates") or [])
+
+    j_store = judgment_store.JudgmentStore()
+    j_claim_state = j_store.sync_judgment(selected_claim)
+    j_payload = j_claim_state.get("judgment") or {}
     layout_main, layout_sidebar = st.columns([2, 1], gap="large")
 
     def _claim_text_missing_error() -> Optional[str]:
@@ -1264,7 +1307,7 @@ def render_evidence_panel() -> None:
             share=_build_action_callback("share"),
             open_pdf=_build_action_callback("open"),
         )
-        renderer = EvidenceCardRenderer(ui=layout_main, callbacks=callbacks)
+        _ = EvidenceCardRenderer(ui=layout_main, callbacks=callbacks)
 
         def _render_claim_header() -> None:
             claim_text = (claim_record.get("claim") or "Untitled claim").strip()
@@ -1290,6 +1333,197 @@ def render_evidence_panel() -> None:
                 """,
                 unsafe_allow_html=True,
             )
+
+        def _render_judgment_controls() -> None:
+            judgment = j_payload if isinstance(j_payload, dict) else {}
+            status_default = (judgment.get("status") or "draft").strip().lower()
+            if status_default not in {"draft", "final"}:
+                status_default = "draft"
+            verdict_default = judgment.get("verdict")
+            if verdict_default not in {"support", "contradict", "uncertain"}:
+                verdict_default = None
+            notes_default = (
+                judgment.get("notes") if isinstance(judgment.get("notes"), dict) else {}
+            )
+
+            status_key = f"judgment-status::{selected_claim}"
+            verdict_key = f"judgment-verdict::{selected_claim}"
+            notes_open_key = f"judgment-notes-open::{selected_claim}"
+            rationale_key = f"judgment-notes-rationale::{selected_claim}"
+            caveats_key = f"judgment-notes-caveats::{selected_claim}"
+            followups_key = f"judgment-notes-followups::{selected_claim}"
+
+            st.session_state.setdefault(status_key, status_default)
+            st.session_state.setdefault(verdict_key, verdict_default)
+            st.session_state.setdefault(notes_open_key, False)
+            st.session_state.setdefault(
+                rationale_key, (notes_default or {}).get("rationale") or ""
+            )
+            st.session_state.setdefault(
+                caveats_key, (notes_default or {}).get("caveats") or ""
+            )
+            st.session_state.setdefault(
+                followups_key, (notes_default or {}).get("followups") or ""
+            )
+
+            st.markdown('<div class="judgment-card">', unsafe_allow_html=True)
+
+            if j_claim_state.get("error"):
+                st.error(f"Judgment load failed: {j_claim_state['error']}")
+
+            row = st.columns([2, 4, 2], gap="small")
+            with row[0]:
+                status = st.selectbox(
+                    "Status",
+                    ["draft", "final"],
+                    index=0 if st.session_state.get(status_key) != "final" else 1,
+                    format_func=lambda v: "Draft" if v == "draft" else "Final",
+                    key=status_key,
+                )
+            with row[1]:
+                verdict = st.radio(
+                    "Verdict",
+                    [None, "support", "contradict", "uncertain"],
+                    horizontal=True,
+                    format_func=lambda v: {
+                        None: "No verdict",
+                        "support": "Support",
+                        "contradict": "Contradict",
+                        "uncertain": "Uncertain",
+                    }.get(v, "No verdict"),
+                    key=verdict_key,
+                )
+            with row[2]:
+                must_have_verdict = status == "final"
+                disabled = bool(must_have_verdict and verdict is None)
+                if st.button(
+                    "Save judgment",
+                    key=f"judgment-save::{selected_claim}",
+                    type="primary",
+                    use_container_width=True,
+                    disabled=disabled,
+                ):
+                    notes = {
+                        "rationale": (st.session_state.get(rationale_key) or "").strip()
+                        or None,
+                        "caveats": (st.session_state.get(caveats_key) or "").strip()
+                        or None,
+                        "followups": (st.session_state.get(followups_key) or "").strip()
+                        or None,
+                    }
+                    notes_payload = (
+                        None
+                        if not any(notes.values())
+                        else {k: v for k, v in notes.items()}
+                    )
+
+                    record = claim_queue.get_claim_record(selected_claim) or {}
+                    claim_text_snapshot = (
+                        record.get("claim") or ""
+                    ).strip() or active_claim_text
+                    doi_snapshot = record.get("doi") or (
+                        record.get("reference_hint") or {}
+                    ).get("doi")
+                    callout_snapshot = record.get("callout") or (
+                        record.get("reference_hint") or {}
+                    ).get("callout")
+
+                    selected_tuple = (
+                        st.session_state.get("selected_callout_tuple") or {}
+                    )
+                    tuple_doc_id = selected_tuple.get("doc_id")
+                    tuple_cite = selected_tuple.get("citation_index")
+                    tuple_target = normalize_target_id(selected_tuple.get("target_id"))
+                    tuple_sentence = selected_tuple.get("sentence_id")
+                    record_doc_id = record.get("doc_id")
+
+                    provenance = {
+                        "doc_id": record_doc_id or tuple_doc_id,
+                        "callout": callout_snapshot,
+                        "reference_id": record.get("reference_id"),
+                        "doi": doi_snapshot,
+                        "author": record.get("author"),
+                        "year": record.get("year"),
+                        "claim_text": claim_text_snapshot,
+                        "citation_index": None,
+                        "target_id": None,
+                        "sentence_id": None,
+                    }
+                    if (
+                        record_doc_id
+                        and tuple_doc_id
+                        and str(record_doc_id) == str(tuple_doc_id)
+                    ):
+                        provenance["citation_index"] = tuple_cite
+                        provenance["target_id"] = tuple_target
+                        provenance["sentence_id"] = tuple_sentence
+
+                    stored = j_store.save_judgment(
+                        selected_claim,
+                        status=str(status),
+                        verdict=None if verdict is None else str(verdict),
+                        notes=notes_payload,
+                        provenance=provenance,
+                    )
+                    if stored is not None:
+                        st.session_state[notes_open_key] = False
+                        _rerun()
+
+                if disabled:
+                    st.caption("Final judgments require a verdict.")
+
+            notes_open = bool(st.session_state.get(notes_open_key))
+            toggle_label = "Hide notes" if notes_open else "Edit notes"
+            if st.button(
+                toggle_label,
+                key=f"judgment-notes-toggle::{selected_claim}",
+                type="secondary",
+            ):
+                st.session_state[notes_open_key] = not notes_open
+                _rerun()
+
+            note_preview_bits = [
+                (st.session_state.get(rationale_key) or "").strip(),
+                (st.session_state.get(caveats_key) or "").strip(),
+                (st.session_state.get(followups_key) or "").strip(),
+            ]
+            preview = next((val for val in note_preview_bits if val), "")
+            if (not notes_open) and preview:
+                snippet = (
+                    preview if len(preview) <= 110 else preview[:109].rstrip() + "..."
+                )
+                preview_html = (
+                    "<div class='judgment-preview'>Notes: "
+                    f"{html.escape(snippet)}"
+                    "</div>"
+                )
+                st.markdown(preview_html, unsafe_allow_html=True)
+
+            with st.expander("Notes (optional)", expanded=notes_open):
+                st.text_area(
+                    "Rationale",
+                    key=rationale_key,
+                    height=80,
+                    placeholder=(
+                        "Why does this claim look " "supported/contradicted/uncertain?"
+                    ),
+                )
+                st.text_area(
+                    "Caveats",
+                    key=caveats_key,
+                    height=80,
+                    placeholder=(
+                        "Anything unclear, conditional, " "or potentially wrong?"
+                    ),
+                )
+                st.text_area(
+                    "Follow-ups",
+                    key=followups_key,
+                    height=80,
+                    placeholder="What should be checked next?",
+                )
+
+            st.markdown("</div>", unsafe_allow_html=True)
 
         def _render_status_messages() -> None:
             if state.get("stale"):
@@ -1319,7 +1553,7 @@ def render_evidence_panel() -> None:
                         claim_text=active_claim_text_payload,
                         force=True,
                     )
-                    st.experimental_rerun()
+                    _rerun()
             status = rerun_state.get("status")
             if status in {"queued", "running"}:
                 st.info("Evidence rerun in progress…", icon="🔁")
@@ -1345,7 +1579,7 @@ def render_evidence_panel() -> None:
                         claim_text=active_claim_text_payload,
                         **chip["payload"],
                     )
-                    st.experimental_rerun()
+                    _rerun()
 
         def _render_rerun_controls() -> None:
             meta = (state.get("last_payload") or {}).get("meta") or {}
@@ -1364,7 +1598,7 @@ def render_evidence_panel() -> None:
                         claim_text=active_claim_text_payload,
                         note="manual rerun",
                     )
-                    st.experimental_rerun()
+                    _rerun()
             with btn_cols[1]:
                 load_disabled = (
                     state.get("is_loading")
@@ -1385,7 +1619,7 @@ def render_evidence_panel() -> None:
                         selected_claim,
                         claim_text=active_claim_text_payload,
                     )
-                    st.experimental_rerun()
+                    _rerun()
             with btn_cols[2]:
                 if st.button(
                     "Refresh list",
@@ -1397,7 +1631,7 @@ def render_evidence_panel() -> None:
                         claim_text=active_claim_text_payload,
                         force=True,
                     )
-                    st.experimental_rerun()
+                    _rerun()
             with st.expander("Advanced rerun controls", expanded=False):
                 note = st.text_input(
                     "Optional note",
@@ -1427,7 +1661,7 @@ def render_evidence_panel() -> None:
                             note=note or None,
                             advanced_settings=payload,
                         )
-                        st.experimental_rerun()
+                        _rerun()
 
         def _render_progress_glance() -> None:
             st.markdown(
@@ -1469,53 +1703,367 @@ def render_evidence_panel() -> None:
                     "Evidence will appear once attachments finish matching this claim."
                 )
                 return
-            filter_state = state.get("filters", {})
+
+            def _bucket(label: str | None) -> str:
+                value = (label or "").strip().lower()
+                if value in {"entail", "entails", "entailment"}:
+                    return "entail"
+                if value in {
+                    "contradict",
+                    "contradicts",
+                    "contradiction",
+                    "refute",
+                    "refutes",
+                }:
+                    return "contradict"
+                return "neutral"
+
+            def _confidence(candidate: Dict[str, Any]) -> Optional[float]:
+                raw = candidate.get("confidence")
+                scores = candidate.get("scores") or {}
+                if raw is None:
+                    raw = scores.get("nli")
+                if raw is None:
+                    raw = scores.get("combined")
+                try:
+                    return float(raw) if raw is not None else None
+                except (TypeError, ValueError):
+                    return None
+
+            display = state.setdefault("display", {})
+            display.setdefault("top_entail", 3)
+            display.setdefault("top_contradict", 3)
+            display.setdefault("min_contradict", 0.6)
+            display.setdefault("show_neutral", False)
+            display.setdefault("troll_enabled", True)
+            display.setdefault("troll_probability", 0.25)
+            display.setdefault("troll_band", 0.1)
+
+            with st.expander("Display options", expanded=False):
+                st.caption(
+                    "Icons: ✓ supports, – neutral/unclear, ✗ contradicts. "
+                    "Use Open PDF to jump to the cited span."
+                )
+                cols = st.columns([1, 1, 1])
+                with cols[0]:
+                    display["top_entail"] = int(
+                        st.number_input(
+                            "Top entail",
+                            min_value=0,
+                            max_value=25,
+                            value=int(display.get("top_entail") or 3),
+                            step=1,
+                            key=f"display-top-entail-{selected_claim}",
+                        )
+                    )
+                    display["show_neutral"] = bool(
+                        st.checkbox(
+                            "Show neutrals",
+                            value=bool(display.get("show_neutral", False)),
+                            key=f"display-show-neutral-{selected_claim}",
+                        )
+                    )
+                with cols[1]:
+                    display["top_contradict"] = int(
+                        st.number_input(
+                            "Top contradict",
+                            min_value=0,
+                            max_value=25,
+                            value=int(display.get("top_contradict") or 3),
+                            step=1,
+                            key=f"display-top-contradict-{selected_claim}",
+                        )
+                    )
+                    display["min_contradict"] = float(
+                        st.number_input(
+                            "Min contradict confidence",
+                            min_value=0.0,
+                            max_value=1.0,
+                            value=float(display.get("min_contradict") or 0.6),
+                            step=0.05,
+                            key=f"display-min-contradict-{selected_claim}",
+                        )
+                    )
+                with cols[2]:
+                    display["troll_enabled"] = bool(
+                        st.checkbox(
+                            "Enable calibration item",
+                            value=bool(display.get("troll_enabled", True)),
+                            key=f"display-troll-enabled-{selected_claim}",
+                        )
+                    )
+                    display["troll_probability"] = float(
+                        st.number_input(
+                            "Calibration probability",
+                            min_value=0.0,
+                            max_value=1.0,
+                            value=float(display.get("troll_probability") or 0.25),
+                            step=0.05,
+                            key=f"display-troll-prob-{selected_claim}",
+                        )
+                    )
+                    display["troll_band"] = float(
+                        st.number_input(
+                            "Calibration band (+/-)",
+                            min_value=0.0,
+                            max_value=0.5,
+                            value=float(display.get("troll_band") or 0.1),
+                            step=0.01,
+                            key=f"display-troll-band-{selected_claim}",
+                        )
+                    )
+
             pinned_ids = state.get("pinned_ids") or []
             pinned_set = set(pinned_ids)
-            pinned_only = filter_state.get("pinned_only", False)
-            include_neutral = filter_state.get("include_neutral", True)
-            if pinned_only:
-                pinned_candidates = candidates
-                primary_candidates: list[dict] = []
-                neutral_candidates: list[dict] = []
-            else:
-                pinned_candidates = [c for c in candidates if c.get("id") in pinned_set]
-                remaining = [c for c in candidates if c.get("id") not in pinned_set]
-                neutral_candidates = [
-                    c
-                    for c in remaining
-                    if (c.get("label") or "").lower() not in {"entail", "contradict"}
-                ]
-                primary_candidates = [
-                    c for c in remaining if c not in neutral_candidates
-                ]
+            pinned_candidates = [c for c in candidates if c.get("id") in pinned_set]
+            remaining = [c for c in candidates if c.get("id") not in pinned_set]
+
+            entail_candidates = [
+                c for c in remaining if _bucket(c.get("label")) == "entail"
+            ]
+            contradict_candidates = [
+                c
+                for c in remaining
+                if _bucket(c.get("label")) == "contradict"
+                and (
+                    _confidence(c) is not None
+                    and _confidence(c) >= float(display.get("min_contradict") or 0.6)
+                )
+            ]
+            neutral_candidates = [
+                c for c in remaining if _bucket(c.get("label")) == "neutral"
+            ]
+
+            top_entail = entail_candidates[: int(display.get("top_entail") or 3)]
+            top_contradict = contradict_candidates[
+                : int(display.get("top_contradict") or 3)
+            ]
+
+            # Session-only review labels used for calibration + disagreement capture.
+            review_labels = state.setdefault("review_labels", {})
+
+            def _render_candidate_row(candidate: Dict[str, Any], *, label: str) -> None:
+                candidate_id = candidate.get("id") or ""
+                left, right = st.columns([1, 9], gap="small")
+                with left:
+                    prior = review_labels.get(candidate_id)
+
+                    def _toggle(label_value: str) -> None:
+                        if not candidate_id:
+                            return
+                        if review_labels.get(candidate_id) == label_value:
+                            review_labels.pop(candidate_id, None)
+                            return
+                        review_labels[candidate_id] = label_value
+
+                    icon_cols = st.columns(3, gap="small")
+                    with icon_cols[0]:
+                        if st.button(
+                            "✓",
+                            key=f"review-entail-{selected_claim}-{candidate_id}",
+                            type="primary" if prior == "entail" else "secondary",
+                            help="Mark as supports",
+                            use_container_width=True,
+                        ):
+                            _toggle("entail")
+                            _rerun()
+                    with icon_cols[1]:
+                        if st.button(
+                            "–",
+                            key=f"review-neutral-{selected_claim}-{candidate_id}",
+                            type="primary" if prior == "neutral" else "secondary",
+                            help="Mark as neutral/unclear",
+                            use_container_width=True,
+                        ):
+                            _toggle("neutral")
+                            _rerun()
+                    with icon_cols[2]:
+                        if st.button(
+                            "✗",
+                            key=f"review-contrad-{selected_claim}-{candidate_id}",
+                            type="primary" if prior == "contradict" else "secondary",
+                            help="Mark as contradicts",
+                            use_container_width=True,
+                        ):
+                            _toggle("contradict")
+                            _rerun()
+
+                    if candidate_id and st.button(
+                        "Open PDF",
+                        key=f"open-pdf-{selected_claim}-{candidate_id}",
+                        use_container_width=True,
+                    ):
+                        store.open_candidate_pdf(selected_claim, candidate_id)
+                        _rerun()
+
+                with right:
+                    conf = _confidence(candidate)
+                    conf_text = f"{conf:.2f}" if conf is not None else "—"
+                    st.caption(f"[{label}] confidence {conf_text}")
+                    st.write((candidate.get("text") or "").strip() or "(empty)")
+
+            # Optional calibration ("troll") item:
+            # high-score but low-confidence boundary.
+            troll_candidate: Optional[Dict[str, Any]] = None
+            if display.get("troll_enabled"):
+                run_id = ((state.get("run") or {}).get("run_id") or "").strip()
+                troll_state = state.setdefault("troll_state", {})
+                current = troll_state.get("run_id")
+                if current != run_id:
+                    troll_state.clear()
+                    troll_state["run_id"] = run_id
+                    troll_state["candidate_id"] = None
+                    troll_state["enabled"] = False
+                    troll_state["seed"] = None
+                    try:
+                        import hashlib
+                        import random
+
+                        seed = int(
+                            hashlib.sha256(
+                                f"{selected_claim}|{run_id}|troll".encode("utf-8")
+                            ).hexdigest()[:8],
+                            16,
+                        )
+                        troll_state["seed"] = seed
+                        rng = random.Random(seed)
+                        troll_state["enabled"] = rng.random() < float(
+                            display.get("troll_probability") or 0.25
+                        )
+                    except Exception:
+                        troll_state["enabled"] = False
+                if troll_state.get("enabled") and not troll_state.get("candidate_id"):
+                    band = float(display.get("troll_band") or 0.1)
+                    already = {
+                        c.get("id")
+                        for c in (pinned_candidates + top_entail + top_contradict)
+                    }
+                    eligible = []
+                    for cand in candidates:
+                        cid = cand.get("id")
+                        if not cid or cid in already:
+                            continue
+                        score = _confidence(cand)
+                        if score is None:
+                            continue
+                        if abs(score - 0.5) <= band:
+                            eligible.append(cand)
+                    if eligible:
+                        try:
+                            import random
+
+                            rng = random.Random(troll_state.get("seed") or 0)
+                            pick = rng.choice(eligible)
+                            troll_state["candidate_id"] = pick.get("id")
+                        except Exception:
+                            troll_state["candidate_id"] = eligible[0].get("id")
+                if troll_state.get("candidate_id"):
+                    cid = troll_state.get("candidate_id")
+                    troll_candidate = next(
+                        (c for c in candidates if c.get("id") == cid), None
+                    )
+
             if pinned_candidates:
                 st.markdown("#### Pinned")
-                renderer.render_cards(
-                    selected_claim,
-                    pinned_candidates,
-                    pinned_ids=pinned_ids,
-                    lock_state=state.get("lock_state"),
+                for cand in pinned_candidates:
+                    _render_candidate_row(cand, label=_bucket(cand.get("label")))
+
+            if not pinned_candidates and not top_entail and not top_contradict:
+                st.markdown("#### Top scored")
+                st.caption(
+                    "Model labels not available (or filtered out). "
+                    "Showing highest-scoring candidates."
                 )
-            if primary_candidates:
-                st.markdown("#### Ranked evidence")
-                renderer.render_cards(
-                    selected_claim,
-                    primary_candidates,
-                    pinned_ids=pinned_ids,
-                    lock_state=state.get("lock_state"),
+                fallback = list(remaining)[:6]
+                for cand in fallback:
+                    _render_candidate_row(cand, label=_bucket(cand.get("label")))
+
+            if top_entail:
+                st.markdown("#### Top entail")
+                for cand in top_entail:
+                    _render_candidate_row(cand, label="entail")
+
+            if top_contradict:
+                st.markdown("#### Top contradict")
+                for cand in top_contradict:
+                    _render_candidate_row(cand, label="contradict")
+
+            if troll_candidate:
+                st.markdown("#### Calibration candidate")
+                st.caption("Hard-to-classify item for disagreement/correction data.")
+                _render_candidate_row(
+                    troll_candidate, label=_bucket(troll_candidate.get("label"))
                 )
-            if neutral_candidates and include_neutral:
+
+            if display.get("show_neutral") and neutral_candidates:
                 with st.expander(
                     f"Neutral candidates ({len(neutral_candidates)})",
                     expanded=False,
                 ):
-                    renderer.render_cards(
-                        selected_claim,
-                        neutral_candidates,
-                        pinned_ids=pinned_ids,
-                        lock_state=state.get("lock_state"),
-                    )
+                    for cand in neutral_candidates:
+                        _render_candidate_row(cand, label="neutral")
+
+            st.divider()
+            st.markdown("#### Overall source assessment")
+
+            entail_votes = sum(1 for v in review_labels.values() if v == "entail")
+            contradict_votes = sum(
+                1 for v in review_labels.values() if v == "contradict"
+            )
+            if entail_votes == 0 and contradict_votes == 0:
+                computed = "silent"
+            elif entail_votes > 0 and contradict_votes == 0:
+                computed = "supports"
+            elif contradict_votes > 0 and entail_votes == 0:
+                computed = "contradicts"
+            else:
+                computed = "inconsistent"
+
+            overall_state = state.setdefault("overall", {})
+            overall_options = ["supports", "contradicts", "inconsistent", "silent"]
+            current_overall = overall_state.get("verdict") or computed
+            if current_overall not in overall_options:
+                current_overall = computed
+            overall_verdict = st.radio(
+                "Overall",
+                overall_options,
+                index=overall_options.index(current_overall),
+                horizontal=True,
+                key=f"overall-verdict-{selected_claim}",
+            )
+            overall_state["verdict"] = overall_verdict
+            st.caption(
+                (
+                    f"Default: {computed}. Votes: {entail_votes} support, "
+                    f"{contradict_votes} contradict."
+                )
+            )
+
+            note = st.text_area(
+                "Optional note",
+                value=str(overall_state.get("note") or ""),
+                height=80,
+                key=f"overall-note-{selected_claim}",
+            )
+            overall_state["note"] = note
+
+            verdict_map = {
+                "supports": "support",
+                "contradicts": "contradict",
+                "inconsistent": "uncertain",
+                "silent": "none",
+            }
+            if st.button(
+                "Save assessment",
+                key=f"overall-save-{selected_claim}",
+                type="primary",
+            ):
+                store.save_selection(
+                    selected_claim,
+                    verdict=verdict_map.get(overall_verdict, "none"),
+                    note=str(note or "").strip() or None,
+                )
+                _rerun()
 
         def _render_source_review() -> None:
             candidates = state.get("candidates") or []
@@ -1714,7 +2262,7 @@ def render_evidence_panel() -> None:
                 key=f"clear-share-{selected_claim}",
             ):
                 state["share_target"] = None
-                st.experimental_rerun()
+                _rerun()
 
         def _render_pdf_notice() -> None:
             pdf_jump = state.get("pdf_jump")
@@ -1732,9 +2280,10 @@ def render_evidence_panel() -> None:
                 key=f"clear-pdf-{selected_claim}",
             ):
                 state["pdf_jump"] = None
-                st.experimental_rerun()
+                _rerun()
 
         _render_claim_header()
+        _render_judgment_controls()
         _render_status_messages()
         _render_filter_chips()
         _render_rerun_controls()
@@ -1752,177 +2301,23 @@ def render_evidence_panel() -> None:
         _render_share_panel()
         _render_pdf_notice()
 
-    focus_order = state.get("focus_order") or []
     with layout_sidebar:
-        attachment = attachment_queue.get_claim_attachment(selected_claim) or {}
-        attachment_status = (attachment.get("status") or "").strip().lower()
-        has_candidates = bool(state.get("candidates"))
-        selection_disabled = attachment_status not in {"matched"} or not has_candidates
-
-        selection = store.sync_selection(selected_claim)
-        current_verdict = (selection or {}).get("verdict") or "none"
-        current_primary = ((selection or {}).get("primary") or {}).get("candidate_id")
-        current_secondaries = (selection or {}).get("secondary") or []
-        current_note = (selection or {}).get("note") or ""
-
-        st.markdown('<div class="evidence-review__controls">', unsafe_allow_html=True)
-        st.subheader("Evidence selection")
-
-        if attachment_status and attachment_status != "matched":
-            st.info(
-                "Selection is disabled until attachments are matched "
-                f"(status: {attachment_status})."
-            )
-        if not has_candidates:
-            st.info("No candidates available yet. Rerun evidence or check attachments.")
-        if state.get("selection_error"):
-            st.error(f"Selection fetch/save failed: {state['selection_error']}")
-
-        primary_text = current_primary or "(none)"
-        st.markdown(
-            """
-            <div class="evidence-review__selection-summary">
-              <p><strong>Current verdict:</strong> {verdict}</p>
-              <p><strong>Primary:</strong> {primary}</p>
-              <p><strong>Secondary:</strong> {secondary}</p>
-            </div>
-            """.format(
-                verdict=html.escape(str(current_verdict)),
-                primary=html.escape(str(primary_text)),
-                secondary=html.escape(str(len(current_secondaries))),
-            ),
-            unsafe_allow_html=True,
-        )
-
-        verdict = st.radio(
-            "Verdict",
-            ["support", "contradict", "uncertain", "none"],
-            index=["support", "contradict", "uncertain", "none"].index(
-                current_verdict
-                if current_verdict in {"support", "contradict", "uncertain", "none"}
-                else "none"
-            ),
-            horizontal=True,
-            disabled=selection_disabled,
-            key=f"evidence-verdict-{selected_claim}",
-        )
-
-        candidates = state.get("candidates") or []
-        candidate_lookup = {
-            cand.get("id"): cand for cand in candidates if cand.get("id")
-        }
-        top_hit_ids = [cand.get("id") for cand in candidates[:5] if cand.get("id")]
-
-        def _format_candidate_choice(candidate_id: str) -> str:
-            candidate = candidate_lookup.get(candidate_id) or {}
-            label = (candidate.get("label") or "neutral").strip().lower()
-            snippet = re.sub(r"\s+", " ", str(candidate.get("text") or "")).strip()
-            preview = snippet[:90]
-            return f"[{label}] {preview} ({candidate_id[:8]})"
-
-        primary_id: Optional[str] = None
-        if verdict in {"support", "contradict"}:
-            primary_options = top_hit_ids or list(candidate_lookup.keys())
-            if not primary_options:
-                st.info("No candidates available for primary selection yet.")
-                primary_id = None
-            else:
-                primary_index = 0
-                if current_primary in primary_options:
-                    primary_index = primary_options.index(current_primary)
-                primary_id = st.selectbox(
-                    "Primary candidate",
-                    options=primary_options,
-                    index=primary_index,
-                    format_func=_format_candidate_choice,
-                    disabled=selection_disabled,
-                    key=f"evidence-primary-{selected_claim}",
-                )
-
-        note = st.text_area(
-            "Note (required for uncertain)",
-            value=current_note,
-            height=90,
-            disabled=selection_disabled,
-            key=f"evidence-note-{selected_claim}",
-        )
-
-        secondary_options = [
-            cid for cid in candidate_lookup.keys() if cid != primary_id
-        ]
-        secondary_default = [
-            (item or {}).get("candidate_id")
-            for item in current_secondaries
-            if (item or {}).get("candidate_id") in secondary_options
-        ]
-        secondary_ids = st.multiselect(
-            "Secondary candidates",
-            options=secondary_options,
-            default=secondary_default,
-            format_func=_format_candidate_choice,
-            disabled=selection_disabled,
-            key=f"evidence-secondary-{selected_claim}",
-        )
-        secondary_payload: List[Dict[str, Any]] = []
-        for candidate_id in secondary_ids:
-            existing = next(
-                (
-                    entry
-                    for entry in current_secondaries
-                    if (entry or {}).get("candidate_id") == candidate_id
-                ),
-                None,
-            )
-            default_rationale = (existing or {}).get("rationale") or ""
-            rationale = st.text_input(
-                f"Rationale for {candidate_id[:8]}",
-                value=default_rationale,
-                disabled=selection_disabled,
-                key=f"evidence-secondary-rationale-{selected_claim}-{candidate_id}",
-            )
-            secondary_payload.append(
-                {"candidate_id": candidate_id, "rationale": rationale}
-            )
-
-        def _validate_selection() -> Optional[str]:
-            if selection_disabled:
-                return "Selection is disabled until evidence candidates are available."
-            if verdict == "uncertain" and not str(note or "").strip():
-                return "Add a short note before saving an uncertain verdict."
-            if verdict in {"support", "contradict"} and not primary_id:
-                return "Choose a primary candidate for support/contradict."
-            for entry in secondary_payload:
-                if not str((entry or {}).get("rationale") or "").strip():
-                    return "Each secondary candidate requires a rationale."
-            return None
-
-        validation_error = _validate_selection()
-        if validation_error:
-            st.warning(validation_error)
-
-        if st.button(
-            "Save selection",
-            key=f"evidence-save-{selected_claim}",
-            disabled=bool(validation_error),
-            type="primary",
-            width="stretch",
-        ):
-            store.save_selection(
-                selected_claim,
-                verdict=verdict,
-                primary_candidate_id=primary_id,
-                secondary=secondary_payload,
-                note=note,
-            )
-            st.experimental_rerun()
-
-        with st.expander("Ranking rationale", expanded=False):
-            render_rationale_sidebar(
-                state,
-                selected_candidate_id=focus_order[0] if focus_order else None,
-                config=SidebarConfig(ui=layout_sidebar),
-            )
-        st.markdown("</div>", unsafe_allow_html=True)
+        st.subheader("Run history")
+        runs = state.get("history") or []
+        if not runs:
+            st.caption("No rerun history yet.")
+        else:
+            for run in runs[:5]:
+                run_id = run.get("run_id") or "(unknown)"
+                created = run.get("created_at") or ""
+                counts = (run.get("summary") or {}).get("label_counts") or {}
+                total = (run.get("summary") or {}).get("total")
+                label = f"{run_id}"
+                if created:
+                    label = f"{label} • {created}"
+                with st.expander(label, expanded=False):
+                    st.caption(f"total={total} label_counts={counts}")
+                    st.json(run.get("metadata") or {})
 
 
 def format_reference_summary(reference: dict, resolution: dict) -> str:
@@ -2272,6 +2667,7 @@ def draw_ingestion_panel():
             load_selected_document(show_error=False)
     except Exception:
         pass
+    inject_judgment_styles()
     st.subheader("PDF Ingestion")
     docs = st.session_state.get("ingested_docs")
     if docs is None:
@@ -2371,7 +2767,45 @@ def draw_ingestion_panel():
             st.info("No resolved references yet. Run resolution after extraction.")
 
     st.divider()
-    st.subheader("Citation Context")
+
+    selected_index = st.session_state.get("citation_selected_index")
+    selected_target = normalize_target_id(
+        st.session_state.get("citation_selected_target")
+    )
+
+    def _get_context_cached(citation_index: int, target_id: str | None) -> dict:
+        cache = st.session_state.get("citation_context_cache") or {}
+        key = (doc_id, int(citation_index), normalize_target_id(target_id))
+        if key in cache:
+            return cache[key] or {}
+        try:
+            response = get_citation_context(
+                api_url,
+                doc_id,
+                int(citation_index),
+                target_id=normalize_target_id(target_id),
+            )
+            context = response.get("context") or {}
+        except RuntimeError as exc:
+            context = {"error": str(exc)}
+        cache[key] = context
+        st.session_state["citation_context_cache"] = cache
+        if selected_index is not None and int(selected_index) == int(citation_index):
+            if normalize_target_id(target_id) == selected_target:
+                st.session_state["citation_context"] = context
+        return context
+
+    header = "Citation workspace"
+    if selected_index is not None:
+        context = _get_context_cached(int(selected_index), selected_target)
+        reference = context.get("reference") or {}
+        resolution = context.get("resolution") or {}
+        summary, has_consolidated = build_citing_bibliography_summary(
+            reference, resolution
+        )
+        if has_consolidated and summary:
+            header = summary
+    st.subheader(header)
 
     api_url = st.session_state.get("api_url", "http://localhost:8000")
     try:
@@ -2389,6 +2823,27 @@ def draw_ingestion_panel():
         normalized_target = normalize_target_id(target_id)
         st.session_state["citation_selected_index"] = index
         st.session_state["citation_selected_target"] = normalized_target
+
+        sentence_id = None
+        pending_tuple = st.session_state.pop("pending_callout_tuple", None)
+        if isinstance(pending_tuple, dict) and pending_tuple.get("doc_id") == doc_id:
+            try:
+                pending_index = int(pending_tuple.get("citation_index"))
+            except Exception:
+                pending_index = None
+            if pending_index is not None and pending_index == int(index):
+                if (
+                    normalize_target_id(pending_tuple.get("target_id"))
+                    == normalized_target
+                ):
+                    sentence_id = pending_tuple.get("sentence_id")
+        st.session_state["citation_selected_sentence_id"] = sentence_id
+        st.session_state["selected_callout_tuple"] = {
+            "doc_id": doc_id,
+            "citation_index": int(index),
+            "target_id": normalized_target,
+            "sentence_id": sentence_id,
+        }
         st.session_state["citation_context_key"] = None
         st.session_state["citation_context"] = None
         st.session_state["citation_context_error"] = None
@@ -2461,7 +2916,6 @@ def draw_ingestion_panel():
         st.session_state["citation_graph"] = response
 
     inject_citation_styles()
-    main_col, rail_col = st.columns([7, 5], gap="large")
 
     def _read_query_params() -> dict:
         try:
@@ -2484,16 +2938,159 @@ def draw_ingestion_panel():
     if param_doc and param_doc != st.session_state.get("selected_doc_id"):
         st.session_state["selected_doc_id"] = str(param_doc)
         load_selected_document(show_error=False)
-    if param_cite is not None:
+
+    def _set_query_params(
+        *, doc: str, cite: Optional[int], target: Optional[str]
+    ) -> None:
+        payload: dict = {"doc": doc}
+        if cite is not None:
+            payload["cite"] = str(int(cite))
+        if target:
+            payload["target"] = str(target)
         try:
-            select_citation(
-                int(str(param_cite)),
-                str(param_target) if param_target else None,
+            st.query_params.clear()  # type: ignore[attr-defined]
+            for key, value in payload.items():
+                st.query_params[key] = value  # type: ignore[attr-defined]
+        except Exception:
+            try:
+                st.experimental_set_query_params(**payload)
+            except Exception:
+                return
+
+    def _has_unsaved_claim_edits(citation_index: Optional[int]) -> bool:
+        if citation_index is None:
+            return False
+        try:
+            cite_idx = int(citation_index)
+        except Exception:
+            return False
+        ta_key = canonical_segments_key(citation_index=cite_idx)
+        current_text = str(st.session_state.get(ta_key) or "")
+        stored = st.session_state.get("citation_sentence_segments", {}).get(
+            str(cite_idx),
+            [],
+        )
+        stored_text = "\n".join(
+            [str(line).strip() for line in (stored or []) if str(line).strip()]
+        )
+        return current_text.strip() != stored_text.strip()
+
+    def _save_claim_lines_for_citation(
+        citation_index: int, target_id: str | None
+    ) -> int:
+        cite_idx = int(citation_index)
+        context = _get_context_cached(cite_idx, target_id)
+        ta_key = canonical_segments_key(citation_index=cite_idx)
+        lines = [
+            ln.strip()
+            for ln in str(st.session_state.get(ta_key) or "").splitlines()
+            if ln.strip()
+        ]
+        st.session_state.setdefault("citation_sentence_segments", {})[
+            str(cite_idx)
+        ] = lines
+        primary_callout = context.get("callout") or "citation"
+        reference_hint = {
+            "callout": primary_callout,
+            "reference_id": normalize_target_id(target_id),
+        }
+        saved = 0
+        for idx, line in enumerate(lines):
+            parsed = to_segment_dict(line)
+            segment_id = parsed.get("segment_id") or f"seg-{idx+1}"
+            claim_text = parsed.get("claim") or line
+            claim_id = f"cite:{doc_id}:{cite_idx}:{segment_id}"
+            claim_queue.register_claim(
+                claim_id,
+                claim=claim_text,
+                callout=primary_callout,
+                doc_id=doc_id,
+                reference_id=normalize_target_id(target_id),
+                reference_hint=reference_hint,
             )
+            saved += 1
+        return saved
+
+    pending = st.session_state.get("pending_citation_selection")
+    if pending:
+        st.warning("You have unsaved claim edits. Save before switching citations?")
+        action_cols = st.columns([1, 1, 2])
+        with action_cols[0]:
+            if st.button("Save + switch", key="pending-cite-save"):
+                current_idx = st.session_state.get("citation_selected_index")
+                current_tgt = normalize_target_id(
+                    st.session_state.get("citation_selected_target")
+                )
+                if current_idx is not None:
+                    _save_claim_lines_for_citation(int(current_idx), current_tgt)
+                select_citation(
+                    int(pending["citation_index"]), pending.get("target_id")
+                )
+                _set_query_params(
+                    doc=doc_id,
+                    cite=int(pending["citation_index"]),
+                    target=pending.get("target_id"),
+                )
+                st.session_state.pop("pending_citation_selection", None)
+                _rerun()
+        with action_cols[1]:
+            if st.button("Discard + switch", key="pending-cite-discard"):
+                current_idx = st.session_state.get("citation_selected_index")
+                if current_idx is not None:
+                    cite_idx = int(current_idx)
+                    stored = st.session_state.get("citation_sentence_segments", {}).get(
+                        str(cite_idx),
+                        [],
+                    )
+                    st.session_state[
+                        canonical_segments_key(citation_index=cite_idx)
+                    ] = "\n".join(stored or [])
+                select_citation(
+                    int(pending["citation_index"]), pending.get("target_id")
+                )
+                _set_query_params(
+                    doc=doc_id,
+                    cite=int(pending["citation_index"]),
+                    target=pending.get("target_id"),
+                )
+                st.session_state.pop("pending_citation_selection", None)
+                _rerun()
+        with action_cols[2]:
+            if st.button("Cancel", key="pending-cite-cancel"):
+                current_idx = st.session_state.get("citation_selected_index")
+                current_tgt = normalize_target_id(
+                    st.session_state.get("citation_selected_target")
+                )
+                _set_query_params(
+                    doc=doc_id,
+                    cite=int(current_idx) if current_idx is not None else None,
+                    target=current_tgt,
+                )
+                st.session_state.pop("pending_citation_selection", None)
+
+    if pending is None and param_cite is not None:
+        try:
+            desired_idx = int(str(param_cite))
         except ValueError:
-            pass
+            desired_idx = None
+        current_idx = st.session_state.get("citation_selected_index")
+        desired_tgt = str(param_target) if param_target else None
+        if desired_idx is not None and (
+            current_idx != desired_idx
+            or normalize_target_id(st.session_state.get("citation_selected_target"))
+            != normalize_target_id(desired_tgt)
+        ):
+            if _has_unsaved_claim_edits(current_idx):
+                st.session_state["pending_citation_selection"] = {
+                    "doc_id": doc_id,
+                    "citation_index": desired_idx,
+                    "target_id": normalize_target_id(desired_tgt),
+                }
+            else:
+                select_citation(desired_idx, desired_tgt)
 
     def _follow_citation(citation_index: int, target_id: str | None) -> None:
+        """Add citation to chase queue, preserving discovery order."""
         followed = st.session_state.get("followed_citations") or []
         normalized_target = normalize_target_id(target_id)
         entry = {
@@ -2513,86 +3110,59 @@ def draw_ingestion_panel():
         except ValueError:
             pass
 
-    with main_col:
-        st.markdown("#### Document text")
-        st.caption("Click an in-text citation chip to inspect context.")
+    main_col, rail_col = st.columns([7, 5], gap="large")
 
-        selected_index = st.session_state.get("citation_selected_index")
-        for para in paragraphs:
-            para_sentences = para.get("sentences") or []
-            if not para_sentences:
-                # Backward compatibility: older backend may return flat segments.
-                para_sentences = [
-                    {
-                        "segments": para.get("segments") or [],
-                        "citation_indices": para.get("citation_indices") or [],
-                    }
-                ]
+    # One-shot UI intent triggered by subpanels.
+    chase_intent = st.session_state.pop("chase_intent", None)
+    if chase_intent and chase_intent.get("doc_id") == doc_id:
+        try:
+            cite_idx = int(chase_intent.get("citation_index"))
+        except Exception:
+            cite_idx = None
+        tgt = normalize_target_id(chase_intent.get("target_id"))
+        if cite_idx is not None:
+            st.session_state["center_view"] = "Chasing claims"
+            _set_query_params(doc=doc_id, cite=cite_idx, target=tgt)
+            select_citation(cite_idx, tgt)
 
-            sentence_html: list[str] = []
-            for sent in para_sentences:
-                segments = sent.get("segments") or []
-                sent_citations = set(sent.get("citation_indices") or [])
-                sent_selected = (
-                    selected_index is not None and selected_index in sent_citations
-                )
-                sent_text_len = sum(
-                    len(seg.get("text") or "")
-                    for seg in segments
-                    if seg.get("type") == "text"
-                )
-                # If TEI sentence nodes are paragraph-sized, highlighting the whole
-                # block is distracting. Prefer chip-only highlighting for long spans.
-                use_sentence_highlight = sent_selected and sent_text_len <= 320
-                sent_class = (
-                    "citation-sentence-row citation-sentence-selected"
-                    if use_sentence_highlight
-                    else "citation-sentence-row"
-                )
-                parts: list[str] = []
-                for seg in segments:
-                    seg_type = seg.get("type")
-                    if seg_type == "text":
-                        parts.append(html.escape(seg.get("text") or ""))
-                        continue
-                    if seg_type != "citation":
-                        continue
-                    cite_index = seg.get("citation_index")
-                    if cite_index is None:
-                        continue
-                    cite_index = int(cite_index)
-                    anchor = f"cite-idx-{cite_index}"
-                    target_id = seg.get("target_id")
-                    label = seg.get("label") or seg.get("callout") or "citation"
-                    href = _citation_href(doc_id, cite_index, target_id, anchor)
-                    chip_class = "citation-chip citation-chip-link"
-                    if selected_index == cite_index:
-                        chip_class += " citation-chip-selected"
-                    parts.append(f'<a id="{anchor}"></a>')
-                    parts.append(
-                        f'<a class="{chip_class}" '
-                        f'href="{html.escape(href)}">{html.escape(str(label))}</a>'
-                    )
-                rendered_sentence = " ".join(part for part in parts if part)
-                sentence_html.append(
-                    f'<span class="{sent_class}">{rendered_sentence}</span>'
-                )
+    def _claims_for_citation(cite_idx: int) -> list[str]:
+        out: list[str] = []
+        for record in claim_queue.get_claim_records():
+            rid = record.get("id")
+            if not rid:
+                continue
+            if str(rid).startswith(f"cite:{doc_id}:{int(cite_idx)}:"):
+                out.append(str(rid))
+        return out
 
-            rendered_para = " ".join(sentence_html)
-            st.markdown(
-                f'<div class="citation-paragraph">{rendered_para}</div>',
-                unsafe_allow_html=True,
-            )
+    def _is_processed(cite_idx: int) -> bool:
+        for cid in _claims_for_citation(cite_idx):
+            attached = attachment_queue.get_claim_attachment(cid)
+            if attached and str(attached.get("status")) == "matched":
+                return True
+        return False
+
+    def _render_chasing_panel(cite_idx: int, tgt: str | None, *, scope: str) -> None:
+        chasing_panel.render(
+            doc_id=doc_id,
+            citation_index=int(cite_idx),
+            target_id=normalize_target_id(tgt),
+            scope=scope,
+            get_context_cached=_get_context_cached,
+            seg_via_llm=seg_via_llm,
+            to_segment_dict=to_segment_dict,
+            claim_queue_register=claim_queue.register_claim,
+            format_reference_summary=format_reference_summary,
+            render_retrieval_instructions=claim_queue.render_retrieval_instructions,
+            api_url=api_url,
+            selected_model=st.session_state.get("selected_model"),
+            rerun=_rerun,
+        )
 
     with rail_col:
         st.markdown('<div class="citation-workflow-rail">', unsafe_allow_html=True)
-        st.markdown("#### Workflow")
-        st.caption("Click citation chips to follow them here.")
 
-        selected_index = st.session_state.get("citation_selected_index")
-        selected_target = normalize_target_id(
-            st.session_state.get("citation_selected_target")
-        )
+        # Keep the currently selected citation at the top of the queue.
         if selected_index is not None:
             _follow_citation(int(selected_index), selected_target)
 
@@ -2601,35 +3171,17 @@ def draw_ingestion_panel():
             for entry in (st.session_state.get("followed_citations") or [])
             if entry.get("doc_id") == doc_id
         ]
-        if not followed:
-            st.info("Click an in-text citation chip to inspect and parse.")
+        # Display in primary-text order.
+        followed.sort(
+            key=lambda item: (
+                int(item.get("citation_index") or 0),
+                str(item.get("target_id") or ""),
+            )
+        )
 
-        def _get_context_cached(citation_index: int, target_id: str | None) -> dict:
-            cache = st.session_state.get("citation_context_cache") or {}
-            key = (doc_id, int(citation_index), normalize_target_id(target_id))
-            if key in cache:
-                return cache[key] or {}
-            try:
-                response = get_citation_context(
-                    api_url,
-                    doc_id,
-                    int(citation_index),
-                    target_id=normalize_target_id(target_id),
-                )
-                context = response.get("context") or {}
-            except RuntimeError as exc:
-                context = {"error": str(exc)}
-            cache[key] = context
-            st.session_state["citation_context_cache"] = cache
-            return context
-
-        active_panel = st.session_state.get("workflow_active_panel")
-        active_cite = st.session_state.get("workflow_active_citation")
-
-        for entry in followed:
+        def _queue_label(entry: dict) -> str:
             cite_idx = int(entry.get("citation_index"))
             tgt = normalize_target_id(entry.get("target_id"))
-            anchor = f"cite-idx-{cite_idx}"
             context = _get_context_cached(cite_idx, tgt)
             cite_text = (
                 context.get("citing_prefix")
@@ -2637,213 +3189,295 @@ def draw_ingestion_panel():
                 or context.get("sentence")
                 or ""
             )
-            label = (
+            return (
                 _sentence_label(cite_text) if cite_text else f"Citation {cite_idx + 1}"
             )
 
-            expanded = cite_idx == selected_index or cite_idx == active_cite
-            with st.expander(label, expanded=expanded):
-                cols = st.columns([1, 1, 3])
-                with cols[0]:
-                    st.markdown(f"[Jump to text](#{anchor})")
-                with cols[1]:
-                    if st.button("Unfollow", key=f"unfollow-{cite_idx}"):
-                        st.session_state["followed_citations"] = [
-                            item
-                            for item in (
-                                st.session_state.get("followed_citations") or []
-                            )
-                            if not (
-                                item.get("doc_id") == doc_id
-                                and int(item.get("citation_index")) == cite_idx
-                            )
-                        ]
-                        continue
-
-                if context.get("error"):
-                    st.error(f"Failed to load context: {context.get('error')}")
-                else:
-                    st.markdown("**Context**")
-                    edit_key = f"context-edit::{doc_id}::{cite_idx}"
-                    st.session_state.setdefault(edit_key, cite_text)
-                    edited = st.text_area(
-                        "Context (editable)",
-                        key=edit_key,
-                        height=160,
-                        help=(
-                            "Edit the claim text to segment; defaults to the text "
-                            "preceding the clicked citation."
-                        ),
-                    )
-                    cite_text = (edited or "").strip()
-                if st.session_state.get("citation_debug"):
-                    st.caption("Raw context payload")
-                    st.json(context)
-
-                with st.expander(
-                    "Parsing",
-                    expanded=(active_panel == "parsing" and cite_idx == active_cite),
-                ):
-                    model = st.session_state.get("selected_model")
-                    ta_key = f"citation-segments-{cite_idx}"
-                    stored = st.session_state.get("citation_sentence_segments", {}).get(
-                        str(cite_idx),
-                        [],
-                    )
-                    st.session_state.setdefault(ta_key, "\n".join(stored))
-
-                    if st.button(
-                        "Segment sentence",
-                        key=f"segment-sentence-{cite_idx}",
-                        disabled=not model or not cite_text,
-                    ):
-                        st.session_state["workflow_active_panel"] = "parsing"
-                        st.session_state["workflow_active_citation"] = cite_idx
-                        st.session_state.setdefault("citation_parsing_inputs", {})[
-                            str(cite_idx)
-                        ] = cite_text
-                        segments = seg_via_llm(cite_text, cite_idx + 1, model)
-                        st.session_state.setdefault("citation_sentence_segments", {})[
-                            str(cite_idx)
-                        ] = segments
-                        st.session_state[ta_key] = "\n".join(segments)
-
-                    seg_text = st.text_area(
-                        "Parsed claims (one per line)",
-                        key=ta_key,
-                        height=160,
-                    )
-                    if st.button("Save claims", key=f"save-claims-{cite_idx}"):
-                        st.session_state["workflow_active_panel"] = "parsing"
-                        st.session_state["workflow_active_citation"] = cite_idx
-                        lines = [
-                            ln.strip() for ln in seg_text.splitlines() if ln.strip()
-                        ]
-                        st.session_state.setdefault("citation_sentence_segments", {})[
-                            str(cite_idx)
-                        ] = lines
-                        primary_callout = context.get("callout") or "citation"
-                        reference_hint = {
-                            "callout": primary_callout,
-                            "reference_id": tgt,
-                        }
-                        saved = 0
-                        for idx, line in enumerate(lines):
-                            parsed = to_segment_dict(line)
-                            segment_id = parsed.get("segment_id") or f"seg-{idx+1}"
-                            claim_text = parsed.get("claim") or line
-                            claim_id = f"cite:{doc_id}:{cite_idx}:{segment_id}"
-                            claim_queue.register_claim(
-                                claim_id,
-                                claim=claim_text,
-                                callout=primary_callout,
-                                doc_id=doc_id,
-                                reference_id=tgt,
-                                reference_hint=reference_hint,
-                            )
-                            saved += 1
-                        if saved:
-                            st.success(f"Saved {saved} claim(s) to the workspace.")
-
-                with st.expander(
-                    "Retrieving",
-                    expanded=(active_panel == "retrieving" and cite_idx == active_cite),
-                ):
-                    reference_id = tgt or (context.get("reference") or {}).get("id")
-                    if not reference_id:
-                        st.info("No target ID available for this citation.")
-                    else:
-                        reference = context.get("reference") or {}
-                        resolution = context.get("resolution") or {}
-                        summary = format_reference_summary(reference, resolution)
-                        if summary:
-                            st.markdown("**Reference summary**")
-                            st.markdown(summary)
-                        with st.expander("Retrieval instructions", expanded=False):
-                            claim_queue.render_retrieval_instructions(
-                                api_url=api_url,
-                                doc_id=doc_id,
-                                reference_id=reference_id,
-                                key_prefix=str(cite_idx),
-                            )
-
-        st.divider()
-        st.markdown("#### Citation Graph")
-        selected_target = normalize_target_id(
-            st.session_state.get("citation_selected_target")
-        )
-        if selected_target is None:
-            st.info("Select a citation callout to view the graph.")
-        else:
-            context_snapshot = st.session_state.get("citation_context") or {}
-            resolution_entry = context_snapshot.get("resolution") or {}
-            reference_entry = context_snapshot.get("reference") or {}
-            resolved_identifier = (
-                resolution_entry.get("openalex_id")
-                or resolution_entry.get("openalex_work_id")
-                or resolution_entry.get("doi")
-                or reference_entry.get("doi")
+        def _queue_status(cite_idx: int, tgt: Optional[str]) -> Dict[str, bool]:
+            has_saved = bool(
+                st.session_state.get("citation_sentence_segments", {}).get(
+                    str(int(cite_idx)),
+                    [],
+                )
             )
-            if resolved_identifier:
-                st.caption(f"Resolved identifier: {resolved_identifier}")
-            else:
-                st.caption("No DOI resolved for this citation yet.")
-            st.caption(f"Target ID: {selected_target}")
-            st.slider(
-                "Depth",
-                min_value=1,
-                max_value=3,
-                key="citation_graph_depth",
-            )
-            st.number_input(
-                "Node cap",
-                min_value=5,
-                max_value=50,
-                key="citation_graph_max_nodes",
-            )
-            graph_request = {
-                "api_url": api_url,
-                "doc_id": doc_id,
-                "target_id": selected_target,
-                "doi": resolved_identifier,
-                "depth": int(st.session_state.get("citation_graph_depth", 1)),
-                "max_nodes": int(st.session_state.get("citation_graph_max_nodes", 10)),
+            return {
+                "has_saved": has_saved,
+                "processed": _is_processed(int(cite_idx)),
             }
-            if st.button("Load citation graph", key="citation-graph-load"):
-                load_citation_graph(graph_request)
-            graph_key = (
-                graph_request["doc_id"],
-                graph_request["target_id"],
-                graph_request.get("doi"),
-                graph_request["depth"],
-                graph_request["max_nodes"],
-            )
-            graph_data = None
-            if st.session_state.get("citation_graph_key") == graph_key:
-                graph_data = st.session_state.get("citation_graph")
-            if graph_data:
-                nodes = graph_data.get("nodes") or []
-                if not nodes:
-                    st.info("No data available for this citation graph.")
-                else:
-                    graph = build_citation_graphviz(graph_data)
-                    st.graphviz_chart(graph)
-            else:
-                st.caption("Load the citation graph to explore references.")
-            if st.session_state.get("citation_graph_error"):
-                error_message = st.session_state.get("citation_graph_error", "")
-                if "OpenAlex request failed (404)" in error_message:
-                    st.caption(
-                        "OpenAlex could not find this work. "
-                        "Check that reference resolution populated a DOI or OpenAlex "
-                        "ID."
-                    )
-                if st.button("Retry graph", key="citation-graph-retry"):
-                    last_request = st.session_state.get("citation_last_graph_request")
-                    if last_request:
-                        load_citation_graph(last_request)
+
+        def _queue_open(cite_idx: int, tgt: Optional[str]) -> None:
+            _follow_citation(int(cite_idx), tgt)
+            select_citation(int(cite_idx), tgt)
+            _set_query_params(doc=doc_id, cite=int(cite_idx), target=tgt)
+
+        def _queue_drop(cite_idx: int, tgt: Optional[str]) -> None:
+            st.session_state["followed_citations"] = [
+                item
+                for item in (st.session_state.get("followed_citations") or [])
+                if not (
+                    item.get("doc_id") == doc_id
+                    and int(item.get("citation_index")) == int(cite_idx)
+                    and normalize_target_id(item.get("target_id"))
+                    == normalize_target_id(tgt)
+                )
+            ]
+
+        def _queue_panel(cite_idx: int, tgt: Optional[str], scope: str) -> None:
+            _render_chasing_panel(int(cite_idx), normalize_target_id(tgt), scope=scope)
+
+        chase_queue_component.render(
+            title="Chase queue",
+            caption="Queue up citations to segment + chase while PDFs process.",
+            followed=followed,
+            selected_index=int(selected_index) if selected_index is not None else None,
+            selected_target=normalize_target_id(selected_target),
+            get_label=_queue_label,
+            get_status=_queue_status,
+            on_open=_queue_open,
+            on_drop=_queue_drop,
+            render_panel=_queue_panel,
+            rerun=_rerun,
+            scope="rail",
+        )
 
         st.markdown("</div>", unsafe_allow_html=True)
+
+    with main_col:
+        st.session_state.setdefault("center_view", "Document text")
+        center_view = st.radio(
+            "",
+            ["Document text", "Chasing claims", "Node graph"],
+            key="center_view",
+            horizontal=True,
+            label_visibility="collapsed",
+        )
+
+        if center_view == "Document text":
+            st.caption("Click an in-text citation chip to inspect context.")
+
+            for para in paragraphs:
+                para_sentences = para.get("sentences") or []
+                if not para_sentences:
+                    # Backward compatibility: older backend may return flat segments.
+                    para_sentences = [
+                        {
+                            "segments": para.get("segments") or [],
+                            "citation_indices": para.get("citation_indices") or [],
+                        }
+                    ]
+
+                # Collect citations for this paragraph to render Streamlit-native
+                # buttons (keeps state in-session; hyperlinks would reload).
+                paragraph_citations: list[dict] = []
+                seen_keys: set[str] = set()
+
+                sentence_html: list[str] = []
+                for sent in para_sentences:
+                    segments = sent.get("segments") or []
+                    sent_citations = set(sent.get("citation_indices") or [])
+                    sent_selected = (
+                        selected_index is not None and selected_index in sent_citations
+                    )
+                    sent_text_len = sum(
+                        len(seg.get("text") or "")
+                        for seg in segments
+                        if seg.get("type") == "text"
+                    )
+                    # If TEI sentence nodes are very long, highlight chips only.
+                    use_sentence_highlight = sent_selected and sent_text_len <= 320
+                    sent_class = (
+                        "citation-sentence-row citation-sentence-selected"
+                        if use_sentence_highlight
+                        else "citation-sentence-row"
+                    )
+                    parts: list[str] = []
+                    for seg in segments:
+                        seg_type = seg.get("type")
+                        if seg_type == "text":
+                            parts.append(html.escape(seg.get("text") or ""))
+                            continue
+                        if seg_type != "citation":
+                            continue
+                        cite_index = seg.get("citation_index")
+                        if cite_index is None:
+                            continue
+                        cite_index = int(cite_index)
+                        anchor = f"cite-idx-{cite_index}"
+                        target_id = seg.get("target_id")
+                        # fmt: off
+                        raw_label = (
+                            seg.get("label")
+                            or seg.get("callout")
+                            or "citation"
+                        )
+                        # fmt: on
+                        label_text = str(raw_label)
+                        if selected_index == cite_index:
+                            stripped = label_text.strip()
+                            if stripped and not stripped.startswith(("(", "[")):
+                                label_text = f"({stripped})"
+                            else:
+                                label_text = stripped
+                        chip_class = "citation-chip"
+                        if selected_index == cite_index:
+                            chip_class += " citation-chip-selected"
+                        parts.append(f'<a id="{anchor}"></a>')
+
+                        normalized_target = normalize_target_id(target_id)
+                        entry_key = f"{cite_index}:{normalized_target or ''}"
+                        sentence_id = seg.get("sentence_id") or sent.get("sentence_id")
+
+                        if entry_key not in seen_keys:
+                            seen_keys.add(entry_key)
+                            paragraph_citations.append(
+                                {
+                                    "citation_index": cite_index,
+                                    "target_id": normalized_target,
+                                    "label": label_text,
+                                    "anchor": anchor,
+                                    "sentence_id": sentence_id,
+                                }
+                            )
+
+                        # Render chip; selection via buttons below.
+                        parts.append(
+                            (
+                                f'<span class="{chip_class}">'
+                                f"{html.escape(label_text)}"
+                                "</span>"
+                            )
+                        )
+                    rendered_sentence = " ".join(part for part in parts if part)
+                    sentence_html.append(
+                        f'<span class="{sent_class}">{rendered_sentence}</span>'
+                    )
+
+                rendered_para = " ".join(sentence_html)
+                st.markdown(
+                    f'<div class="citation-paragraph">{rendered_para}</div>',
+                    unsafe_allow_html=True,
+                )
+
+                if paragraph_citations:
+                    cols = st.columns(min(6, len(paragraph_citations)))
+                    for idx, item in enumerate(paragraph_citations):
+                        col = cols[idx % len(cols)]
+                        with col:
+                            cite_idx = int(item["citation_index"])
+                            tgt = normalize_target_id(item.get("target_id"))
+                            btn_label = str(
+                                item.get("label") or f"Citation {cite_idx + 1}"
+                            )
+                            cite_button_key = (
+                                f"doc-cite-btn::{doc_id}::{cite_idx}::"
+                                f"{tgt or ''}::{idx}"
+                            )
+                            if st.button(
+                                btn_label,
+                                key=cite_button_key,
+                                use_container_width=True,
+                            ):
+                                st.session_state["pending_callout_tuple"] = {
+                                    "doc_id": doc_id,
+                                    "citation_index": cite_idx,
+                                    "target_id": tgt,
+                                    "sentence_id": item.get("sentence_id"),
+                                }
+                                # Route through query params to reuse the existing
+                                # unsaved-edits prompt logic.
+                                _set_query_params(
+                                    doc=doc_id,
+                                    cite=cite_idx,
+                                    target=tgt,
+                                )
+                                _rerun()
+
+        elif center_view == "Chasing claims":
+            st.markdown("#### Chasing claims")
+            if selected_index is None:
+                st.info("Select a citation in Document text to segment and chase.")
+            else:
+                _render_chasing_panel(
+                    int(selected_index),
+                    selected_target,
+                    scope="tab",
+                )
+        else:
+            st.markdown("#### Citation graph")
+            if selected_target is None:
+                st.info("Select a citation callout to view the graph.")
+            else:
+                context_snapshot = st.session_state.get("citation_context") or {}
+                resolution_entry = context_snapshot.get("resolution") or {}
+                reference_entry = context_snapshot.get("reference") or {}
+                resolved_identifier = (
+                    resolution_entry.get("openalex_id")
+                    or resolution_entry.get("openalex_work_id")
+                    or resolution_entry.get("doi")
+                    or reference_entry.get("doi")
+                )
+                if resolved_identifier:
+                    st.caption(f"Resolved identifier: {resolved_identifier}")
+                else:
+                    st.caption("No DOI resolved for this citation yet.")
+                st.caption(f"Target ID: {selected_target}")
+                st.slider(
+                    "Depth",
+                    min_value=1,
+                    max_value=3,
+                    key="citation_graph_depth",
+                )
+                st.number_input(
+                    "Node cap",
+                    min_value=5,
+                    max_value=50,
+                    key="citation_graph_max_nodes",
+                )
+                graph_request = {
+                    "api_url": api_url,
+                    "doc_id": doc_id,
+                    "target_id": selected_target,
+                    "doi": resolved_identifier,
+                    "depth": int(st.session_state.get("citation_graph_depth", 1)),
+                    "max_nodes": int(
+                        st.session_state.get("citation_graph_max_nodes", 10)
+                    ),
+                }
+                if st.button("Load citation graph", key="citation-graph-load"):
+                    load_citation_graph(graph_request)
+                graph_key = (
+                    graph_request["doc_id"],
+                    graph_request["target_id"],
+                    graph_request.get("doi"),
+                    graph_request["depth"],
+                    graph_request["max_nodes"],
+                )
+                graph_data = None
+                if st.session_state.get("citation_graph_key") == graph_key:
+                    graph_data = st.session_state.get("citation_graph")
+                if graph_data:
+                    nodes = graph_data.get("nodes") or []
+                    if not nodes:
+                        st.info("No data available for this citation graph.")
+                    else:
+                        graph = build_citation_graphviz(graph_data)
+                        st.graphviz_chart(graph)
+                else:
+                    st.caption("Load the citation graph to explore references.")
+                if st.session_state.get("citation_graph_error"):
+                    error_message = st.session_state.get("citation_graph_error", "")
+                    if "OpenAlex request failed (404)" in error_message:
+                        st.caption(
+                            "OpenAlex could not find this work. "
+                            "Check that reference resolution populated a DOI "
+                            "or OpenAlex ID."
+                        )
+                    if st.button("Retry graph", key="citation-graph-retry"):
+                        last_request = st.session_state.get(
+                            "citation_last_graph_request"
+                        )
+                        if last_request:
+                            load_citation_graph(last_request)
 
 
 def draw_main():

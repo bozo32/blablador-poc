@@ -81,8 +81,12 @@ class JudgmentStore:
             "status": status,
             "verdict": verdict,
             "notes": notes,
-            "provenance": provenance,
         }
+        if provenance:
+            # Backend expects provenance fields at the top level:
+            # doc_id, citation_index, target_id, sentence_id, callout, reference_id,
+            # doi, author, year, claim_text.
+            payload.update(dict(provenance))
         try:
             stored = self.api.put_judgment(claim_id, payload)
         except judgment_api.JudgmentApiError as exc:
@@ -273,6 +277,8 @@ class JudgmentStore:
         if citation_index is None:
             return
         target_id = provenance.get("target_id")
+        if target_id is None:
+            target_id = (judgment or {}).get("target_id")
         key: CalloutKey = (doc_id, int(citation_index), target_id)
         by_key = doc_state.setdefault("judgments_by_callout_key", {})
         bucket = by_key.setdefault(key, [])

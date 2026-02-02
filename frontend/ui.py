@@ -1337,6 +1337,7 @@ def render_evidence_panel() -> None:
 
         def _render_judgment_controls() -> None:
             judgment = j_payload if isinstance(j_payload, dict) else {}
+            flash_key = f"judgment-flash::{selected_claim}"
             status_default = (judgment.get("status") or "draft").strip().lower()
             if status_default not in {"draft", "final"}:
                 status_default = "draft"
@@ -1371,6 +1372,13 @@ def render_evidence_panel() -> None:
 
             if j_claim_state.get("error"):
                 st.error(f"Judgment load failed: {j_claim_state['error']}")
+            elif st.session_state.get(flash_key):
+                st.success("Judgment saved.")
+                st.session_state.pop(flash_key, None)
+
+            updated_at = (judgment.get("updated_at") or "").strip()
+            if updated_at:
+                st.caption(f"Last saved: {updated_at}")
 
             row = st.columns([2, 4, 2], gap="small")
             with row[0]:
@@ -1467,6 +1475,7 @@ def render_evidence_panel() -> None:
                         provenance=provenance,
                     )
                     if stored is not None:
+                        st.session_state[flash_key] = True
                         st.session_state[notes_open_key] = False
                         _rerun()
 

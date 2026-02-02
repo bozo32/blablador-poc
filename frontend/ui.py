@@ -37,7 +37,14 @@ from frontend import (
 )
 from frontend.components import chase_queue as chase_queue_component
 from frontend.components import chasing_panel
-from frontend.state_keys import canonical_segments_key
+from frontend.state_keys import (
+    WORKSPACE_ACTIVE_TAB,
+    WORKSPACE_DENSE_MODE,
+    WORKSPACE_SETTINGS_OPEN,
+    WORKSPACE_TAB_DOCUMENT,
+    WORKSPACE_TAB_REVIEW,
+    canonical_segments_key,
+)
 from frontend.components.evidence_card import CardActionCallbacks, EvidenceCardRenderer
 from frontend.components.rationale_sidebar import (
     build_filter_chip_config,
@@ -117,6 +124,10 @@ def init_session_state():
         "auto_resolve_on_upload": True,
         "citation_debug": False,
         "show_demo_claims": False,
+        # Workspace shell (Phase 08)
+        WORKSPACE_DENSE_MODE: False,
+        WORKSPACE_SETTINGS_OPEN: False,
+        WORKSPACE_ACTIVE_TAB: WORKSPACE_TAB_DOCUMENT,
     }
     for key, val in defaults.items():
         st.session_state.setdefault(key, val)
@@ -813,6 +824,12 @@ EVIDENCE_REVIEW_CSS_PATH = (
 )
 
 
+# === Workspace Shell (Phase 08) Styles ===
+WORKSPACE_CSS_PATH = (
+    pathlib.Path(__file__).resolve().parent / "assets" / "workspace.css"
+)
+
+
 # === Judgment (Phase 07) Styles ===
 JUDGMENT_CSS_PATH = pathlib.Path(__file__).resolve().parent / "assets" / "judgment.css"
 
@@ -839,6 +856,33 @@ def inject_judgment_styles() -> None:
             unsafe_allow_html=True,
         )
     st.session_state[key] = True
+
+
+def inject_workspace_styles(*, dense: bool) -> None:
+    """Load base workspace CSS plus optional dense overrides."""
+    cache_key = "_workspace_styles_loaded"
+    cache_dense_key = "_workspace_styles_dense"
+    if (
+        st.session_state.get(cache_key)
+        and st.session_state.get(cache_dense_key) == dense
+    ):
+        return
+    if not WORKSPACE_CSS_PATH.exists():
+        st.session_state[cache_key] = True
+        st.session_state[cache_dense_key] = dense
+        return
+
+    raw = WORKSPACE_CSS_PATH.read_text()
+    splitter = "/* === Dense Mode === */"
+    base_css = raw
+    dense_css = ""
+    if splitter in raw:
+        base_css, dense_css = raw.split(splitter, 1)
+        dense_css = splitter + dense_css
+    css = base_css + (dense_css if dense else "")
+    st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
+    st.session_state[cache_key] = True
+    st.session_state[cache_dense_key] = dense
 
 
 def inject_attachment_panel_styles() -> None:
@@ -2595,159 +2639,242 @@ def color_tokens(
 def draw_sidebar():
     init_session_state()
     with st.sidebar:
-        st.header("Pipeline Mode")
-        mode = st.selectbox(
-            "Choose pipeline",
-            ["classic", "hybrid"],
-            index=0 if st.session_state["pipeline_mode"] == "classic" else 1,
-            help="Classic = fast, Hybrid = exhaustive",
-            key="pipeline_mode_selectbox",
-        )
-        st.session_state["pipeline_mode"] = mode
-        st.header("PDF Ingestion")
-        st.checkbox(
-            "Auto-run extraction",
-            key="auto_extract_on_upload",
-            help="Run extraction immediately after upload.",
-        )
-        st.checkbox(
-            "Auto-run reference resolution",
-            key="auto_resolve_on_upload",
-            help="Resolve references after extraction completes.",
-        )
-        st.checkbox(
-            "Seed sample claims when workspace is empty",
-            key="show_demo_claims",
-            help=(
-                "Populate demo claims only when no segmentation results exist. "
-                "Leave unchecked for a clean workspace once your Blablador token "
-                "is configured."
-            ),
-        )
-        st.checkbox(
-            "Debug callouts",
-            key="citation_debug",
-            help="Show raw sentence + callout strings for troubleshooting.",
-        )
-        st.file_uploader(
-            "PDF files",
-            type=["pdf"],
-            accept_multiple_files=True,
-            key="uploaded_pdfs",
-            on_change=handle_pdf_upload,
-        )
-        if st.button("Refresh ingested PDFs"):
-            refresh_ingested_docs()
-        docs = st.session_state.get("ingested_docs") or []
-        if docs:
-            doc_ids = [doc.get("id") for doc in docs if doc.get("id")]
-            current = st.session_state.get("selected_doc_id")
-            if doc_ids and current not in doc_ids:
-                st.session_state["selected_doc_id"] = doc_ids[0]
-            if doc_ids:
-                st.selectbox(
-                    "Active document",
-                    doc_ids,
-                    format_func=lambda doc_id: next(
-                        (
-                            f"{doc.get('filename')} ({doc_id[:8]})"
-                            for doc in docs
-                            if doc.get("id") == doc_id
-                        ),
-                        doc_id,
+        render_settings_controls()
+
+
+def render_settings_controls() -> None:
+    """Render settings shared by the legacy sidebar and Phase 8 drawer."""
+    st.markdown("**Pipeline**")
+    mode = st.selectbox(
+        "Choose pipeline",
+        ["classic", "hybrid"],
+        index=0 if st.session_state["pipeline_mode"] == "classic" else 1,
+        help="Classic = fast, Hybrid = exhaustive",
+        key="pipeline_mode_selectbox",
+    )
+    st.session_state["pipeline_mode"] = mode
+
+    st.markdown("**Ingestion Defaults**")
+    st.checkbox(
+        "Auto-run extraction",
+        key="auto_extract_on_upload",
+        help="Run extraction immediately after upload.",
+    )
+    st.checkbox(
+        "Auto-run reference resolution",
+        key="auto_resolve_on_upload",
+        help="Resolve references after extraction completes.",
+    )
+    st.checkbox(
+        "Seed sample claims when workspace is empty",
+        key="show_demo_claims",
+        help=(
+            "Populate demo claims only when no segmentation results exist. "
+            "Leave unchecked for a clean workspace once your Blablador token "
+            "is configured."
+        ),
+    )
+    st.checkbox(
+        "Debug callouts",
+        key="citation_debug",
+        help="Show raw sentence + callout strings for troubleshooting.",
+    )
+
+    st.markdown("**API**")
+    st.text_input(
+        "Blablador API Key",
+        key="api_key",
+        on_change=lambda: st.session_state.pop("available_models", None),
+    )
+    st.text_input(
+        "Blablador Base URL",
+        key="api_base",
+        on_change=lambda: st.session_state.pop("available_models", None),
+    )
+    st.text_input("Citation API URL", key="api_url")
+
+    st.markdown("**Models**")
+    with st.spinner("Fetching models..."):
+        if "available_models" not in st.session_state:
+            st.session_state.available_models = get_responsive_models()
+    model_selector(
+        "LLM model",
+        "selected_model",
+        st.session_state.available_models,
+        allow_custom=False,
+    )
+
+    embed_choices = get_models("embed") or list_local_models()
+    if settings.EMBED_MODEL not in embed_choices:
+        embed_choices.insert(0, settings.EMBED_MODEL)
+    model_selector("Embedding model", "embed_model", embed_choices)
+    add_model("embed", st.session_state.embed_model)
+
+    st.markdown("**Retrieval**")
+    st.number_input(
+        "Max initial sentences",
+        min_value=1,
+        key="max_sentences",
+        on_change=reset_segmentation,
+    )
+    st.slider(
+        "FAISS min similarity",
+        0.0,
+        1.0,
+        key="faiss_min_score",
+        on_change=reset_segmentation,
+    )
+
+    rerank_choices = get_models("reranker") or [settings.RERANKER_MODEL]
+    model_selector("Reranker model", "reranker_model", rerank_choices)
+    add_model("reranker", st.session_state.reranker_model)
+    st.number_input(
+        "Reranker top-K",
+        min_value=1,
+        key="reranker_top_k",
+    )
+
+    nli_choices = get_models("nli") or [settings.NLI_MODEL]
+    model_selector("NLI model", "nli_model", nli_choices)
+    add_model("nli", st.session_state.nli_model)
+    st.slider(
+        "NLI confidence threshold",
+        0.0,
+        1.0,
+        key="nli_threshold",
+        on_change=reset_segmentation,
+    )
+
+    st.button(
+        "Start segmentation",
+        on_click=lambda: (
+            st.session_state.__setitem__("started", True),
+            st.session_state.__setitem__("seg_requested", True),
+        ),
+    )
+
+
+def render_workspace_left_pane() -> None:
+    st.markdown(
+        '<div class="ws-pane-header">'
+        '<div class="ws-pane-header__title">Workspace</div>'
+        '<div class="ws-pane-header__meta">Sources + nav</div>'
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+    controls = st.columns([1, 1], gap="small")
+    with controls[0]:
+        st.toggle("Dense", key=WORKSPACE_DENSE_MODE)
+    with controls[1]:
+        if st.button(
+            "⚙",
+            key="workspace-gear",
+            help="Settings",
+            use_container_width=True,
+        ):
+            st.session_state[WORKSPACE_SETTINGS_OPEN] = not bool(
+                st.session_state.get(WORKSPACE_SETTINGS_OPEN)
+            )
+
+    if st.session_state.get(WORKSPACE_SETTINGS_OPEN):
+        with st.container():
+            render_settings_controls()
+
+    st.markdown('<div class="ws-pane-body">', unsafe_allow_html=True)
+
+    st.markdown("**Source bin (PDFs)**")
+    st.file_uploader(
+        "PDF files",
+        type=["pdf"],
+        accept_multiple_files=True,
+        key="uploaded_pdfs",
+        on_change=handle_pdf_upload,
+    )
+    if st.button("Refresh ingested PDFs", key="refresh-ingested"):
+        refresh_ingested_docs()
+    docs = st.session_state.get("ingested_docs")
+    if docs is None:
+        docs = refresh_ingested_docs(show_error=False)
+    docs = docs or []
+    if docs:
+        doc_ids = [doc.get("id") for doc in docs if doc.get("id")]
+        current = st.session_state.get("selected_doc_id")
+        if doc_ids and current not in doc_ids:
+            st.session_state["selected_doc_id"] = doc_ids[0]
+        if doc_ids:
+            st.selectbox(
+                "Active document",
+                doc_ids,
+                format_func=lambda doc_id: next(
+                    (
+                        f"{doc.get('filename')} ({doc_id[:8]})"
+                        for doc in docs
+                        if doc.get("id") == doc_id
                     ),
-                    key="selected_doc_id",
-                    on_change=load_selected_document,
-                )
-        else:
-            st.caption("No PDFs ingested yet.")
-        st.header("Upload your data")
-        st.file_uploader(
-            "CSV & TEI files",
-            type=["csv", "xml"],
-            accept_multiple_files=True,
-            key="uploaded_files",
-            on_change=handle_upload,
-        )
+                    doc_id,
+                ),
+                key="selected_doc_id",
+                on_change=load_selected_document,
+            )
+    else:
+        st.caption("No PDFs ingested yet.")
 
-        st.header("Source & API Configuration")
-        st.text_input(
-            "Blablador API Key",
-            key="api_key",
-            on_change=lambda: st.session_state.pop("available_models", None),
-        )
-        st.text_input(
-            "Blablador Base URL",
-            key="api_base",
-            on_change=lambda: st.session_state.pop("available_models", None),
-        )
-        st.text_input("Citation API URL", key="api_url")
+    active = st.session_state.get("active_document") or {}
+    doc_id = st.session_state.get("selected_doc_id")
+    if doc_id and active.get("id") != doc_id:
+        active = load_selected_document(show_error=False) or {}
+    if doc_id:
+        action_cols = st.columns([1, 1], gap="small")
+        with action_cols[0]:
+            if st.button("Extract", key="left-extract"):
+                api_url = st.session_state.get("api_url", "http://localhost:8000")
+                with st.spinner("Running extraction..."):
+                    try:
+                        trigger_extraction(api_url, doc_id)
+                        st.session_state["active_document"] = load_selected_document(
+                            show_error=False
+                        )
+                        st.success("Extraction complete.")
+                    except RuntimeError as exc:
+                        st.error(f"Extraction failed: {exc}")
+        with action_cols[1]:
+            if st.button("Resolve", key="left-resolve"):
+                api_url = st.session_state.get("api_url", "http://localhost:8000")
+                with st.spinner("Resolving references..."):
+                    try:
+                        trigger_resolution(api_url, doc_id)
+                        st.session_state["active_document"] = load_selected_document(
+                            show_error=False
+                        )
+                        st.success("Resolution complete.")
+                    except RuntimeError as exc:
+                        st.warning(_resolution_error_message(exc))
+        if active:
+            st.caption(
+                f"{active.get('filename')} • {active.get('status')} • {doc_id[:8]}"
+            )
 
-        st.header("LLM for Rationale")
-        with st.spinner("Fetching models..."):
-            if "available_models" not in st.session_state:
-                st.session_state.available_models = get_responsive_models()
-        model_selector(
-            "LLM model",
-            "selected_model",
-            st.session_state.available_models,
-            allow_custom=False,
-        )
+    st.markdown("**Legacy upload (CSV + TEI)**")
+    st.file_uploader(
+        "CSV & TEI files",
+        type=["csv", "xml"],
+        accept_multiple_files=True,
+        key="uploaded_files",
+        on_change=handle_upload,
+    )
 
-        st.header("Embedding Model")
-        embed_choices = get_models("embed") or list_local_models()
-        if settings.EMBED_MODEL not in embed_choices:
-            embed_choices.insert(0, settings.EMBED_MODEL)
-        model_selector("Embedding model", "embed_model", embed_choices)
-        add_model("embed", st.session_state.embed_model)
-
-        st.header("FAISS Retrieval")
-        st.number_input(
-            "Max initial sentences",
-            min_value=1,
-            key="max_sentences",
-            on_change=reset_segmentation,
-        )
-        st.slider(
-            "FAISS min similarity",
-            0.0,
-            1.0,
-            key="faiss_min_score",
-            on_change=reset_segmentation,
-        )
-
-        st.header("Reranker")
-        rerank_choices = get_models("reranker") or [settings.RERANKER_MODEL]
-        model_selector("Reranker model", "reranker_model", rerank_choices)
-        add_model("reranker", st.session_state.reranker_model)
-        st.number_input(
-            "Reranker top-K",
-            min_value=1,
-            key="reranker_top_k",
-        )
-
-        st.header("NLI Model")
-        nli_choices = get_models("nli") or [settings.NLI_MODEL]
-        model_selector("NLI model", "nli_model", nli_choices)
-        add_model("nli", st.session_state.nli_model)
-        st.slider(
-            "NLI confidence threshold",
-            0.0,
-            1.0,
-            key="nli_threshold",
-            on_change=reset_segmentation,
-        )
-
-        st.button(
-            "Start segmentation",
-            on_click=lambda: (
-                st.session_state.__setitem__("started", True),
-                st.session_state.__setitem__("seg_requested", True),
-            ),
-        )
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
-def draw_ingestion_panel():
+def draw_workspace() -> None:
+    left, center, right = st.columns([3, 6, 4], gap="large")
+    with left:
+        render_workspace_left_pane()
+    draw_ingestion_panel(center=center, right=right)
+
+
+def draw_ingestion_panel(*, center, right) -> None:
     # Restore selected document from query params (clicking citation chips
     # navigates with ?doc=...&cite=...).
     try:
@@ -2760,8 +2887,8 @@ def draw_ingestion_panel():
             load_selected_document(show_error=False)
     except Exception:
         pass
-    inject_judgment_styles()
-    st.subheader("PDF Ingestion")
+    # Ingestion controls live in the left pane; this function hosts the
+    # center (Document/Review) and right (collector) panes.
     docs = st.session_state.get("ingested_docs")
     if docs is None:
         docs = refresh_ingested_docs(show_error=True)
@@ -2769,97 +2896,67 @@ def draw_ingestion_panel():
         # One more attempt in case we landed here via a chip click.
         docs = refresh_ingested_docs(show_error=True)
         if not docs:
-            st.info("Upload a PDF from the sidebar to begin.")
+            with center:
+                st.info("Upload a PDF in the left pane to begin.")
+            with right:
+                st.info("Select a citation to build a citing-span list.")
             return
     doc_id = st.session_state.get("selected_doc_id")
     if not doc_id:
-        st.info("Select a PDF to view details.")
+        with center:
+            st.info("Select a PDF to view details.")
         return
     document = st.session_state.get("active_document")
     if not document or document.get("id") != doc_id:
         document = load_selected_document(show_error=False)
     if not document:
-        st.info("Select a PDF to view details.")
+        with center:
+            st.info("Select a PDF to view details.")
         return
 
-    col_action, col_status = st.columns([1, 3])
-    with col_action:
-        if st.button("Run Extraction"):
-            api_url = st.session_state.get("api_url", "http://localhost:8000")
-            with st.spinner("Running extraction..."):
-                try:
-                    trigger_extraction(api_url, doc_id)
-                    document = load_selected_document(show_error=False)
-                    st.success("Extraction complete.")
-                except RuntimeError as exc:
-                    st.error(f"Extraction failed: {exc}")
-        if st.button("Resolve References"):
-            api_url = st.session_state.get("api_url", "http://localhost:8000")
-            with st.spinner("Resolving references..."):
-                try:
-                    trigger_resolution(api_url, doc_id)
-                    document = load_selected_document(show_error=False)
-                    st.success("Resolution complete.")
-                except RuntimeError as exc:
-                    st.warning(_resolution_error_message(exc))
-    with col_status:
-        st.write(
-            {
-                "Filename": document.get("filename"),
-                "Uploaded": document.get("uploaded_at"),
-                "Status": document.get("status"),
-                "Size (bytes)": document.get("size_bytes"),
-            }
-        )
-
-    extraction = document.get("extraction") or {}
-    extraction_data = extraction.get("data") or {}
-    resolution = document.get("resolution") or {}
-    resolution_data = resolution.get("data") or []
-
-    with st.expander("Metadata", expanded=True):
-        metadata = extraction_data.get("metadata") or {}
-        if metadata:
-            rows = [
-                {"Field": key, "Value": stringify_value(value)}
-                for key, value in metadata.items()
-            ]
-            st.dataframe(pd.DataFrame(rows), width="stretch")
-        else:
-            st.info(
-                "No metadata available yet. Run extraction to populate this section."
+    # Keep extraction/citation details available, but tuck them away to keep the
+    # workspace vertically dense.
+    with center:
+        extraction = document.get("extraction") or {}
+        extraction_data = extraction.get("data") or {}
+        resolution = document.get("resolution") or {}
+        resolution_data = resolution.get("data") or []
+        with st.expander("Document details", expanded=False):
+            st.write(
+                {
+                    "Filename": document.get("filename"),
+                    "Uploaded": document.get("uploaded_at"),
+                    "Status": document.get("status"),
+                    "Size (bytes)": document.get("size_bytes"),
+                }
             )
-
-    with st.expander("Citations"):
-        citations = extraction_data.get("citations") or []
-        if citations:
-            st.dataframe(
-                pd.DataFrame(normalize_records(citations)),
-                width="stretch",
-            )
-        else:
-            st.info("No citations extracted yet.")
-
-    with st.expander("Bibliography"):
-        references = extraction_data.get("references") or []
-        if references:
-            st.dataframe(
-                pd.DataFrame(normalize_records(references)),
-                width="stretch",
-            )
-        else:
-            st.info("No bibliography entries extracted yet.")
-
-    with st.expander("Resolution Results"):
-        if resolution_data:
-            st.dataframe(
-                pd.DataFrame(normalize_records(resolution_data)),
-                width="stretch",
-            )
-        else:
-            st.info("No resolved references yet. Run resolution after extraction.")
-
-    st.divider()
+            metadata = extraction_data.get("metadata") or {}
+            if metadata:
+                rows = [
+                    {"Field": key, "Value": stringify_value(value)}
+                    for key, value in metadata.items()
+                ]
+                st.dataframe(pd.DataFrame(rows), width="stretch")
+            citations = extraction_data.get("citations") or []
+            if citations:
+                st.markdown("**Citations**")
+                st.dataframe(
+                    pd.DataFrame(normalize_records(citations)),
+                    width="stretch",
+                )
+            references = extraction_data.get("references") or []
+            if references:
+                st.markdown("**Bibliography**")
+                st.dataframe(
+                    pd.DataFrame(normalize_records(references)),
+                    width="stretch",
+                )
+            if resolution_data:
+                st.markdown("**Resolution results**")
+                st.dataframe(
+                    pd.DataFrame(normalize_records(resolution_data)),
+                    width="stretch",
+                )
 
     selected_index = st.session_state.get("citation_selected_index")
     selected_target = normalize_target_id(
@@ -2898,18 +2995,21 @@ def draw_ingestion_panel():
         )
         if has_consolidated and summary:
             header = summary
-    st.subheader(header)
+    with center:
+        st.caption(header)
 
     api_url = st.session_state.get("api_url", "http://localhost:8000")
     try:
         body_payload = get_document_body(api_url, doc_id)
     except RuntimeError as exc:
-        st.info("Run extraction to populate the document text.")
-        st.caption(str(exc))
+        with center:
+            st.info("Run extraction to populate the document text.")
+            st.caption(str(exc))
         return
     paragraphs = body_payload.get("paragraphs") or []
     if not paragraphs:
-        st.info("Run extraction to populate the document text.")
+        with center:
+            st.info("Run extraction to populate the document text.")
         return
 
     def select_citation(index: int, target_id: str | None) -> None:
@@ -3106,60 +3206,63 @@ def draw_ingestion_panel():
 
     pending = st.session_state.get("pending_citation_selection")
     if pending:
-        st.warning("You have unsaved claim edits. Save before switching citations?")
-        action_cols = st.columns([1, 1, 2])
-        with action_cols[0]:
-            if st.button("Save + switch", key="pending-cite-save"):
-                current_idx = st.session_state.get("citation_selected_index")
-                current_tgt = normalize_target_id(
-                    st.session_state.get("citation_selected_target")
-                )
-                if current_idx is not None:
-                    _save_claim_lines_for_citation(int(current_idx), current_tgt)
-                select_citation(
-                    int(pending["citation_index"]), pending.get("target_id")
-                )
-                _set_query_params(
-                    doc=doc_id,
-                    cite=int(pending["citation_index"]),
-                    target=pending.get("target_id"),
-                )
-                st.session_state.pop("pending_citation_selection", None)
-                _rerun()
-        with action_cols[1]:
-            if st.button("Discard + switch", key="pending-cite-discard"):
-                current_idx = st.session_state.get("citation_selected_index")
-                if current_idx is not None:
-                    cite_idx = int(current_idx)
-                    stored = st.session_state.get("citation_sentence_segments", {}).get(
-                        str(cite_idx),
-                        [],
+        with center:
+            st.warning("You have unsaved claim edits. Save before switching citations?")
+            action_cols = st.columns([1, 1, 2])
+            with action_cols[0]:
+                if st.button("Save + switch", key="pending-cite-save"):
+                    current_idx = st.session_state.get("citation_selected_index")
+                    current_tgt = normalize_target_id(
+                        st.session_state.get("citation_selected_target")
                     )
-                    st.session_state[
-                        canonical_segments_key(citation_index=cite_idx)
-                    ] = "\n".join(stored or [])
-                select_citation(
-                    int(pending["citation_index"]), pending.get("target_id")
-                )
-                _set_query_params(
-                    doc=doc_id,
-                    cite=int(pending["citation_index"]),
-                    target=pending.get("target_id"),
-                )
-                st.session_state.pop("pending_citation_selection", None)
-                _rerun()
-        with action_cols[2]:
-            if st.button("Cancel", key="pending-cite-cancel"):
-                current_idx = st.session_state.get("citation_selected_index")
-                current_tgt = normalize_target_id(
-                    st.session_state.get("citation_selected_target")
-                )
-                _set_query_params(
-                    doc=doc_id,
-                    cite=int(current_idx) if current_idx is not None else None,
-                    target=current_tgt,
-                )
-                st.session_state.pop("pending_citation_selection", None)
+                    if current_idx is not None:
+                        _save_claim_lines_for_citation(int(current_idx), current_tgt)
+                    select_citation(
+                        int(pending["citation_index"]), pending.get("target_id")
+                    )
+                    _set_query_params(
+                        doc=doc_id,
+                        cite=int(pending["citation_index"]),
+                        target=pending.get("target_id"),
+                    )
+                    st.session_state.pop("pending_citation_selection", None)
+                    _rerun()
+            with action_cols[1]:
+                if st.button("Discard + switch", key="pending-cite-discard"):
+                    current_idx = st.session_state.get("citation_selected_index")
+                    if current_idx is not None:
+                        cite_idx = int(current_idx)
+                        stored = st.session_state.get(
+                            "citation_sentence_segments", {}
+                        ).get(
+                            str(cite_idx),
+                            [],
+                        )
+                        st.session_state[
+                            canonical_segments_key(citation_index=cite_idx)
+                        ] = "\n".join(stored or [])
+                    select_citation(
+                        int(pending["citation_index"]), pending.get("target_id")
+                    )
+                    _set_query_params(
+                        doc=doc_id,
+                        cite=int(pending["citation_index"]),
+                        target=pending.get("target_id"),
+                    )
+                    st.session_state.pop("pending_citation_selection", None)
+                    _rerun()
+            with action_cols[2]:
+                if st.button("Cancel", key="pending-cite-cancel"):
+                    current_idx = st.session_state.get("citation_selected_index")
+                    current_tgt = normalize_target_id(
+                        st.session_state.get("citation_selected_target")
+                    )
+                    _set_query_params(
+                        doc=doc_id,
+                        cite=int(current_idx) if current_idx is not None else None,
+                        target=current_tgt,
+                    )
+                    st.session_state.pop("pending_citation_selection", None)
 
     if pending is None and param_cite is not None:
         try:
@@ -3203,8 +3306,6 @@ def draw_ingestion_panel():
         except ValueError:
             pass
 
-    main_col, rail_col = st.columns([7, 5], gap="large")
-
     # One-shot UI intent triggered by subpanels.
     chase_intent = st.session_state.pop("chase_intent", None)
     if chase_intent and chase_intent.get("doc_id") == doc_id:
@@ -3214,7 +3315,7 @@ def draw_ingestion_panel():
             cite_idx = None
         tgt = normalize_target_id(chase_intent.get("target_id"))
         if cite_idx is not None:
-            st.session_state["center_view"] = "Chasing claims"
+            st.session_state[WORKSPACE_ACTIVE_TAB] = WORKSPACE_TAB_REVIEW
             _set_query_params(doc=doc_id, cite=cite_idx, target=tgt)
             select_citation(cite_idx, tgt)
 
@@ -3252,7 +3353,15 @@ def draw_ingestion_panel():
             rerun=_rerun,
         )
 
-    with rail_col:
+    with right:
+        st.markdown(
+            '<div class="ws-pane-header">'
+            '<div class="ws-pane-header__title">Citing spans</div>'
+            '<div class="ws-pane-header__meta">Collector</div>'
+            "</div>",
+            unsafe_allow_html=True,
+        )
+        st.markdown('<div class="ws-pane-body">', unsafe_allow_html=True)
         st.markdown('<div class="citation-workflow-rail">', unsafe_allow_html=True)
 
         # Keep the currently selected citation at the top of the queue.
@@ -3319,8 +3428,8 @@ def draw_ingestion_panel():
             _render_chasing_panel(int(cite_idx), normalize_target_id(tgt), scope=scope)
 
         chase_queue_component.render(
-            title="Chase queue",
-            caption="Queue up citations to segment + chase while PDFs process.",
+            title="Citing spans",
+            caption="Queue up citing spans to segment + chase while sources process.",
             followed=followed,
             selected_index=int(selected_index) if selected_index is not None else None,
             selected_target=normalize_target_id(selected_target),
@@ -3334,18 +3443,27 @@ def draw_ingestion_panel():
         )
 
         st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
 
-    with main_col:
-        st.session_state.setdefault("center_view", "Document text")
-        center_view = st.radio(
-            "Center view",
-            ["Document text", "Chasing claims", "Node graph"],
-            key="center_view",
+    with center:
+        st.markdown(
+            '<div class="ws-pane-header">'
+            '<div class="ws-pane-header__title">Work area</div>'
+            '<div class="ws-pane-header__meta">Document / Review</div>'
+            "</div>",
+            unsafe_allow_html=True,
+        )
+        st.markdown('<div class="ws-pane-body">', unsafe_allow_html=True)
+        st.session_state.setdefault(WORKSPACE_ACTIVE_TAB, WORKSPACE_TAB_DOCUMENT)
+        workspace_tab = st.radio(
+            "Workspace tab",
+            [WORKSPACE_TAB_DOCUMENT, WORKSPACE_TAB_REVIEW],
+            key=WORKSPACE_ACTIVE_TAB,
             horizontal=True,
             label_visibility="collapsed",
         )
 
-        if center_view == "Document text":
+        if workspace_tab == WORKSPACE_TAB_DOCUMENT:
             st.caption("Click an in-text citation chip to inspect context.")
 
             j_store = judgment_store.JudgmentStore()
@@ -3553,8 +3671,8 @@ def draw_ingestion_panel():
                                         _rerun()
                                     else:
                                         st.session_state[
-                                            "center_view"
-                                        ] = "Chasing claims"
+                                            WORKSPACE_ACTIVE_TAB
+                                        ] = WORKSPACE_TAB_REVIEW
                                         _set_query_params(
                                             doc=doc_id,
                                             cite=cite_idx,
@@ -3562,92 +3680,97 @@ def draw_ingestion_panel():
                                         )
                                         _rerun()
 
-        elif center_view == "Chasing claims":
+        else:
             st.markdown("#### Chasing claims")
             if selected_index is None:
-                st.info("Select a citation in Document text to segment and chase.")
+                st.info("Select a citation in Document to segment and chase.")
             else:
                 _render_chasing_panel(
                     int(selected_index),
                     selected_target,
                     scope="tab",
                 )
-        else:
-            st.markdown("#### Citation graph")
-            if selected_target is None:
-                st.info("Select a citation callout to view the graph.")
-            else:
-                context_snapshot = st.session_state.get("citation_context") or {}
-                resolution_entry = context_snapshot.get("resolution") or {}
-                reference_entry = context_snapshot.get("reference") or {}
-                resolved_identifier = (
-                    resolution_entry.get("openalex_id")
-                    or resolution_entry.get("openalex_work_id")
-                    or resolution_entry.get("doi")
-                    or reference_entry.get("doi")
-                )
-                if resolved_identifier:
-                    st.caption(f"Resolved identifier: {resolved_identifier}")
+            st.divider()
+            render_attachment_workspace()
+            render_evidence_panel()
+
+            with st.expander("Citation graph", expanded=False):
+                if selected_target is None:
+                    st.info("Select a citation callout to view the graph.")
                 else:
-                    st.caption("No DOI resolved for this citation yet.")
-                st.caption(f"Target ID: {selected_target}")
-                st.slider(
-                    "Depth",
-                    min_value=1,
-                    max_value=3,
-                    key="citation_graph_depth",
-                )
-                st.number_input(
-                    "Node cap",
-                    min_value=5,
-                    max_value=50,
-                    key="citation_graph_max_nodes",
-                )
-                graph_request = {
-                    "api_url": api_url,
-                    "doc_id": doc_id,
-                    "target_id": selected_target,
-                    "doi": resolved_identifier,
-                    "depth": int(st.session_state.get("citation_graph_depth", 1)),
-                    "max_nodes": int(
-                        st.session_state.get("citation_graph_max_nodes", 10)
-                    ),
-                }
-                if st.button("Load citation graph", key="citation-graph-load"):
-                    load_citation_graph(graph_request)
-                graph_key = (
-                    graph_request["doc_id"],
-                    graph_request["target_id"],
-                    graph_request.get("doi"),
-                    graph_request["depth"],
-                    graph_request["max_nodes"],
-                )
-                graph_data = None
-                if st.session_state.get("citation_graph_key") == graph_key:
-                    graph_data = st.session_state.get("citation_graph")
-                if graph_data:
-                    nodes = graph_data.get("nodes") or []
-                    if not nodes:
-                        st.info("No data available for this citation graph.")
+                    context_snapshot = st.session_state.get("citation_context") or {}
+                    resolution_entry = context_snapshot.get("resolution") or {}
+                    reference_entry = context_snapshot.get("reference") or {}
+                    resolved_identifier = (
+                        resolution_entry.get("openalex_id")
+                        or resolution_entry.get("openalex_work_id")
+                        or resolution_entry.get("doi")
+                        or reference_entry.get("doi")
+                    )
+                    if resolved_identifier:
+                        st.caption(f"Resolved identifier: {resolved_identifier}")
                     else:
-                        graph = build_citation_graphviz(graph_data)
-                        st.graphviz_chart(graph)
-                else:
-                    st.caption("Load the citation graph to explore references.")
-                if st.session_state.get("citation_graph_error"):
-                    error_message = st.session_state.get("citation_graph_error", "")
-                    if "OpenAlex request failed (404)" in error_message:
-                        st.caption(
-                            "OpenAlex could not find this work. "
-                            "Check that reference resolution populated a DOI "
-                            "or OpenAlex ID."
-                        )
-                    if st.button("Retry graph", key="citation-graph-retry"):
-                        last_request = st.session_state.get(
-                            "citation_last_graph_request"
-                        )
-                        if last_request:
-                            load_citation_graph(last_request)
+                        st.caption("No DOI resolved for this citation yet.")
+                    st.caption(f"Target ID: {selected_target}")
+                    st.slider(
+                        "Depth",
+                        min_value=1,
+                        max_value=3,
+                        key="citation_graph_depth",
+                    )
+                    st.number_input(
+                        "Node cap",
+                        min_value=5,
+                        max_value=50,
+                        key="citation_graph_max_nodes",
+                    )
+                    graph_request = {
+                        "api_url": api_url,
+                        "doc_id": doc_id,
+                        "target_id": selected_target,
+                        "doi": resolved_identifier,
+                        "depth": int(st.session_state.get("citation_graph_depth", 1)),
+                        "max_nodes": int(
+                            st.session_state.get("citation_graph_max_nodes", 10)
+                        ),
+                    }
+                    if st.button("Load citation graph", key="citation-graph-load"):
+                        load_citation_graph(graph_request)
+                    graph_key = (
+                        graph_request["doc_id"],
+                        graph_request["target_id"],
+                        graph_request.get("doi"),
+                        graph_request["depth"],
+                        graph_request["max_nodes"],
+                    )
+                    graph_data = None
+                    if st.session_state.get("citation_graph_key") == graph_key:
+                        graph_data = st.session_state.get("citation_graph")
+                    if graph_data:
+                        nodes = graph_data.get("nodes") or []
+                        if not nodes:
+                            st.info("No data available for this citation graph.")
+                        else:
+                            graph = build_citation_graphviz(graph_data)
+                            st.graphviz_chart(graph)
+                    else:
+                        st.caption("Load the citation graph to explore references.")
+                    if st.session_state.get("citation_graph_error"):
+                        error_message = st.session_state.get("citation_graph_error", "")
+                        if "OpenAlex request failed (404)" in error_message:
+                            st.caption(
+                                "OpenAlex could not find this work. "
+                                "Check that reference resolution populated a DOI "
+                                "or OpenAlex ID."
+                            )
+                        if st.button("Retry graph", key="citation-graph-retry"):
+                            last_request = st.session_state.get(
+                                "citation_last_graph_request"
+                            )
+                            if last_request:
+                                load_citation_graph(last_request)
+
+        st.markdown("</div>", unsafe_allow_html=True)
 
 
 def draw_main():
@@ -4106,8 +4229,11 @@ def run_prebuild():
 
 
 def main():
-    draw_sidebar()
-    draw_main()
+    init_session_state()
+    inject_workspace_styles(dense=bool(st.session_state.get(WORKSPACE_DENSE_MODE)))
+    inject_judgment_styles()
+    inject_evidence_review_styles()
+    draw_workspace()
 
 
 if __name__ == "__main__":

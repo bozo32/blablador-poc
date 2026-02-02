@@ -339,8 +339,10 @@ class AttachmentArtifactPaths(BaseModel):
 
 class AttachmentStatus(BaseModel):
     id: str
-    claim_id: str
+    claim_id: Optional[str] = None
     doc_id: Optional[str] = None
+    citation_index: Optional[int] = None
+    target_id: Optional[str] = None
     filename: str
     size: Optional[int] = None
     status: str
@@ -348,6 +350,7 @@ class AttachmentStatus(BaseModel):
     uploaded_at: str
     updated_at: str
     parsed_at: Optional[str] = None
+    archived: Optional[bool] = None
     timeline: List[AttachmentTimelineEvent] = Field(default_factory=list)
     history: List[AttachmentTimelineEvent] = Field(default_factory=list)
     reference_hint: Optional[dict] = None
@@ -371,6 +374,29 @@ class AttachmentCreateRequest(BaseModel):
         None,
         description="Optional claim text to persist with the attachment",
     )
+
+
+class AttachmentGlobalCreateRequest(BaseModel):
+    claim_id: Optional[str] = None
+    doc_id: Optional[str] = None
+    local_path: str
+    filename: Optional[str] = None
+    size_bytes: Optional[int] = None
+    reference_hint: Optional[dict] = None
+    claim_text: Optional[str] = Field(
+        None,
+        description="Optional claim text to persist with the attachment",
+    )
+    citation_index: Optional[int] = None
+    target_id: Optional[str] = None
+
+
+class AttachmentUpdateRequest(BaseModel):
+    claim_id: Optional[str] = None
+    doc_id: Optional[str] = None
+    citation_index: Optional[int] = None
+    target_id: Optional[str] = None
+    archived: Optional[bool] = None
 
 
 class AttachmentResponse(BaseModel):

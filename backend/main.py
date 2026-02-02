@@ -305,6 +305,96 @@ def create_claim_attachment(
     return {"attachment": _serialize_attachment(public_record)}
 
 
+@app.post("/attachments", response_model=schemas.AttachmentResponse)
+def create_global_attachment(
+    payload: schemas.AttachmentGlobalCreateRequest,
+    background_tasks: BackgroundTasks,
+):
+    try:
+        record = attachment_store.create_attachment(
+            claim_id=payload.claim_id,
+            doc_id=payload.doc_id,
+            local_path=payload.local_path,
+            filename=payload.filename,
+            size_bytes=payload.size_bytes,
+            reference_hint=payload.reference_hint,
+            claim_text=payload.claim_text,
+            citation_index=payload.citation_index,
+            target_id=payload.target_id,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    public_record = attachment_store.public_status(record["id"])
+    if not background_state.get_state().get("paused"):
+        if background_tasks is not None:
+            background_tasks.add_task(
+                attachment_pipeline.process_attachment, record["id"]
+            )
+        else:
+            attachment_pipeline.enqueue_processing(record["id"])
+    return {"attachment": _serialize_attachment(public_record)}
+
+
+@app.get("/attachments", response_model=schemas.AttachmentListResponse)
+def list_global_attachments(archived: bool = False):
+    # Default: return only non-archived. If archived=true: include archived.
+    store_archived: Optional[bool] = None if archived else False
+    records = attachment_store.list_attachments(archived=store_archived, public=True)
+    return {
+        "attachments": [schemas.AttachmentStatus(**rec) for rec in records],
+    }
+
+
+@app.patch("/attachments/{attachment_id}", response_model=schemas.AttachmentResponse)
+def patch_attachment_status(
+    attachment_id: str, payload: schemas.AttachmentUpdateRequest
+):
+    record = attachment_store.get_attachment(attachment_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+
+    fields = set(getattr(payload, "model_fields_set", set()))
+
+    if "archived" in fields:
+        if payload.archived is None:
+            raise HTTPException(status_code=422, detail="archived must be a boolean")
+        attachment_store.set_archived(attachment_id, archived=payload.archived)
+        record = attachment_store.get_attachment(attachment_id) or record
+
+    placement_fields = {"claim_id", "doc_id", "citation_index", "target_id"}
+    if fields & placement_fields:
+        next_claim_id = (
+            payload.claim_id if "claim_id" in fields else record.get("claim_id")
+        )
+        next_doc_id = payload.doc_id if "doc_id" in fields else record.get("doc_id")
+        next_citation_index = (
+            payload.citation_index
+            if "citation_index" in fields
+            else record.get("citation_index")
+        )
+        next_target_id = (
+            payload.target_id if "target_id" in fields else record.get("target_id")
+        )
+
+        if (
+            next_claim_id != record.get("claim_id")
+            or next_doc_id != record.get("doc_id")
+            or next_citation_index != record.get("citation_index")
+            or next_target_id != record.get("target_id")
+        ):
+            attachment_store.set_placement(
+                attachment_id,
+                claim_id=next_claim_id,
+                doc_id=next_doc_id,
+                citation_index=next_citation_index,
+                target_id=next_target_id,
+            )
+
+    public_record = attachment_store.public_status(attachment_id)
+    return {"attachment": _serialize_attachment(public_record)}
+
+
 @app.get(
     "/claims/{claim_id}/attachments/status",
     response_model=schemas.AttachmentListResponse,

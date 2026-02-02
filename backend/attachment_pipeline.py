@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from lxml import etree
 
-from backend import attachment_store, extraction, grobid_client, utils
+from backend import attachment_store, background_state, extraction, grobid_client, utils
 from backend.evidence_matching.service import evidence_service
 from backend.settings import settings
 
@@ -232,6 +232,18 @@ def process_attachment(
 
 
 def enqueue_processing(attachment_id: str) -> None:
+    state = background_state.get_state()
+    if state.get("paused"):
+        try:
+            attachment_store.update_attachment(
+                attachment_id,
+                status=attachment_store.STATUS_PENDING,
+                timeline_event="paused",
+                timeline_detail=state.get("reason"),
+            )
+        except Exception:  # pragma: no cover - best effort
+            logger.exception("Unable to mark attachment %s as paused", attachment_id)
+        return
     thread = threading.Thread(
         target=process_attachment,
         args=(attachment_id,),

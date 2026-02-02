@@ -9,7 +9,7 @@ from collections import deque
 from typing import Any, Callable, Sequence
 from uuid import uuid4
 
-from backend import attachment_store
+from backend import attachment_store, background_state
 from backend.settings import AppSettings, settings as app_settings
 
 from . import deterministic_matcher, loaders, serializers
@@ -46,6 +46,25 @@ class EvidenceMatchingService:
         self._active_claims: dict[str, dict[str, Any]] = {}
         self._claim_text_cache: dict[str, str] = {}
 
+    def _background_paused(self) -> bool:
+        try:
+            return bool(background_state.get_state().get("paused"))
+        except Exception:  # pragma: no cover - pause state failures shouldn't block
+            return False
+
+    def _kick_dequeue_locked(self) -> None:
+        """Start queued work when not paused and capacity is available.
+
+        Must be called with self._lock held.
+        """
+        if self._background_paused():
+            return
+        while len(self._active_claims) < self.max_workers:
+            next_job = self._dequeue_job()
+            if not next_job:
+                return
+            self._start_job(next_job)
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -65,6 +84,9 @@ class EvidenceMatchingService:
 
         if claim_text and str(claim_text).strip():
             self._claim_text_cache[claim_id] = str(claim_text).strip()
+
+        with self._lock:
+            self._kick_dequeue_locked()
 
         latest = self.store.latest_run(claim_id)
         snapshot = self._attachment_snapshot(claim_id)
@@ -120,6 +142,9 @@ class EvidenceMatchingService:
             if label_norm in {"neutral", "unknown", "none"}:
                 return "neutral"
             return label_norm
+
+        with self._lock:
+            self._kick_dequeue_locked()
 
         latest = self.store.latest_run(claim_id)
         if not latest:
@@ -192,6 +217,8 @@ class EvidenceMatchingService:
                 position = 0
                 status = "running"
 
+            self._kick_dequeue_locked()
+
         return {
             "job_id": job["job_id"],
             "status": status,
@@ -204,12 +231,34 @@ class EvidenceMatchingService:
     ) -> dict:
         """Best-effort auto-rerun invoked by attachment lifecycle hooks."""
         resolved_claim_text = claim_text or self._claim_text_from_attachments(claim_id)
+
+        if self._background_paused():
+            job = {
+                "job_id": uuid4().hex,
+                "claim_id": claim_id,
+                "claim_text": resolved_claim_text,
+                "note": "auto-attachment",
+                "advanced_settings": {},
+                "requested_at": _utcnow(),
+            }
+            with self._lock:
+                self._pending_jobs.append(job)
+                position = self._queue_position(claim_id, job["job_id"])
+            return {
+                "job_id": job["job_id"],
+                "status": "queued",
+                "position": position,
+                "locked": True,
+            }
+
         return self.request_rerun(
             claim_id, claim_text=resolved_claim_text, note="auto-attachment"
         )
 
     def get_history(self, claim_id: str) -> list[dict]:
         """Expose run history for API responses."""
+        with self._lock:
+            self._kick_dequeue_locked()
         return self.store.history(claim_id)
 
     # ------------------------------------------------------------------
@@ -252,9 +301,7 @@ class EvidenceMatchingService:
         finally:
             with self._lock:
                 self._active_claims.pop(claim_id, None)
-                next_job = self._dequeue_job()
-                if next_job:
-                    self._start_job(next_job)
+                self._kick_dequeue_locked()
 
     def _dequeue_job(self) -> dict[str, Any] | None:
         while self._pending_jobs:

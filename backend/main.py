@@ -18,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
 from backend import (
+    background_state,
     attachment_pipeline,
     attachment_store,
     attachment_spans,
@@ -33,7 +34,7 @@ from backend import (
 )
 from backend.nli import assess
 from backend.evidence_matching.service import evidence_service
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 try:
     from transformers import AdamW  # noqa: F401
@@ -80,11 +81,29 @@ SOURCE_DIR = Path(os.environ.get("SOURCE_DIR", CSV_PATH.parent / "source")).reso
 
 @app.on_event("startup")
 async def startup_event():
+    if background_state.get_state().get("paused"):
+        logger.info("Background work is paused; skipping resumable attachment startup")
+        return
     pending = attachment_store.list_resumable()
     if pending:
         logger.info("Resuming %s attachment(s) from previous session", len(pending))
     for record in pending:
         attachment_pipeline.enqueue_processing(record["id"])
+
+
+class BackgroundPauseRequest(BaseModel):
+    paused: bool
+    reason: Optional[str] = None
+
+
+@app.get("/background/state")
+def get_background_state():
+    return background_state.get_state()
+
+
+@app.post("/background/pause")
+def set_background_pause(payload: BackgroundPauseRequest):
+    return background_state.set_paused(payload.paused, reason=payload.reason)
 
 
 app.add_middleware(

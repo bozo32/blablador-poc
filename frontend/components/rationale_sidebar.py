@@ -16,12 +16,21 @@ SIDEBAR_STATE_KEY = "_evidence_sidebar_state"
 
 def build_progress_summary(candidates: Sequence[Dict[str, Any]]) -> Dict[str, float]:
     """Aggregate entail/contrad/neutral counts for the global progress bar."""
+
+    def _bucket(label: str | None) -> str:
+        value = (label or "").strip().lower()
+        if value in {"entail", "entails", "entailment"}:
+            return "entail"
+        if value in {"contradict", "contradicts", "contradiction", "refute", "refutes"}:
+            return "contradict"
+        return "neutral"
+
     counts = {"entail": 0, "contradict": 0, "neutral": 0}
     for candidate in candidates or []:
-        label = (candidate.get("label") or "unknown").lower()
+        label = _bucket(candidate.get("label"))
         if label == "entail":
             counts["entail"] += 1
-        elif label in {"contradict", "refute"}:
+        elif label == "contradict":
             counts["contradict"] += 1
         else:
             counts["neutral"] += 1

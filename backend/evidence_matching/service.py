@@ -44,6 +44,7 @@ class EvidenceMatchingService:
         self._lock = threading.Lock()
         self._pending_jobs: deque[dict[str, Any]] = deque()
         self._active_claims: dict[str, dict[str, Any]] = {}
+        self._claim_text_cache: dict[str, str] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -56,16 +57,33 @@ class EvidenceMatchingService:
         claim_text: str | None = None,
         cited_attachment_ids: Sequence[str] | None = None,
         force: bool = False,
+        execute: bool = True,
     ) -> dict:
         """Run the pipeline immediately when attachment state is stale."""
         if not claim_id:
             raise ValueError("claim_id is required")
+
+        if claim_text and str(claim_text).strip():
+            self._claim_text_cache[claim_id] = str(claim_text).strip()
+
         latest = self.store.latest_run(claim_id)
         snapshot = self._attachment_snapshot(claim_id)
         if not force and latest:
             previous_state = (latest.get("metadata") or {}).get("attachments_state")
             if previous_state == snapshot:
                 return latest
+
+        if not execute:
+            # Caller only wants to register claim_text and inspect current state.
+            # Avoid triggering expensive NLI work on read endpoints.
+            return latest or {
+                "claim_id": claim_id,
+                "run_id": None,
+                "created_at": None,
+                "metadata": {},
+                "summary": {"total": 0, "label_counts": {}},
+                "candidates": [],
+            }
 
         resolved_claim_text = self._resolve_claim_text(claim_id, claim_text, latest)
         return self._execute_run(
@@ -86,6 +104,23 @@ class EvidenceMatchingService:
         limit: int = 10,
     ) -> dict:
         """Return paginated candidates for a claim."""
+
+        def _normalize_label(value: str | None) -> str:
+            label_norm = (value or "").strip().lower()
+            if label_norm in {"entails", "entail", "entailment"}:
+                return "entail"
+            if label_norm in {
+                "contradicts",
+                "contradict",
+                "contradiction",
+                "refutes",
+                "refute",
+            }:
+                return "contradict"
+            if label_norm in {"neutral", "unknown", "none"}:
+                return "neutral"
+            return label_norm
+
         latest = self.store.latest_run(claim_id)
         if not latest:
             return {
@@ -99,17 +134,17 @@ class EvidenceMatchingService:
 
         candidates = list(latest.get("candidates", []))
         if label:
-            label_norm = label.lower()
+            desired = _normalize_label(label)
             candidates = [
                 cand
                 for cand in candidates
-                if (cand.get("label") or "").lower() == label_norm
+                if _normalize_label(cand.get("label")) == desired
             ]
         if not include_neutral:
             candidates = [
                 cand
                 for cand in candidates
-                if (cand.get("label") or "").lower() != "neutral"
+                if _normalize_label(cand.get("label")) != "neutral"
             ]
 
         total = len(candidates)
@@ -299,6 +334,9 @@ class EvidenceMatchingService:
             stored = (latest_run.get("metadata") or {}).get("claim_text")
             if stored:
                 return stored
+        cached = self._claim_text_cache.get(claim_id)
+        if cached:
+            return cached
         attachment_text = self._claim_text_from_attachments(claim_id)
         if attachment_text:
             return attachment_text

@@ -481,7 +481,7 @@ class EvidenceStore:
             "pinned_ids": [],
             "filters": {
                 "label": None,
-                "include_neutral": True,
+                "include_neutral": False,
                 "pinned_only": False,
             },
             "load_more_pages": 0,

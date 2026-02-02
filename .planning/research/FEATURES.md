@@ -99,6 +99,11 @@ Features to defer until product-market fit is established.
 - [ ] Smart citation classification at scale — model training/labeling overhead.
 - [ ] Multi-hop citation trails — heavy graph traversal and UI complexity.
 - [ ] Retraction/errata alerts — requires external data integration.
+- [ ] Open PDF at evidence location — from a candidate, open the local PDF at page/anchor (Preview/Skim integration) to speed verification.
+- [ ] Source-scoped attachments — store one uploaded source PDF once, then link it to multiple claim segments/citations without duplicating processing.
+- [ ] Phase 6 selection strictness — enforce primary-required for support/contradict and note-required for uncertain in the UI (backend already validates).
+- [ ] True document-order chase queue — sort chased items by TEI paragraph/sentence position (not just citation index).
+- [ ] Streamlit UX limitations — consider moving to a richer UI framework once core workflows stabilize (multi-pane interactions, inline click targets, complex layout control).
 
 ## Feature Prioritization Matrix
 

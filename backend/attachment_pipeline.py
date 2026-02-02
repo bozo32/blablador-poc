@@ -18,6 +18,32 @@ from backend.settings import settings
 logger = logging.getLogger(__name__)
 
 
+def _normalize_ws(value: str) -> str:
+    return " ".join(str(value or "").split()).strip()
+
+
+def _section_label(node: etree._Element) -> str:
+    """Best-effort section label for a TEI node."""
+    try:
+        if node.xpath("boolean(ancestor::tei:note)", namespaces=extraction.NS):
+            return "Footnote"
+        if node.xpath(
+            "boolean(ancestor::tei:listBibl | ancestor::tei:biblStruct)",
+            namespaces=extraction.NS,
+        ):
+            return "References"
+        head = node.xpath(
+            "string((ancestor::tei:div[tei:head][1]/tei:head)[1])",
+            namespaces=extraction.NS,
+        )
+        cleaned = _normalize_ws(head)
+        if cleaned:
+            return cleaned[:80]
+    except Exception:
+        return "Body"
+    return "Body"
+
+
 def _sentence_nodes(tei_xml: str) -> List[etree._Element]:
     root = etree.fromstring(
         tei_xml.encode("utf-8"), parser=etree.XMLParser(recover=True)
@@ -44,28 +70,74 @@ def _extract_sentences(tei_xml: str) -> List[dict]:
         page_nodes = node.xpath("ancestor::tei:pb[1]/@n", namespaces=extraction.NS)
         if page_nodes:
             page = page_nodes[0]
+        section = _section_label(node)
         sentences.append(
             {
                 "sentence_id": sentence_id,
                 "text": text,
                 "page": page,
+                "section": section,
                 "position": idx,
             }
         )
     if sentences:
         return sentences
 
-    # Fallback when TEI lacks <s> nodes – chunk by paragraphs.
-    fallback_text = extraction._collapse_ws(tei_xml)  # type: ignore[attr-defined]
-    if fallback_text:
-        return [
+    # Fallback when TEI lacks <s> nodes (common for some GROBID outputs):
+    # extract paragraph-level text from the TEI body.
+    root = etree.fromstring(
+        tei_xml.encode("utf-8"), parser=etree.XMLParser(recover=True)
+    )
+    para_xpath = (
+        "//tei:text//tei:body//*[self::tei:p or self::tei:item or self::tei:cell]"
+    )
+    para_nodes: List[etree._Element] = list(
+        root.xpath(para_xpath, namespaces=extraction.NS)
+    )
+    fallback: List[dict] = []
+    for idx, para in enumerate(para_nodes):
+        text = extraction._text_content(para).strip()  # type: ignore[attr-defined]
+        if not text:
+            continue
+        sentence_id = (
+            para.get(f"{{{extraction.XML_NS}}}id")
+            or para.get("xml:id")
+            or f"auto-sent-{idx}"
+        )
+        page = None
+        page_nodes = para.xpath("ancestor::tei:pb[1]/@n", namespaces=extraction.NS)
+        if page_nodes:
+            page = page_nodes[0]
+        section = _section_label(para)
+        fallback.append(
             {
-                "sentence_id": f"sent-{uuid4()}",
-                "text": fallback_text,
-                "page": None,
-                "position": 0,
+                "sentence_id": sentence_id,
+                "text": text,
+                "page": page,
+                "section": section,
+                "position": idx,
             }
-        ]
+        )
+    if fallback:
+        return fallback
+
+    # Last resort: extract body text as a single passage.
+    body_nodes: List[etree._Element] = list(
+        root.xpath("//tei:text//tei:body", namespaces=extraction.NS)
+    )
+    if body_nodes:
+        # extraction._text_content is a private helper, but stable in this codebase.
+        body_text = extraction._text_content(body_nodes[0])
+        text = body_text.strip()
+        if text:
+            return [
+                {
+                    "sentence_id": f"sent-{uuid4()}",
+                    "text": text,
+                    "page": None,
+                    "position": 0,
+                }
+            ]
     return []
 
 

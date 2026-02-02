@@ -33,9 +33,21 @@ def seed_windows(
     if not windows:
         return []
 
+    def _skip_window(window: AttachmentWindow) -> bool:
+        section = str((window.metadata or {}).get("section") or "").strip().lower()
+        if any(token in section for token in ("reference", "bibliog", "works cited")):
+            return True
+        if any(token in section for token in ("footnote", "note")):
+            return True
+        return False
+
     cfg = settings_override or app_settings
     cited_ids = {str(value) for value in cited_attachment_ids or []}
-    window_tokens = [_tokenize(window.text) for window in windows]
+    filtered_windows = [w for w in windows if not _skip_window(w)]
+    if not filtered_windows:
+        filtered_windows = list(windows)
+
+    window_tokens = [_tokenize(window.text) for window in filtered_windows]
     query_tokens = _tokenize(claim_text)
     bm25 = BM25Okapi(window_tokens)
     scores = bm25.get_scores(query_tokens or [""])  # keep deterministic order
@@ -45,16 +57,26 @@ def seed_windows(
     indexed_scores = [
         (idx, float(score)) for idx, score in enumerate(scores) if score >= min_score
     ]
-    indexed_scores.sort(key=lambda item: (-item[1], windows[item[0]].window_id))
+    indexed_scores.sort(
+        key=lambda item: (-item[1], filtered_windows[item[0]].window_id)
+    )
     if seed_limit > 0:
         indexed_scores = indexed_scores[:seed_limit]
 
-    counts = Counter(window.attachment_id for window in windows if window.attachment_id)
+    counts = Counter(
+        window.attachment_id for window in filtered_windows if window.attachment_id
+    )
     multiple_attachments = len([key for key in counts if key]) > 1
 
     candidates: list[EvidenceCandidate] = []
+    seen_text: set[str] = set()
     for position, (idx, score) in enumerate(indexed_scores, start=1):
-        window = windows[idx]
+        window = filtered_windows[idx]
+        normalized_text = re.sub(r"\s+", " ", window.text.lower()).strip()
+        if normalized_text and normalized_text in seen_text:
+            continue
+        if normalized_text:
+            seen_text.add(normalized_text)
         provenance = (
             Provenance.CITED
             if window.attachment_id in cited_ids

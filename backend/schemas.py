@@ -601,3 +601,7 @@ class JudgmentPayload(BaseModel):
         if self.status == "final" and self.verdict is None:
             raise ValueError("verdict is required when status is final")
         return self
+
+
+class JudgmentListResponse(BaseModel):
+    judgments: List[JudgmentPayload] = Field(default_factory=list)

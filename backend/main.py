@@ -11,10 +11,11 @@ utils.set_sane_threads()
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 
 from backend import (
     attachment_pipeline,
@@ -25,6 +26,7 @@ from backend import (
     extraction,
     evidence_selection_store,
     grobid_client,
+    judgment_store,
     schemas,
     tei_body,
     utils,
@@ -506,12 +508,16 @@ def list_claim_evidence(
     pinned_only: bool = False,
     claim_text: Optional[str] = None,
 ):
-    try:
-        evidence_service.ensure_current_run(claim_id, claim_text=claim_text)
-    except ValueError as exc:
-        latest = evidence_service.store.latest_run(claim_id)
-        if latest is None:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    # Register claim_text without triggering a compute-heavy rerun.
+    if claim_text:
+        try:
+            evidence_service.ensure_current_run(
+                claim_id,
+                claim_text=claim_text,
+                execute=False,
+            )
+        except Exception:
+            pass
     payload = evidence_service.list_candidates(
         claim_id,
         label=label,
@@ -596,6 +602,77 @@ def put_evidence_selection(
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return stored
+
+
+@app.get(
+    "/claims/{claim_id}/judgment",
+    response_model=schemas.JudgmentPayload,
+)
+def get_claim_judgment(claim_id: str):
+    stored = judgment_store.judgment_store.read(claim_id)
+    if stored is None:
+        return schemas.JudgmentPayload(
+            claim_id=claim_id,
+            status="draft",
+            verdict=None,
+            notes=None,
+        )
+    return stored
+
+
+@app.put(
+    "/claims/{claim_id}/judgment",
+    response_model=schemas.JudgmentPayload,
+)
+def put_claim_judgment(claim_id: str, payload: schemas.JudgmentUpsertRequest):
+    try:
+        stored = judgment_store.judgment_store.upsert(claim_id, payload)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return stored
+
+
+@app.get(
+    "/judgments",
+    response_model=schemas.JudgmentListResponse,
+)
+def list_judgments(
+    doc_id: Optional[str] = None,
+    include_drafts: bool = False,
+    status: Optional[Literal["final", "draft", "all"]] = None,
+):
+    effective = status or ("all" if include_drafts else "final")
+    judgments = judgment_store.judgment_store.list_filtered(
+        status=effective, doc_id=doc_id
+    )
+    return {"judgments": judgments}
+
+
+@app.get("/judgments/export")
+def export_judgments(
+    shape: Literal["claim", "callout"],
+    format: Literal["json", "csv"] = "json",
+    include_drafts: bool = False,
+    mode: Literal["core", "verbose"] = "core",
+):
+    if shape == "claim":
+        payload = judgment_store.judgment_store.export_claims(
+            include_drafts=include_drafts,
+            mode=mode,
+            format=format,
+        )
+    else:
+        payload = judgment_store.judgment_store.export_callouts(
+            include_drafts=include_drafts,
+            mode=mode,
+            format=format,
+        )
+
+    media_type = "application/json" if format == "json" else "text/csv"
+    scope = "all" if include_drafts else "final"
+    filename = f"judgments_{shape}_{mode}_{scope}.{format}"
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    return Response(content=payload, media_type=media_type, headers=headers)
 
 
 # ---------- /segment endpoint ----------

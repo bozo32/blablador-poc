@@ -1,4 +1,7 @@
+import csv
+import json
 from pathlib import Path
+from io import StringIO
 
 import pytest
 from pydantic import ValidationError
@@ -78,3 +81,139 @@ def test_upsert_updates_timestamp(store: JudgmentStore):
     assert first.updated_at is not None
     assert second.updated_at is not None
     assert first.updated_at != second.updated_at
+
+
+def test_export_defaults_final_only(store: JudgmentStore):
+    store.upsert("claim-a", {"status": "draft", "verdict": None, "doc_id": "d1"})
+    store.upsert("claim-b", {"status": "final", "verdict": "support", "doc_id": "d1"})
+    store.upsert(
+        "claim-c",
+        {"status": "final", "verdict": "contradict", "doc_id": "d1"},
+    )
+
+    exported = store.export_claims(include_drafts=False, mode="core", format="json")
+    rows = json.loads(exported.decode("utf-8"))
+    assert [row["claim_id"] for row in rows] == ["claim-b", "claim-c"]
+
+    exported_all = store.export_claims(include_drafts=True, mode="core", format="json")
+    rows_all = json.loads(exported_all.decode("utf-8"))
+    assert [row["claim_id"] for row in rows_all] == ["claim-a", "claim-b", "claim-c"]
+
+
+def test_export_callouts_grouping_and_ordering(store: JudgmentStore):
+    # Group 1: doc_id=None sorts before doc_id="doc-1"
+    store.upsert(
+        "a",
+        {
+            "status": "final",
+            "verdict": "support",
+            "doc_id": None,
+            "citation_index": None,
+            "target_id": None,
+            "callout": None,
+            "claim_text": "A",
+        },
+    )
+    # Group 2: deterministic callout chosen from first non-null after claim_id sorting.
+    store.upsert(
+        "b",
+        {
+            "status": "final",
+            "verdict": "support",
+            "doc_id": "doc-1",
+            "citation_index": 0,
+            "target_id": "ref-1",
+            "callout": None,
+            "claim_text": "B",
+        },
+    )
+    store.upsert(
+        "c",
+        {
+            "status": "final",
+            "verdict": "uncertain",
+            "doc_id": "doc-1",
+            "citation_index": 0,
+            "target_id": "ref-1",
+            "callout": "[1]",
+            "claim_text": "C",
+        },
+    )
+    store.upsert(
+        "d",
+        {
+            "status": "final",
+            "verdict": "contradict",
+            "doc_id": "doc-1",
+            "citation_index": 0,
+            "target_id": "ref-1",
+            "callout": "[2]",
+            "claim_text": "D",
+        },
+    )
+
+    exported = store.export_callouts(include_drafts=False, mode="core", format="json")
+    groups = json.loads(exported.decode("utf-8"))
+
+    assert len(groups) == 2
+    assert groups[0]["doc_id"] is None
+    assert groups[0]["citation_index"] is None
+    assert groups[0]["target_id"] is None
+    assert groups[0]["callout"] is None
+
+    assert groups[1]["doc_id"] == "doc-1"
+    assert groups[1]["citation_index"] == 0
+    assert groups[1]["target_id"] == "ref-1"
+    # claims sorted by claim_id => b,c,d; first non-null callout is from c
+    assert groups[1]["callout"] == "[1]"
+    assert [c["claim_id"] for c in groups[1]["claims"]] == ["b", "c", "d"]
+
+
+def test_export_csv_headers_and_row_counts(store: JudgmentStore):
+    store.upsert(
+        "c1",
+        {
+            "status": "final",
+            "verdict": "support",
+            "doc_id": "doc-1",
+            "citation_index": 1,
+            "target_id": "ref-1",
+            "callout": "[1]",
+            "claim_text": "T1",
+        },
+    )
+    store.upsert(
+        "c2",
+        {
+            "status": "final",
+            "verdict": "contradict",
+            "doc_id": "doc-1",
+            "citation_index": 1,
+            "target_id": "ref-1",
+            "callout": "[1]",
+            "claim_text": "T2",
+        },
+    )
+
+    claims_csv = store.export_claims(include_drafts=False, mode="core", format="csv")
+    reader = csv.DictReader(StringIO(claims_csv.decode("utf-8")))
+    rows = list(reader)
+    assert reader.fieldnames == ["claim_id", "status", "verdict", "claim_text"]
+    assert len(rows) == 2
+
+    callouts_csv = store.export_callouts(
+        include_drafts=False, mode="core", format="csv"
+    )
+    reader2 = csv.DictReader(StringIO(callouts_csv.decode("utf-8")))
+    rows2 = list(reader2)
+    assert reader2.fieldnames == [
+        "doc_id",
+        "citation_index",
+        "target_id",
+        "callout",
+        "claim_id",
+        "status",
+        "verdict",
+        "claim_text",
+    ]
+    assert len(rows2) == 2

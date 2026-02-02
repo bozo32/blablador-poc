@@ -1,0 +1,101 @@
+/* Workspace shell (Phase 8)
+   Base + dense-mode variables.
+
+   This file is split into two sections so the UI can inject:
+   - Base styles always
+   - Dense-mode overrides only when the toggle is enabled
+*/
+
+/* === Base === */
+
+:root {
+  --ws-font-scale: 1;
+
+  --ws-space-0: 0.25rem;
+  --ws-space-1: 0.5rem;
+  --ws-space-2: 0.75rem;
+  --ws-space-3: 1rem;
+
+  --ws-pane-border: 1px solid rgba(15, 23, 42, 0.08);
+  --ws-pane-bg: rgba(255, 255, 255, 0.92);
+  --ws-muted: #64748b;
+  --ws-ink: #0f172a;
+
+  --ws-page-pad-top: 0.6rem;
+  --ws-page-pad-x: 1.1rem;
+}
+
+/* Streamlit layout density */
+.block-container {
+  padding-top: var(--ws-page-pad-top);
+  padding-left: var(--ws-page-pad-x);
+  padding-right: var(--ws-page-pad-x);
+}
+
+h1, h2, h3, h4 {
+  margin: calc(var(--ws-space-2) * var(--ws-font-scale)) 0
+    calc(var(--ws-space-1) * var(--ws-font-scale)) 0;
+  color: var(--ws-ink);
+}
+
+p {
+  margin: calc(var(--ws-space-1) * var(--ws-font-scale)) 0;
+}
+
+/* Pane headers (use via st.markdown unsafe HTML blocks) */
+.ws-pane-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ws-space-2);
+  padding: calc(var(--ws-space-1) * var(--ws-font-scale))
+    calc(var(--ws-space-2) * var(--ws-font-scale));
+  border: var(--ws-pane-border);
+  border-radius: 12px;
+  background: var(--ws-pane-bg);
+}
+
+.ws-pane-header__title {
+  margin: 0;
+  font-size: calc(0.98rem * var(--ws-font-scale));
+  font-weight: 750;
+  letter-spacing: -0.01em;
+  color: var(--ws-ink);
+}
+
+.ws-pane-header__meta {
+  font-size: calc(0.84rem * var(--ws-font-scale));
+  color: var(--ws-muted);
+  white-space: nowrap;
+}
+
+.ws-pane-body {
+  margin-top: calc(var(--ws-space-2) * var(--ws-font-scale));
+}
+
+/* Compact control row (used in center header) */
+.ws-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: calc(var(--ws-space-1) * var(--ws-font-scale));
+}
+
+/* A small, non-full-width icon button feel */
+.ws-gear-button button {
+  padding: 0.25rem 0.55rem;
+  border-radius: 999px;
+}
+
+/* === Dense Mode === */
+
+:root {
+  /* Injected only when dense mode is enabled. */
+  --ws-font-scale: 0.92;
+  --ws-space-0: 0.2rem;
+  --ws-space-1: 0.42rem;
+  --ws-space-2: 0.6rem;
+  --ws-space-3: 0.85rem;
+  --ws-page-pad-top: 0.35rem;
+  --ws-page-pad-x: 0.95rem;
+}

@@ -3329,7 +3329,7 @@ def draw_ingestion_panel():
     with main_col:
         st.session_state.setdefault("center_view", "Document text")
         center_view = st.radio(
-            "",
+            "Center view",
             ["Document text", "Chasing claims", "Node graph"],
             key="center_view",
             horizontal=True,

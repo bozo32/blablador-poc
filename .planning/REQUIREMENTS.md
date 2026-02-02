@@ -74,6 +74,32 @@ Requirements for initial release. Each maps to roadmap phases.
   - Immediately after upload: conversion + GROBID parse runs in the background.
   - After claims are saved: evidence runs start automatically for relevant sources so results are ready by arrival.
 
+### Execution Paths + Hosted Inference (POC)
+
+- [ ] **ML-01**: Toggle execution path (classic/hybrid) and reranker (including ColBERT)
+  - UI exposes a small set of named “execution profiles” (e.g., Fast/Local, Best/Local, Fast/Hosted).
+  - Backend routes retrieval + reranking based on the active profile (no Streamlit-only branching).
+  - Profiles must include an option that re-enables the ColBERT reranker path.
+
+- [ ] **ML-02**: Optional Hugging Face Inference API mode for all HF model calls
+  - A single toggle switches HF-powered steps to remote inference (where supported) for demo performance.
+  - Covers all HF model usage in the workflow (at minimum: NLI; optionally embeddings/coref).
+  - Secrets remain local (`HF_API_TOKEN` in `.env` only).
+
+### Durable Evidence Candidate Decisions (POC)
+
+- [ ] **DEC-01**: Evidence candidate decisions are durable and API-backed
+  - Actions: pin/unpin/accept/reject/clear are persisted server-side (not Streamlit session truth).
+  - Decisions are append-only events (candidates remain immutable per run).
+
+- [ ] **DEC-02**: Optimistic concurrency control (OCC) for decision writes
+  - Each claim has an integer `version`.
+  - Decision writes require `expected_version` and return 409 with `current_version` on conflict.
+
+- [ ] **DEC-03**: Idempotent decision writes
+  - Decision write endpoint accepts an `idempotency_key`.
+  - Replays with the same key are safe and do not double-apply.
+
 ### PDF Review Ergonomics
 
 - [ ] **PDF-01**: “View PDF” action copies a short excerpt snippet for Cmd-F
@@ -181,13 +207,18 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ATT-01 | Phase 8 | Pending |
 | ATT-02 | Phase 8 | Pending |
 | PDF-01 | Phase 8 | Pending |
+| ML-01 | Phase 8 | Pending |
+| ML-02 | Phase 8 | Pending |
 | NAV-04 | Phase 8.1 | Pending |
 | GPH-01 | Phase 8.1 | Pending |
+| DEC-01 | Phase 8.1 | Pending |
+| DEC-02 | Phase 8.1 | Pending |
+| DEC-03 | Phase 8.1 | Pending |
 | DEMO-01 | Phase 8.2 | Pending |
 
 **Coverage:**
-- v1 requirements: 33 total
-- Mapped to phases: 33
+- v1 requirements: 38 total
+- Mapped to phases: 38
 - Unmapped: 0
 
 ---

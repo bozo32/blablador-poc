@@ -136,7 +136,7 @@ Plans:
 ### Phase 8: Workspace + Fast-Path Review UX
 **Goal**: Review is fast and interruption-free: citations are interacted with inline, sources are ingested in a global bin and processed in the background, and the UI is vertically dense without losing usability.
 **Depends on**: Phase 7
-**Requirements**: WS-01, WS-02, UX-01, UX-02, SEG-01, ATT-01, ATT-02, PDF-01
+**Requirements**: WS-01, WS-02, UX-01, UX-02, SEG-01, ATT-01, ATT-02, PDF-01, ML-01, ML-02
 **Success Criteria** (what must be TRUE):
   1. In-text citation interactions are inline in the document text (underline/href-style is fine); end-of-block citation button rows are removed.
   2. If TEI/GROBID sentence boundaries are suspicious, the UI falls back to a local segmenter and still supports citation selection reliably.
@@ -150,7 +150,7 @@ Plans:
 ### Phase 8.1: Recursive Retrieval + Node Graph (INSERTED)
 **Goal**: Users can recursively chase a citation tree across multiple documents, with the node graph serving as a real navigation surface (not a dead-end tab).
 **Depends on**: Phase 8
-**Requirements**: NAV-04, GPH-01
+**Requirements**: NAV-04, GPH-01, DEC-01, DEC-02, DEC-03
 **Success Criteria** (what must be TRUE):
   1. From a cited source, user can follow its citations to new targets and keep building the tree (recursive retrieval).
   2. Workspace holds multiple documents; switching documents preserves chase state and judgments.

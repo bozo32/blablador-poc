@@ -89,6 +89,12 @@ def _public_view(record: dict) -> dict:
     data = dict(record)
     data.pop("file_path", None)
     data["status"] = _normalize_status(data.get("status"))
+    data.setdefault("claim_id", None)
+    data.setdefault("doc_id", None)
+    data.setdefault("citation_index", None)
+    data.setdefault("target_id", None)
+    data.setdefault("archived", False)
+    data.setdefault("archived_at", None)
     data["history"] = data.get("timeline", [])[:MAX_TIMELINE_EVENTS]
     data["timeline"] = data["history"]
     data.setdefault("reference_hint", {})
@@ -106,13 +112,15 @@ def is_ready(record: dict) -> bool:
 
 def create_attachment(
     *,
-    claim_id: str,
+    claim_id: Optional[str],
     doc_id: Optional[str],
     local_path: str | Path,
     filename: Optional[str] = None,
     size_bytes: Optional[int] = None,
     reference_hint: Optional[dict] = None,
     claim_text: Optional[str] = None,
+    citation_index: Optional[int] = None,
+    target_id: Optional[str] = None,
 ) -> dict:
     source_path = Path(local_path)
     if not source_path.exists():
@@ -131,6 +139,8 @@ def create_attachment(
         "id": attachment_id,
         "claim_id": claim_id,
         "doc_id": doc_id,
+        "citation_index": citation_index,
+        "target_id": target_id,
         "filename": safe_name,
         "size": size,
         "status": STATUS_PENDING,
@@ -138,6 +148,8 @@ def create_attachment(
         "uploaded_at": now,
         "updated_at": now,
         "parsed_at": None,
+        "archived": False,
+        "archived_at": None,
         "timeline": [],
         "file_path": str(dest_path),
         "reference_hint": reference_hint or {},
@@ -159,16 +171,68 @@ def get_attachment(attachment_id: str, public: bool = False) -> Optional[dict]:
 
 
 def list_attachments(
-    claim_id: Optional[str] = None, public: bool = False
+    claim_id: Optional[str] = None,
+    *,
+    archived: Optional[bool] = False,
+    public: bool = False,
 ) -> List[dict]:
     records: List[dict] = []
     for meta_path in _root().glob("*/metadata.json"):
         record = _load_record(meta_path)
         if claim_id and record.get("claim_id") != claim_id:
             continue
+        if archived is not None and bool(record.get("archived", False)) != archived:
+            continue
         records.append(_public_view(record) if public else record)
     records.sort(key=lambda rec: rec.get("uploaded_at", ""), reverse=True)
     return records
+
+
+def set_archived(attachment_id: str, *, archived: bool) -> dict:
+    record = get_attachment(attachment_id)
+    if record is None:
+        raise AttachmentNotFound(f"Attachment {attachment_id} not found")
+
+    current = bool(record.get("archived", False))
+    if current == archived:
+        return record
+
+    record["archived"] = archived
+    record["archived_at"] = _now() if archived else None
+    record["updated_at"] = _now()
+    _log_event(
+        record,
+        "archived" if archived else "unarchived",
+        "Archived" if archived else "Restored",
+    )
+    return _write_record(record)
+
+
+def set_placement(
+    attachment_id: str,
+    *,
+    claim_id: Optional[str],
+    doc_id: Optional[str],
+    citation_index: Optional[int],
+    target_id: Optional[str],
+) -> dict:
+    record = get_attachment(attachment_id)
+    if record is None:
+        raise AttachmentNotFound(f"Attachment {attachment_id} not found")
+
+    record["claim_id"] = claim_id
+    record["doc_id"] = doc_id
+    record["citation_index"] = citation_index
+    record["target_id"] = target_id
+    record["updated_at"] = _now()
+
+    detail = (
+        f"claim_id={claim_id or 'null'} doc_id={doc_id or 'null'} "
+        f"citation_index={citation_index if citation_index is not None else 'null'} "
+        f"target_id={target_id or 'null'}"
+    )
+    _log_event(record, "placement", detail)
+    return _write_record(record)
 
 
 def update_attachment(

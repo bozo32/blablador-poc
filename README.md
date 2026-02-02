@@ -1,6 +1,6 @@
-# Blablador NLI Backend
+# OS-ERIN
 
-An integrated system for segmenting citing sentences into discrete claims and testing those claims against the content of cited sources. 
+An integrated system for segmenting citing sentences into discrete claims and testing those claims against the content of cited sources.
 
 +**Status – alpha / work-in-progress. Expect breaking changes and bugs.**
 
@@ -192,4 +192,4 @@ CLI for unified launch, health-checks, and multiprocess startup.
 There are files in `tests/dummy data` to support testing of the scripts.
 
 ## License
-This project is licensed under the MIT License. See `LICENSE` for details.
+MIT. See `LICENSE`.

@@ -10,9 +10,9 @@ See: .planning/PROJECT.md (updated 2026-01-23)
 ## Current Position
 
 Phase: 8 of 8 (Workspace + Fast-Path Review UX)
-Plan: 3 of 8 in current phase
+Plan: 4 of 8 in current phase
 Status: In progress
-Last activity: 2026-02-02 — Completed 08-03-PLAN.md
+Last activity: 2026-02-02 — Completed 08-04-PLAN.md
 
 Progress: ██████████░░ 82%
 
@@ -47,6 +47,8 @@ Recent decisions affecting current work:
   - TEI body falls back to deterministic sentence segmentation when TEI/GROBID <s> boundaries are suspicious, generating stable sentence_id values (08-01).
 
   - Global background pause state is persisted under data/ and exposed via /background/* endpoints to gate new background work (08-02).
+
+  - Workspace uses a headerless 3-pane shell with a gear-toggled settings drawer and a session-persisted dense mode toggle (08-04).
 
  - Evidence pipeline caches attachment sentences centrally so deterministic windows reuse a single source of truth (05-01).
  - BM25 seeding now carries provenance/badge metadata with spaCy tokenization and regex fallback for deterministic output (05-01).
@@ -89,6 +91,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-02-02T22:34:22Z
-Stopped at: Completed 08-03-PLAN.md
+Last session: 2026-02-02T23:45:17Z
+Stopped at: Completed 08-04-PLAN.md
 Resume file: None

@@ -529,3 +529,75 @@ class EvidenceSelectionPayload(BaseModel):
         if self.verdict == "none" and self.primary is not None:
             raise ValueError("primary must be null when verdict is none")
         return self
+
+
+JudgmentVerdict = Literal["support", "contradict", "uncertain"]
+JudgmentStatus = Literal["draft", "final"]
+
+
+class JudgmentNotes(BaseModel):
+    rationale: Optional[str] = None
+    caveats: Optional[str] = None
+    followups: Optional[str] = None
+
+    @field_validator("rationale", "caveats", "followups")
+    def normalize_note_field(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
+
+class JudgmentUpsertRequest(BaseModel):
+    status: JudgmentStatus = "draft"
+    verdict: Optional[JudgmentVerdict] = None
+    notes: Optional[JudgmentNotes] = None
+
+    doc_id: Optional[str] = None
+    citation_index: Optional[int] = None
+    target_id: Optional[str] = None
+    sentence_id: Optional[str] = None
+    callout: Optional[str] = None
+    reference_id: Optional[str] = None
+    doi: Optional[str] = None
+    author: Optional[str] = None
+    year: Optional[str] = None
+    claim_text: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_rules(self) -> "JudgmentUpsertRequest":
+        if self.status == "final" and self.verdict is None:
+            raise ValueError("verdict is required when status is final")
+        return self
+
+
+class JudgmentPayload(BaseModel):
+    claim_id: str
+    updated_at: Optional[str] = None
+    status: JudgmentStatus = "draft"
+    verdict: Optional[JudgmentVerdict] = None
+    notes: Optional[JudgmentNotes] = None
+
+    doc_id: Optional[str] = None
+    citation_index: Optional[int] = None
+    target_id: Optional[str] = None
+    sentence_id: Optional[str] = None
+    callout: Optional[str] = None
+    reference_id: Optional[str] = None
+    doi: Optional[str] = None
+    author: Optional[str] = None
+    year: Optional[str] = None
+    claim_text: Optional[str] = None
+
+    @field_validator("claim_id")
+    def validate_claim_id(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("claim_id is required")
+        return text
+
+    @model_validator(mode="after")
+    def validate_rules(self) -> "JudgmentPayload":
+        if self.status == "final" and self.verdict is None:
+            raise ValueError("verdict is required when status is final")
+        return self

@@ -19,7 +19,9 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 5: Evidence Matching + Ranking** - Evidence candidates are matched and ranked.
 - [x] **Phase 6: Evidence Review + Selection** - Evidence is highlighted and selectable.
 - [x] **Phase 7: Validation + Export** - Judgments are recorded and exportable.
-- [ ] **Phase 8: Workspace Organization** - Folder browsing and retrieval utilities round out the workflow.
+- [ ] **Phase 8: Workspace + Fast-Path Review UX** - Inline citation navigation, background processing, and a more space-efficient workspace.
+- [ ] **Phase 8.1: Recursive Retrieval + Node Graph** (INSERTED) - Multi-document citation chasing with an integrated graph view.
+- [ ] **Phase 8.2: Demo Dataset + Trace Replay** (INSERTED) - A packaged synthetic corpus + replayable review traces for a distributed-system tech demo.
 
 ## Phase Details
 
@@ -131,19 +133,45 @@ Plans:
 - [x] 07-02-PLAN.md — Frontend judgment store + API helpers
 - [x] 07-03-PLAN.md — Streamlit judgment UI, callout indicators, and export downloads
 
-### Phase 8: Workspace Organization
-**Goal**: Users can navigate their PDF workspace and copy retrieval details.
+### Phase 8: Workspace + Fast-Path Review UX
+**Goal**: Review is fast and interruption-free: citations are interacted with inline, sources are ingested in a global bin and processed in the background, and the UI is vertically dense without losing usability.
 **Depends on**: Phase 7
-**Requirements**: WS-01, WS-02
+**Requirements**: WS-01, WS-02, UX-01, UX-02, SEG-01, ATT-01, ATT-02, PDF-01
 **Success Criteria** (what must be TRUE):
-  1. User can browse a project folder structure for PDFs.
-  2. User can copy citation retrieval info (author/year/DOI) to clipboard.
+  1. In-text citation interactions are inline in the document text (underline/href-style is fine); end-of-block citation button rows are removed.
+  2. If TEI/GROBID sentence boundaries are suspicious, the UI falls back to a local segmenter and still supports citation selection reliably.
+  3. Users upload cited-source PDFs via a single global “Source bin” (no source-specific/per-claim dropzones).
+  4. Newly uploaded sources are immediately queued for conversion + GROBID parsing in the background; the user does not wait at the point of review.
+  5. After claims are saved, the system begins evidence runs automatically for the relevant sources so results are ready by the time the user opens the evidence view.
+  6. Chasing claims view offers a “View PDF” affordance that copies a short excerpt snippet for Cmd-F (and opens the PDF).
+  7. Layout is space-efficient: the big header is removed; settings are moved behind a gear/drawer; dense mode reduces vertical padding while keeping controls discoverable.
+**Plans**: TBD
+
+### Phase 8.1: Recursive Retrieval + Node Graph (INSERTED)
+**Goal**: Users can recursively chase a citation tree across multiple documents, with the node graph serving as a real navigation surface (not a dead-end tab).
+**Depends on**: Phase 8
+**Requirements**: NAV-04, GPH-01
+**Success Criteria** (what must be TRUE):
+  1. From a cited source, user can follow its citations to new targets and keep building the tree (recursive retrieval).
+  2. Workspace holds multiple documents; switching documents preserves chase state and judgments.
+  3. Node graph view is validated and integrated: selecting a node routes to the relevant doc/citation context and updates chase queue.
+**Plans**: TBD
+
+### Phase 8.2: Demo Dataset + Trace Replay (INSERTED)
+**Goal**: A self-contained tech demo can show end-to-end citation-walking and annotation, including exports, without live external services.
+**Depends on**: Phase 8.1
+**Requirements**: DEMO-01
+**Success Criteria** (what must be TRUE):
+  1. A small PDF corpus (5–15 docs) with a known citation graph is packaged with the repo (or downloadable via a script).
+  2. Ground-truth review artifacts exist (attachments parsed, evidence selections, judgments) to demonstrate the full workflow.
+  3. A “trace” (event log) can replay a realistic walk + annotation session for the demo.
+  4. Demo exports produce non-empty claim/callout JSON/CSV showing the captured judgments.
 **Plans**: TBD
 
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 2 → 2.1 → 2.2 → 3 → 3.1 → 4
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 8.1 → 8.2
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -154,4 +182,6 @@ Phases execute in numeric order: 2 → 2.1 → 2.2 → 3 → 3.1 → 4
 | 5. Evidence Matching + Ranking | 6/6 | Complete | 2026-01-28 |
 | 6. Evidence Review + Selection | 2/2 | Complete | 2026-02-01 |
 | 7. Validation + Export | 3/3 | Complete | 2026-02-02 |
-| 8. Workspace Organization | 0/TBD | Not started | - |
+| 8. Workspace + Fast-Path Review UX | 0/TBD | Not started | - |
+| 8.1. Recursive Retrieval + Node Graph | 0/TBD | Not started | - |
+| 8.2. Demo Dataset + Trace Replay | 0/TBD | Not started | - |

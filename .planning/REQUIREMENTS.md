@@ -46,6 +46,54 @@ Requirements for initial release. Each maps to roadmap phases.
 - [ ] **WS-01**: User can browse project folder structure for PDFs
 - [ ] **WS-02**: User can copy citation retrieval info (author/year/DOI) to clipboard
 
+### UX + Workflow Acceleration
+
+- [ ] **UX-01**: Citation interactions are inline (no end-of-block citation rows)
+  - In-document citations are underlined/inline clickable (chips are optional, not required).
+  - End-of-block citation button rows are removed.
+
+- [ ] **UX-02**: Workspace layout is vertically dense and settings are tucked away
+  - The large header is removed from the top of the page (still accessible, not top-chrome).
+  - Settings move behind a gear/drawer (popover/slide-out).
+  - A “dense” mode reduces vertical padding/spacing without hiding core actions.
+
+### Robust Segmentation
+
+- [ ] **SEG-01**: Sentence segmentation fallback when TEI/GROBID segmentation looks wrong
+  - Auto-detect heuristics trigger fallback segmentation.
+  - Fallback segmenter produces stable sentence boundaries for UI navigation.
+  - Citation selection remains reliable even when fallback is used.
+
+### Source Ingestion + Background Processing
+
+- [ ] **ATT-01**: Global “Source bin” upload (no per-claim/source-specific drop targets)
+  - User can drop/upload source PDFs into a single shared bin.
+  - Uploaded PDFs are stored and tracked as “unassigned sources” until matched.
+
+- [ ] **ATT-02**: Background processing and prefetch
+  - Immediately after upload: conversion + GROBID parse runs in the background.
+  - After claims are saved: evidence runs start automatically for relevant sources so results are ready by arrival.
+
+### PDF Review Ergonomics
+
+- [ ] **PDF-01**: “View PDF” action copies a short excerpt snippet for Cmd-F
+  - In chasing claims view, a button opens the source PDF and copies a deterministic 3–4 word snippet from the excerpt to the clipboard.
+
+### Recursive Retrieval + Graph Navigation
+
+- [ ] **NAV-04**: Recursive retrieval across a citation tree
+  - User can follow citations from cited sources to additional sources and keep expanding the tree.
+
+- [ ] **GPH-01**: Node graph is validated and integrated into navigation
+  - Graph is not a dead-end tab; selecting nodes routes into the chase/workspace view.
+
+### Demo / Tech-Showcase
+
+- [ ] **DEMO-01**: Synthetic demo corpus + replayable trace for an end-to-end tech demo
+  - Dataset includes 5–15 PDFs with a known citation graph.
+  - Includes seeded artifacts (attachments parsed, evidence selections, judgments) to avoid waiting during demos.
+  - Includes a replayable “trace” (event log) of a realistic walk + annotate session.
+
 ## v2 Requirements
 
 Deferred to future release. Tracked but not in current roadmap.
@@ -127,12 +175,21 @@ Which phases cover which requirements. Updated during roadmap creation.
 | VAL-04 | Phase 7 | Complete |
 | WS-01 | Phase 8 | Pending |
 | WS-02 | Phase 8 | Pending |
+| UX-01 | Phase 8 | Pending |
+| UX-02 | Phase 8 | Pending |
+| SEG-01 | Phase 8 | Pending |
+| ATT-01 | Phase 8 | Pending |
+| ATT-02 | Phase 8 | Pending |
+| PDF-01 | Phase 8 | Pending |
+| NAV-04 | Phase 8.1 | Pending |
+| GPH-01 | Phase 8.1 | Pending |
+| DEMO-01 | Phase 8.2 | Pending |
 
 **Coverage:**
-- v1 requirements: 24 total
-- Mapped to phases: 24
+- v1 requirements: 33 total
+- Mapped to phases: 33
 - Unmapped: 0
 
 ---
 *Requirements defined: 2026-01-23*
-*Last updated: 2026-02-02 after Phase 7 completion*
+*Last updated: 2026-02-02 after Phase 8 planning expansion*

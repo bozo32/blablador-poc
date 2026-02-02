@@ -59,6 +59,28 @@ Deferred to future release. Tracked but not in current roadmap.
 - **COL-01**: Multiple reviewers can collaborate and adjudicate judgments
 - **COL-02**: Disagreement heatmap highlights conflicting evidence across claims
 
+### Validation + Judgment (v2)
+
+- [ ] **VAL-05**: Claim validation supports a 3-level assessment
+  - **Level 1 (Equivalence)**: Reviewer selects the equivalent cited-source statement from top-N candidate matches; no justification required.
+  - **Level 2 (Valid In Source)**: Reviewer records whether the selected source statement is valid within the cited source (support/contradict/uncertain) and MUST provide a justification annotation describing what validation was performed (e.g., study quality assessment, primary-source retrieval for secondary citation).
+  - **Level 3 (Transferable To Citing Context)**: Reviewer records whether the source-valid statement transfers to the citing context (support/contradict/uncertain) and MUST provide a justification annotation listing the variables/moderators considered for transportability.
+
+- [ ] **VAL-06**: Required justification annotations are enforced for finalization
+  - **Rule:** Level 2 and Level 3 cannot be marked Final unless their annotation contains at least one non-empty field.
+  - **Rule:** Level 1 never requires annotation.
+  - **Rule:** Callout "validated" status is driven by Level 3 being Final (not Level 2).
+
+- [ ] **VAL-07**: Shared annotation schema with context-specific prompts
+  - **Model:** Level 2 and Level 3 reuse the same structured annotation fields but show different prompt/help text.
+  - **Minimum fields (structured):** `method` (what validation was done), `variables` (list), `rationale`, `caveats`, `followups`, `evidence_type`.
+  - **UI:** Level 2 shows "valid-in-source" placeholder text; Level 3 shows "transportability" placeholder text.
+
+- [ ] **VAL-08**: Export includes tri-level assessment explicitly
+  - **Claims export:** includes Level 1 selection (selected span metadata), Level 2 verdict + annotation, Level 3 verdict + annotation.
+  - **Callouts export:** groups claims and includes Level 3 outcome used for validation state.
+  - **Defaults:** export remains final-only by default, with include-drafts toggle.
+
 ### Intelligence + Expansion
 
 - **INT-01**: Smart citation classification (support/contradict/mention) at scale

@@ -150,21 +150,45 @@ class JudgmentStore:
             return {
                 **core_row(j),
                 "updated_at": j.updated_at,
-                "rationale": getattr(notes, "rationale", None),
-                "caveats": getattr(notes, "caveats", None),
-                "followups": getattr(notes, "followups", None),
-                "doc_id": j.doc_id,
-                "citation_index": j.citation_index,
-                "target_id": j.target_id,
+                "notes": None if notes is None else notes.model_dump(mode="json"),
                 "sentence_id": j.sentence_id,
-                "callout": j.callout,
                 "reference_id": j.reference_id,
                 "doi": j.doi,
                 "author": j.author,
                 "year": j.year,
+                "doc_id": j.doc_id,
+                "citation_index": j.citation_index,
+                "target_id": j.target_id,
+                "callout": j.callout,
             }
 
-        rows = [core_row(j) if mode == "core" else verbose_row(j) for j in judgments]
+        if mode == "core":
+            rows = [core_row(j) for j in judgments]
+        elif format == "json":
+            rows = [verbose_row(j) for j in judgments]
+        else:
+
+            def verbose_csv_row(j: JudgmentPayload) -> dict[str, Any]:
+                notes = j.notes
+                return {
+                    **core_row(j),
+                    "updated_at": j.updated_at,
+                    "rationale": getattr(notes, "rationale", None),
+                    "caveats": getattr(notes, "caveats", None),
+                    "followups": getattr(notes, "followups", None),
+                    "sentence_id": j.sentence_id,
+                    "reference_id": j.reference_id,
+                    "doi": j.doi,
+                    "author": j.author,
+                    "year": j.year,
+                    "doc_id": j.doc_id,
+                    "citation_index": j.citation_index,
+                    "target_id": j.target_id,
+                    "callout": j.callout,
+                }
+
+            rows = [verbose_csv_row(j) for j in judgments]
+
         if format == "json":
             return (
                 json.dumps(rows, indent=2, sort_keys=True, ensure_ascii=True) + "\n"
@@ -173,7 +197,25 @@ class JudgmentStore:
         if not rows:
             headers = list(core_row(JudgmentPayload(claim_id="x")).keys())
             if mode == "verbose":
-                headers = list(verbose_row(JudgmentPayload(claim_id="x")).keys())
+                headers = [
+                    "claim_id",
+                    "status",
+                    "verdict",
+                    "claim_text",
+                    "updated_at",
+                    "rationale",
+                    "caveats",
+                    "followups",
+                    "sentence_id",
+                    "reference_id",
+                    "doi",
+                    "author",
+                    "year",
+                    "doc_id",
+                    "citation_index",
+                    "target_id",
+                    "callout",
+                ]
         else:
             headers = list(rows[0].keys())
         buf: list[str] = []

@@ -217,3 +217,32 @@ def test_export_csv_headers_and_row_counts(store: JudgmentStore):
         "claim_text",
     ]
     assert len(rows2) == 2
+
+
+def test_export_claims_verbose_json_includes_notes_object(store: JudgmentStore):
+    store.upsert(
+        "c1",
+        {
+            "status": "final",
+            "verdict": "support",
+            "notes": {"rationale": "Because."},
+            "doc_id": "doc-1",
+            "citation_index": 1,
+            "target_id": "ref-1",
+            "callout": "[1]",
+            "claim_text": "T1",
+        },
+    )
+
+    exported = store.export_claims(include_drafts=False, mode="verbose", format="json")
+    rows = json.loads(exported.decode("utf-8"))
+    assert len(rows) == 1
+    assert rows[0]["claim_id"] == "c1"
+    assert rows[0]["status"] == "final"
+    assert rows[0]["verdict"] == "support"
+    assert rows[0]["notes"] == {
+        "rationale": "Because.",
+        "caveats": None,
+        "followups": None,
+    }
+    assert "rationale" not in rows[0]

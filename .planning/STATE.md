@@ -12,14 +12,14 @@ See: .planning/PROJECT.md (updated 2026-01-23)
 Phase: 7 of 8 (Validation + Export)
 Plan: 1 of 3 in current phase
 Status: In progress
-Last activity: 2026-02-02 — Completed 07-02-PLAN.md
+Last activity: 2026-02-02 — Completed 07-01-PLAN.md
 
-Progress: ██████████░░ 83%
+Progress: ██████████░░ 87%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 25
+- Total plans completed: 26
 - Average duration: 14 min
 - Total execution time: 3.6 hours
 
@@ -68,6 +68,8 @@ Recent decisions affecting current work:
  - Span excerpt/jump anchors use TEI sentence_id as span_id so the UI can request stable jump metadata (06-01).
  - Evidence selections are persisted on disk under data/evidence_selections keyed by claim_id (06-01).
 
+ - Judgments are persisted on disk under data/judgments keyed by claim_id with collision-safe filenames, and exports default to final-only (07-01).
+
 - Use local citation graph data when DOI resolution is unavailable to avoid OpenAlex 404s (02-02).
 - Prefer GROBID consolidation when resolver sources disagree; warn that OpenAlex may return citing articles (02-06).
 
@@ -83,6 +85,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-02-02T08:41:48Z
-Stopped at: Completed 07-02-PLAN.md
-Resume file: .planning/phases/07-validation-export/07-03-PLAN.md
+Last session: 2026-02-02T08:44:36Z
+Stopped at: Completed 07-01-PLAN.md
+Resume file: .planning/phases/07-validation-export/07-02-PLAN.md

@@ -8,7 +8,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional, cast
 
 import requests
 import streamlit as st
@@ -18,6 +18,7 @@ from frontend import claim_queue
 
 QUEUE_KEY = "attachment_queue"
 TMP_DIR_KEY = "attachment_tmp_dir"
+SHOW_ARCHIVED_KEY = "attachment_queue_show_archived"
 STATUS_FLOW = ("pending", "converting", "parsing", "matched")
 DEFAULT_STATUSES = ("pending", "converting", "parsing", "matched", "error")
 API_TIMEOUT = 15
@@ -32,6 +33,8 @@ class QueueItem:
     status: str = "pending"
     claim_id: Optional[str] = None
     doc_id: Optional[str] = None
+    citation_index: Optional[int] = None
+    target_id: Optional[str] = None
     source: str = "drop"
     reference_hint: Optional[dict] = None
     uploaded_at: str = ""
@@ -41,6 +44,7 @@ class QueueItem:
     ambiguous_matches: Optional[List[str]] = None
     errors: Optional[List[str]] = None
     attachment_id: Optional[str] = None
+    archived: bool = False
 
 
 def _normalize_status(value: Optional[str]) -> str:
@@ -62,6 +66,7 @@ def init_attachment_queue_state() -> None:
             "active_drop_target": None,
             "summary": {status: 0 for status in DEFAULT_STATUSES},
         }
+    st.session_state.setdefault(SHOW_ARCHIVED_KEY, False)
     if TMP_DIR_KEY not in st.session_state:
         tmp_dir = tempfile.mkdtemp(prefix="attachments-")
         st.session_state[TMP_DIR_KEY] = tmp_dir
@@ -113,6 +118,16 @@ def _request(method: str, path: str, **kwargs) -> Optional[dict]:
     return response.json()
 
 
+def get_show_archived() -> bool:
+    init_attachment_queue_state()
+    return bool(st.session_state.get(SHOW_ARCHIVED_KEY, False))
+
+
+def set_show_archived(value: bool) -> None:
+    init_attachment_queue_state()
+    st.session_state[SHOW_ARCHIVED_KEY] = bool(value)
+
+
 def _hydrate_from_backend(item: dict, payload: dict) -> None:
     if not payload:
         return
@@ -126,17 +141,17 @@ def _hydrate_from_backend(item: dict, payload: dict) -> None:
     item["timeline"] = item["history"]
     item["error"] = payload.get("error")
     item["doc_id"] = payload.get("doc_id") or item.get("doc_id")
+    item["citation_index"] = payload.get("citation_index")
+    item["target_id"] = payload.get("target_id")
     item["reference_hint"] = payload.get("reference_hint") or item.get("reference_hint")
     item["filename"] = payload.get("filename") or item.get("filename")
     item["size"] = payload.get("size") or item.get("size")
+    item["archived"] = bool(payload.get("archived") or False)
     item["backend_details"] = payload
-    if (
-        payload.get("claim_id")
-        and previous_status != "matched"
-        and item.get("status") == "matched"
-    ):
+    claim_id = cast(Optional[str], payload.get("claim_id"))
+    if claim_id and previous_status != "matched" and item.get("status") == "matched":
         claim_queue.record_timeline_event(
-            payload.get("claim_id"),
+            claim_id,
             "matched",
             {"attachment_id": payload.get("id")},
         )
@@ -165,6 +180,8 @@ def _apply_backend_payload(payload: dict) -> dict:
             status=_normalize_status(payload.get("status", "pending")),
             claim_id=payload.get("claim_id"),
             doc_id=payload.get("doc_id"),
+            citation_index=payload.get("citation_index"),
+            target_id=payload.get("target_id"),
             source="backend",
             reference_hint=payload.get("reference_hint"),
             uploaded_at=payload.get("uploaded_at", _now()),
@@ -174,6 +191,7 @@ def _apply_backend_payload(payload: dict) -> dict:
             ambiguous_matches=[],
             errors=[],
             attachment_id=payload.get("id"),
+            archived=bool(payload.get("archived") or False),
         ).__dict__
         queue["items"][item_id] = queue_item
         queue["order"].insert(0, item_id)
@@ -187,24 +205,25 @@ def _upload_to_backend(queue_item_id: str) -> None:
     item = queue["items"].get(queue_item_id)
     if not item or not item.get("local_path"):
         return
-    claim_id = item.get("claim_id")
-    if not claim_id:
-        mark_item_error(queue_item_id, "Claim ID required for upload")
-        return
     payload = {
+        "claim_id": item.get("claim_id"),
         "doc_id": item.get("doc_id"),
+        "citation_index": item.get("citation_index"),
+        "target_id": item.get("target_id"),
         "filename": item.get("filename"),
         "local_path": item.get("local_path"),
         "size_bytes": item.get("size"),
         "reference_hint": item.get("reference_hint"),
     }
-    # Include the claim text so backend auto-reruns have needed data.
-    record = claim_queue.get_claim_record(claim_id) or {}
-    claim_text = record.get("claim") or ""
-    if claim_text.strip():
-        payload["claim_text"] = claim_text.strip()
+    claim_id = item.get("claim_id")
+    if claim_id:
+        # Include claim text when available so backend has context.
+        record = claim_queue.get_claim_record(claim_id) or {}
+        claim_text = record.get("claim") or ""
+        if claim_text.strip():
+            payload["claim_text"] = claim_text.strip()
     try:
-        response = _request("post", f"/claims/{claim_id}/attachments", json=payload)
+        response = _request("post", "/attachments", json=payload)
     except RuntimeError as exc:
         mark_item_error(queue_item_id, str(exc))
         return
@@ -215,19 +234,15 @@ def _upload_to_backend(queue_item_id: str) -> None:
     refresh_summary_counts()
 
 
-def sync_backend_state(claim_ids: Optional[Iterable[str]] = None) -> None:
-    claims = claim_ids or [
-        record.get("id") for record in claim_queue.get_claim_records()
-    ]
-    for claim_id in [cid for cid in claims if cid]:
-        try:
-            payload = _request("get", f"/claims/{claim_id}/attachments/status")
-        except RuntimeError:
-            continue
-        attachments = (payload or {}).get("attachments") or []
-        for record in attachments:
-            record.setdefault("claim_id", claim_id)
-            _apply_backend_payload(record)
+def sync_backend_state() -> None:
+    archived = get_show_archived()
+    try:
+        payload = _request("get", f"/attachments?archived={str(archived).lower()}")
+    except RuntimeError:
+        return
+    attachments = (payload or {}).get("attachments") or []
+    for record in attachments:
+        _apply_backend_payload(record)
     refresh_summary_counts()
     auto_match_queue_items()
 
@@ -257,6 +272,25 @@ def retry_attachment(queue_item_id: str) -> None:
     refresh_summary_counts()
 
 
+def bulk_retry_failed() -> int:
+    """Retry all failed attachments currently in session."""
+    queue = _queue_state()
+    retried = 0
+    for item_id in list(queue.get("order") or []):
+        item = queue["items"].get(item_id)
+        if not item:
+            continue
+        if bool(item.get("archived")) and not get_show_archived():
+            continue
+        if item.get("status") != "error":
+            continue
+        if not item.get("attachment_id"):
+            continue
+        retry_attachment(item_id)
+        retried += 1
+    return retried
+
+
 def enqueue_files(
     files: Iterable,
     *,
@@ -271,12 +305,18 @@ def enqueue_files(
     for file_obj in files or []:
         if file_obj is None:
             continue
+
+        filename = getattr(file_obj, "name", None) or "attachment.pdf"
+        size = getattr(file_obj, "size", None)
+        if _is_duplicate_upload(filename, size):
+            continue
+
         item_id = str(uuid.uuid4())
         local_path = _persist_file(file_obj)
         queue_item = QueueItem(
             id=item_id,
-            filename=file_obj.name,
-            size=getattr(file_obj, "size", None),
+            filename=filename,
+            size=size,
             local_path=local_path,
             claim_id=source_claim_id,
             doc_id=doc_id,
@@ -288,15 +328,31 @@ def enqueue_files(
             history=[],
             ambiguous_matches=[],
             errors=[],
+            archived=False,
         )
         item_dict = queue_item.__dict__
         queue["items"][item_id] = item_dict
         queue["order"].insert(0, item_id)
         _log_item_history(item_dict, "queued", detail=source)
         created_ids.append(item_id)
+
+        # Global upload starts processing immediately.
+        _upload_to_backend(item_id)
     refresh_summary_counts()
     auto_match_queue_items()
     return created_ids
+
+
+def _is_duplicate_upload(filename: str, size: Optional[int]) -> bool:
+    if not filename or size is None:
+        return False
+    queue = _queue_state()
+    for item in queue.get("items", {}).values():
+        if bool(item.get("archived")):
+            continue
+        if item.get("filename") == filename and item.get("size") == size:
+            return True
+    return False
 
 
 def handle_drop(
@@ -317,9 +373,16 @@ def handle_drop(
         reference_hint=reference_hint,
         source=source,
     )
+    # If the caller provides a claim_id, treat it as an immediate placement.
     for queue_item_id in created:
         if claim_id:
-            _upload_to_backend(queue_item_id)
+            place_attachment(
+                queue_item_id,
+                claim_id,
+                doc_id=doc_id,
+                target_id=(reference_hint or {}).get("reference_id"),
+                via=source,
+            )
     if claim_id:
         claim_queue.record_timeline_event(
             claim_id,
@@ -352,16 +415,20 @@ def refresh_summary_counts() -> None:
     queue = _queue_state()
     summary: Dict[str, int] = {status: 0 for status in DEFAULT_STATUSES}
     for item in queue["items"].values():
+        if bool(item.get("archived")) and not get_show_archived():
+            continue
         status = _normalize_status(item.get("status"))
         summary.setdefault(status, 0)
         summary[status] += 1
     queue["summary"] = summary
 
 
-def auto_match_queue_items(min_score: float = 0.65) -> None:
+def auto_match_queue_items(min_score: float = 0.90) -> None:
     queue = _queue_state()
     updated = False
     for item_id, item in queue["items"].items():
+        if bool(item.get("archived")):
+            continue
         if item.get("claim_id") or not item.get("filename"):
             continue
         candidates = claim_queue.auto_match_claim(item)
@@ -369,8 +436,15 @@ def auto_match_queue_items(min_score: float = 0.65) -> None:
             continue
         top = candidates[0]
         if top.get("score", 0) >= min_score:
-            attach_to_claim(top["id"], item_id, via="auto", score=top["score"])
-            _log_item_history(item, "auto-matched", detail=top["id"])
+            claim_record = claim_queue.get_claim_record(top["id"]) or {}
+            place_attachment(
+                item_id,
+                top["id"],
+                doc_id=claim_record.get("doc_id"),
+                via="auto",
+                score=top.get("score"),
+            )
+            _log_item_history(item, "auto-placed", detail=top["id"])
             updated = True
             continue
         _flag_ambiguous(item, candidates)
@@ -400,29 +474,71 @@ def _flag_ambiguous(item: dict, candidates: List[dict]) -> None:
     )
 
 
-def attach_to_claim(
-    claim_id: str,
+def place_attachment(
     queue_item_id: str,
+    claim_id: str,
     *,
+    doc_id: Optional[str] = None,
+    citation_index: Optional[int] = None,
+    target_id: Optional[str] = None,
     via: str = "manual",
     score: Optional[float] = None,
 ) -> None:
+    """Assign/re-place a source-bin item onto a claim via PATCH /attachments/{id}."""
     queue = _queue_state()
     item = queue["items"].get(queue_item_id)
     if not item:
         return
+    if bool(item.get("archived")):
+        return
+
+    # Ensure we have a backend record to place.
+    if not item.get("attachment_id"):
+        _upload_to_backend(queue_item_id)
+    attachment_id = item.get("attachment_id")
+    if not attachment_id:
+        mark_item_error(queue_item_id, "Attachment upload missing backend id")
+        return
+
     item["claim_id"] = claim_id
     item["ambiguous_matches"] = []
     if score is not None:
-        item["match_score"] = round(score, 3)
-    item["status"] = "pending"
-    _log_item_history(item, "assigned", detail=f"{via}:{claim_id}")
+        item["match_score"] = round(float(score), 3)
+    if doc_id is not None:
+        item["doc_id"] = doc_id
+    if citation_index is not None:
+        item["citation_index"] = citation_index
+    if target_id is not None:
+        item["target_id"] = target_id
+
+    patch_payload = {
+        "claim_id": claim_id,
+        "doc_id": item.get("doc_id"),
+        "citation_index": item.get("citation_index"),
+        "target_id": item.get("target_id"),
+    }
+    try:
+        response = _request(
+            "patch", f"/attachments/{attachment_id}", json=patch_payload
+        )
+    except RuntimeError as exc:
+        mark_item_error(queue_item_id, str(exc))
+        return
+    attachment = (response or {}).get("attachment")
+    if attachment:
+        _hydrate_from_backend(item, attachment)
+    _log_item_history(item, "placed", detail=f"{via}:{claim_id}")
     claim_queue.record_timeline_event(
         claim_id,
-        "attached",
-        {"filename": item["filename"], "method": via},
+        "source-placed",
+        {"filename": item.get("filename"), "method": via},
     )
-    _upload_to_backend(queue_item_id)
+    _trigger_evidence_rerun(claim_id, note="auto-placement")
+    refresh_summary_counts()
+
+
+# Backwards-compatible alias.
+attach_to_claim = place_attachment
 
 
 def detach_attachment(claim_id: str, queue_item_id: Optional[str] = None) -> None:
@@ -447,6 +563,29 @@ def detach_attachment(claim_id: str, queue_item_id: Optional[str] = None) -> Non
             "detached",
             {"filename": item["filename"]},
         )
+    refresh_summary_counts()
+
+
+def archive_attachment(queue_item_id: str, *, archived: bool) -> None:
+    queue = _queue_state()
+    item = queue["items"].get(queue_item_id)
+    if not item:
+        return
+    attachment_id = item.get("attachment_id")
+    if not attachment_id:
+        return
+    try:
+        response = _request(
+            "patch", f"/attachments/{attachment_id}", json={"archived": bool(archived)}
+        )
+    except RuntimeError as exc:
+        mark_item_error(queue_item_id, str(exc))
+        return
+    attachment = (response or {}).get("attachment")
+    if attachment:
+        _hydrate_from_backend(item, attachment)
+    item["archived"] = bool(archived)
+    _log_item_history(item, "archived" if archived else "unarchived")
     refresh_summary_counts()
 
 
@@ -557,5 +696,23 @@ def get_queue_items() -> List[dict]:
     for item_id in queue["order"]:
         item = queue["items"].get(item_id)
         if item:
+            if bool(item.get("archived")) and not get_show_archived():
+                continue
             items.append(item)
     return items
+
+
+def _trigger_evidence_rerun(claim_id: str, *, note: str) -> None:
+    record = claim_queue.get_claim_record(claim_id) or {}
+    claim_text = (record.get("claim") or "").strip()
+    if not claim_text:
+        return
+    try:
+        _ = _request(
+            "post",
+            f"/claims/{claim_id}/evidence/rerun",
+            json={"claim_text": claim_text, "note": note},
+        )
+    except RuntimeError:
+        # Quiet failure: evidence view will show errors inline.
+        return

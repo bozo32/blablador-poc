@@ -1166,33 +1166,45 @@ def _render_source_bin_row(item: dict) -> None:
     claim_label = (claim_record or {}).get("callout") if claim_record else None
     claim_text = (claim_record or {}).get("claim") if claim_record else None
 
-    classes = "source-row" + (" source-row--archived" if archived else "")
-    st.markdown(f'<div class="{classes}">', unsafe_allow_html=True)
-    st.markdown(
-        (
-            "<div class='source-row__header'>"
-            f"<div class='source-row__filename'>{html.escape(filename)}</div>"
-            f"<span class='source-status-pill {status_class}'>"
-            f"{html.escape(status_label)}"
-            "</span>"
-            "</div>"
-        ),
-        unsafe_allow_html=True,
+    classes = "source-row source-row--compact" + (
+        " source-row--archived" if archived else ""
     )
-    meta_bits = [f"Size: {size_label}"]
+    st.markdown(f'<div class="{classes}">', unsafe_allow_html=True)
+
+    header = st.columns([4, 1], gap="small")
+    with header[0]:
+        st.markdown(
+            f"<div class='source-row__filename'>{html.escape(filename)}</div>",
+            unsafe_allow_html=True,
+        )
+    with header[1]:
+        st.markdown(
+            (
+                f"<span class='source-status-pill {status_class}'>"
+                f"{html.escape(status_label)}"
+                "</span>"
+            ),
+            unsafe_allow_html=True,
+        )
+
+    meta_bits = [size_label]
     if claim_label:
         meta_bits.append(f"Assigned: {claim_label}")
-    st.caption(" • ".join(meta_bits))
+    st.caption(" • ".join(bit for bit in meta_bits if bit))
 
     progress = _status_progress(str(item.get("status") or ""))
     if progress is not None and progress < 1.0:
         st.progress(progress)
 
-    actions = st.columns([1, 1, 2, 1, 1], gap="small")
-    with actions[0]:
-        if st.button(
-            "View PDF", key=f"source-view-{queue_item_id}", use_container_width=True
-        ):
+    action_key = f"source-action::{queue_item_id}"
+    assign_key = f"source-assign::{queue_item_id}"
+    row = st.columns([2, 3], gap="small")
+
+    def _on_action_change() -> None:
+        choice = st.session_state.get(action_key)
+        if not choice:
+            return
+        if choice == "View PDF":
             snippet_source = (
                 (claim_text or "")
                 if claim_text
@@ -1205,7 +1217,15 @@ def _render_source_bin_row(item: dict) -> None:
                     st.caption(f"Cmd-F snippet copied: {snippet}")
                 else:
                     st.info(f"Copy this Cmd-F snippet: {snippet}")
+
             local_path = (item.get("local_path") or "").strip()
+            if not local_path:
+                local_path = (
+                    _local_path_for_attachment(
+                        str(item.get("attachment_id") or queue_item_id)
+                    )
+                    or ""
+                )
             if local_path:
                 err = clipboard.open_file(local_path)
                 if err:
@@ -1215,71 +1235,81 @@ def _render_source_bin_row(item: dict) -> None:
                     "No local PDF path recorded for this item. "
                     "Upload from this machine to enable open."
                 )
-    with actions[1]:
-        if str(item.get("status") or "").strip().lower() == "error":
-            if st.button(
-                "Retry", key=f"source-retry-{queue_item_id}", use_container_width=True
-            ):
+        elif choice == "Retry":
+            if str(item.get("status") or "").strip().lower() == "error":
                 attachment_queue.retry_attachment(str(queue_item_id))
-                _rerun()
-        else:
-            st.button(
-                "Retry",
-                key=f"source-retry-disabled-{queue_item_id}",
-                disabled=True,
-                use_container_width=True,
-            )
-    with actions[2]:
-        options = claim_queue.get_claim_options()
-        if options:
-            default_idx = _claim_option_index(
-                options, str(claim_id) if claim_id else None
-            )
-            selected = st.selectbox(
-                "Assign/Re-place",
-                options,
-                index=default_idx,
-                format_func=lambda option: option["label"],
-                key=f"source-assign-select-{queue_item_id}",
-                label_visibility="collapsed",
-            )
-            if st.button(
-                "Assign", key=f"source-assign-{queue_item_id}", use_container_width=True
-            ):
-                callout_tuple = st.session_state.get("selected_callout_tuple") or {}
-                selected_claim_id = selected.get("id")
-                claim_rec = claim_queue.get_claim_record(selected_claim_id) or {}
-                attachment_queue.place_attachment(
-                    str(queue_item_id),
-                    str(selected_claim_id),
-                    doc_id=claim_rec.get("doc_id")
-                    or st.session_state.get("selected_doc_id"),
-                    citation_index=callout_tuple.get("citation_index"),
-                    target_id=callout_tuple.get("target_id"),
-                    via="manual",
-                )
-                _rerun()
-        else:
-            st.caption("No claims yet.")
-    with actions[3]:
-        if archived:
-            if st.button(
-                "Unarchive",
-                key=f"source-unarchive-{queue_item_id}",
-                use_container_width=True,
-            ):
-                attachment_queue.archive_attachment(str(queue_item_id), archived=False)
-                _rerun()
-        else:
-            if st.button(
-                "Archive",
-                key=f"source-archive-{queue_item_id}",
-                use_container_width=True,
-            ):
+        elif choice == "Archive":
+            if not archived:
                 attachment_queue.archive_attachment(str(queue_item_id), archived=True)
-                _rerun()
-    with actions[4]:
-        st.caption("")
+        elif choice == "Unarchive":
+            if archived:
+                attachment_queue.archive_attachment(str(queue_item_id), archived=False)
+
+        st.session_state[action_key] = None
+        _rerun()
+
+    with row[0]:
+        action_options = [None, "View PDF", "Retry", "Archive", "Unarchive"]
+        st.selectbox(
+            "Action",
+            action_options,
+            key=action_key,
+            format_func=lambda v: "Action…" if v is None else str(v),
+            on_change=_on_action_change,
+            label_visibility="collapsed",
+        )
+
+    def _on_assign_change() -> None:
+        selected_claim_id = st.session_state.get(assign_key)
+        if not selected_claim_id:
+            return
+        callout_tuple = st.session_state.get("selected_callout_tuple") or {}
+        claim_rec = claim_queue.get_claim_record(str(selected_claim_id)) or {}
+        attachment_queue.place_attachment(
+            str(queue_item_id),
+            str(selected_claim_id),
+            doc_id=claim_rec.get("doc_id") or st.session_state.get("selected_doc_id"),
+            citation_index=callout_tuple.get("citation_index"),
+            target_id=callout_tuple.get("target_id"),
+            via="manual",
+        )
+        _rerun()
+
+    with row[1]:
+        options = claim_queue.get_claim_options()
+        if not options:
+            st.caption("No claims yet.")
+        else:
+            claim_ids = [option.get("id") for option in options if option.get("id")]
+            label_lookup = {option["id"]: option["label"] for option in options}
+            assign_options = [None] + claim_ids
+            default_idx = 0
+            current_claim = str(claim_id) if claim_id else None
+            if current_claim in claim_ids:
+                default_idx = assign_options.index(current_claim)
+            if assign_key in st.session_state:
+                st.selectbox(
+                    "Assign",
+                    assign_options,
+                    key=assign_key,
+                    format_func=lambda v: "Assign/Re-place…"
+                    if v is None
+                    else label_lookup.get(str(v), str(v)),
+                    on_change=_on_assign_change,
+                    label_visibility="collapsed",
+                )
+            else:
+                st.selectbox(
+                    "Assign",
+                    assign_options,
+                    index=default_idx,
+                    key=assign_key,
+                    format_func=lambda v: "Assign/Re-place…"
+                    if v is None
+                    else label_lookup.get(str(v), str(v)),
+                    on_change=_on_assign_change,
+                    label_visibility="collapsed",
+                )
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -3019,24 +3049,6 @@ def render_workspace_left_pane() -> None:
         unsafe_allow_html=True,
     )
 
-    controls = st.columns([1, 1], gap="small")
-    with controls[0]:
-        st.toggle("Dense", key=WORKSPACE_DENSE_MODE)
-    with controls[1]:
-        if st.button(
-            "⚙",
-            key="workspace-gear",
-            help="Settings",
-            use_container_width=True,
-        ):
-            st.session_state[WORKSPACE_SETTINGS_OPEN] = not bool(
-                st.session_state.get(WORKSPACE_SETTINGS_OPEN)
-            )
-
-    if st.session_state.get(WORKSPACE_SETTINGS_OPEN):
-        with st.container():
-            render_settings_controls()
-
     st.markdown('<div class="ws-pane-body">', unsafe_allow_html=True)
 
     inject_attachment_panel_styles()
@@ -3084,32 +3096,68 @@ def render_workspace_left_pane() -> None:
         label_visibility="collapsed",
     )
 
-    controls = st.columns([1, 1, 1], gap="small")
-    with controls[0]:
-        show_archived = st.toggle(
-            "Show archived",
-            value=attachment_queue.get_show_archived(),
-            key="source-bin-show-archived",
+    source_controls = st.columns([1, 1, 1, 1], gap="small")
+    with source_controls[0]:
+        _ = st.toggle(
+            "History",
+            key=attachment_queue.SHOW_HISTORY_KEY,
+            help="Show persisted items from previous sessions",
         )
-    with controls[1]:
+    with source_controls[1]:
+        _ = st.toggle(
+            "Archived",
+            key=attachment_queue.SHOW_ARCHIVED_KEY,
+            help="Include archived items",
+        )
+    with source_controls[2]:
         if st.button("Refresh", key="source-bin-refresh", use_container_width=True):
-            attachment_queue.set_show_archived(bool(show_archived))
             attachment_queue.sync_backend_state()
             _rerun()
-    with controls[2]:
+    with source_controls[3]:
         if st.button(
-            "Bulk retry", key="source-bin-bulk-retry", use_container_width=True
+            "Retry failed", key="source-bin-bulk-retry", use_container_width=True
         ):
-            attachment_queue.set_show_archived(bool(show_archived))
             attachment_queue.bulk_retry_failed()
             _rerun()
 
-    attachment_queue.set_show_archived(bool(show_archived))
+    if not attachment_queue.get_show_history():
+        st.caption(
+            "Showing current session only. Toggle History to reveal prior uploads."
+        )
+
     attachment_queue.sync_backend_state()
     st.markdown('<div class="source-bin">', unsafe_allow_html=True)
     for item in attachment_queue.get_queue_items():
         _render_source_bin_row(item)
     st.markdown("</div>", unsafe_allow_html=True)
+
+    clear_cols = st.columns([2, 1, 1], gap="small")
+    with clear_cols[0]:
+        confirm_clear = st.checkbox(
+            "Confirm archive all persisted Source bin items",
+            key="source-bin-clear-confirm",
+            help="This archives items on the backend; it does not delete files.",
+        )
+    with clear_cols[1]:
+        if st.button(
+            "Clear Source bin",
+            key="source-bin-clear",
+            use_container_width=True,
+            disabled=not bool(confirm_clear),
+        ):
+            archived = attachment_queue.archive_all_active()
+            attachment_queue.sync_backend_state()
+            st.info(f"Archived {archived} attachment(s).")
+            _rerun()
+    with clear_cols[2]:
+        if st.button(
+            "New session",
+            key="source-bin-new-session",
+            help="Clears this session's Source bin view without touching backend data.",
+            use_container_width=True,
+        ):
+            attachment_queue.clear_session_state()
+            _rerun()
 
     st.divider()
     st.markdown("**Workspace documents (ingest)**")
@@ -3192,6 +3240,24 @@ def render_workspace_left_pane() -> None:
         key="uploaded_files",
         on_change=handle_upload,
     )
+
+    st.markdown("---")
+    footer = st.columns([1, 1], gap="small")
+    with footer[0]:
+        st.toggle("Dense", key=WORKSPACE_DENSE_MODE)
+    with footer[1]:
+        if st.button(
+            "Settings",
+            key="workspace-gear",
+            help="Workspace settings",
+            use_container_width=True,
+        ):
+            st.session_state[WORKSPACE_SETTINGS_OPEN] = not bool(
+                st.session_state.get(WORKSPACE_SETTINGS_OPEN)
+            )
+    if st.session_state.get(WORKSPACE_SETTINGS_OPEN):
+        with st.container():
+            render_settings_controls()
 
     st.markdown("</div>", unsafe_allow_html=True)
 

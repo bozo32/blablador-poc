@@ -92,6 +92,14 @@
   margin-bottom: 0.6rem;
 }
 
+.source-row--compact {
+  padding: calc(var(--ws-space-1, 0.5rem) * 1.1)
+    calc(var(--ws-space-2, 0.75rem) * 1.05);
+  box-shadow: none;
+  border-radius: 10px;
+  margin-bottom: calc(var(--ws-space-1, 0.5rem) * 0.9);
+}
+
 .source-row--archived {
   opacity: 0.65;
 }
@@ -111,6 +119,10 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.source-row--compact .source-row__filename {
+  font-size: 0.9rem;
 }
 
 .source-row__meta {

@@ -124,8 +124,6 @@ def init_session_state():
         "auto_resolve_on_upload": True,
         "citation_debug": False,
         "show_demo_claims": False,
-        # Query-param navigation is per-session only.
-        "_accept_query_params": False,
         # Workspace shell (Phase 08)
         WORKSPACE_DENSE_MODE: False,
         WORKSPACE_SETTINGS_OPEN: False,
@@ -3356,26 +3354,8 @@ def draw_workspace() -> None:
 
 
 def draw_ingestion_panel(*, center, right) -> None:
-    # Restore selected document from query params.
-    # Note: query-param navigation is per-session only; on a fresh session we
-    # clear params so restart shows a clean slate.
-    try:
-        params = st.query_params  # type: ignore[attr-defined]
-        param_doc = params.get("doc")
-        if isinstance(param_doc, list):
-            param_doc = param_doc[0] if param_doc else None
-        if not st.session_state.get("_accept_query_params"):
-            if params.get("doc") or params.get("cite") or params.get("target"):
-                try:
-                    st.query_params.clear()  # type: ignore[attr-defined]
-                except Exception:
-                    st.experimental_set_query_params()
-        else:
-            if param_doc and param_doc != st.session_state.get("selected_doc_id"):
-                st.session_state["selected_doc_id"] = str(param_doc)
-                load_selected_document(show_error=False)
-    except Exception:
-        pass
+    # Query params are used for chip navigation (?doc=...&cite=...&target=...).
+    # We apply them if present, then clear them to avoid sticky restarts.
     # Ingestion controls live in the left pane; this function hosts the
     # center (Document/Review) and right (collector) panes.
     docs = st.session_state.get("ingested_docs")
@@ -3657,9 +3637,20 @@ def draw_ingestion_panel(*, center, right) -> None:
     if isinstance(param_target, list):
         param_target = param_target[0] if param_target else None
 
+    should_clear_params = bool(param_doc or param_cite or param_target)
+
     if param_doc and param_doc != st.session_state.get("selected_doc_id"):
         st.session_state["selected_doc_id"] = str(param_doc)
         load_selected_document(show_error=False)
+
+    if should_clear_params:
+        try:
+            st.query_params.clear()  # type: ignore[attr-defined]
+        except Exception:
+            try:
+                st.experimental_set_query_params()
+            except Exception:
+                pass
 
     def _set_query_params(
         *, doc: str, cite: Optional[int], target: Optional[str]
@@ -4653,8 +4644,6 @@ def main():
     inject_judgment_styles()
     inject_evidence_review_styles()
     draw_workspace()
-    # After first render, allow query-param navigation for in-text citation links.
-    st.session_state["_accept_query_params"] = True
 
 
 if __name__ == "__main__":

@@ -785,6 +785,8 @@ def get_queue_items() -> List[dict]:
 
 
 def _trigger_evidence_rerun(claim_id: str, *, note: str) -> None:
+    if not claim_id or str(claim_id).strip().lower() == "none":
+        return
     record = claim_queue.get_claim_record(claim_id) or {}
     claim_text = (record.get("claim") or "").strip()
     if not claim_text:

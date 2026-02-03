@@ -15,6 +15,24 @@ from frontend.state_keys import (
 )
 
 
+def _segment_locally(text: str, base_index: int) -> list[str]:
+    """Deterministic fallback when no LLM model is configured."""
+    import re
+
+    raw = (text or "").strip()
+    if not raw:
+        return []
+    parts = [p.strip() for p in re.split(r"(?<=[.!?])\s+", raw) if p.strip()]
+    if not parts:
+        parts = [raw]
+
+    segments: list[str] = []
+    for idx, part in enumerate(parts):
+        letter = chr(ord("a") + idx)
+        segments.append(f"{base_index}{letter}. {part}")
+    return segments
+
+
 def render(
     *,
     doc_id: str,
@@ -79,9 +97,13 @@ def render(
     if st.button(
         "Segment sentence",
         key=scoped(scope=scope, canonical=f"segment-sentence-inline-{citation_index}"),
-        disabled=not selected_model or not cite_text,
+        disabled=not cite_text,
     ):
-        segments = seg_via_llm(cite_text, int(citation_index) + 1, selected_model or "")
+        base_index = int(citation_index) + 1
+        if selected_model:
+            segments = seg_via_llm(cite_text, base_index, selected_model)
+        else:
+            segments = _segment_locally(cite_text, base_index)
         st.session_state.setdefault("citation_sentence_segments", {})[
             str(int(citation_index))
         ] = segments

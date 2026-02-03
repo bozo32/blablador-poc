@@ -91,13 +91,13 @@ p {
 
 :root {
   /* Injected only when dense mode is enabled. */
-  --ws-font-scale: 0.92;
-  --ws-space-0: 0.2rem;
-  --ws-space-1: 0.42rem;
-  --ws-space-2: 0.6rem;
-  --ws-space-3: 0.85rem;
-  --ws-page-pad-top: 0.35rem;
-  --ws-page-pad-x: 0.95rem;
+  --ws-font-scale: 0.86;
+  --ws-space-0: 0.16rem;
+  --ws-space-1: 0.34rem;
+  --ws-space-2: 0.5rem;
+  --ws-space-3: 0.72rem;
+  --ws-page-pad-top: 0.25rem;
+  --ws-page-pad-x: 0.85rem;
 }
 
 /* Make the difference obvious: tighten global Streamlit spacing */

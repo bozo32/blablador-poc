@@ -82,9 +82,9 @@ settings = AppSettings()
 def init_session_state():
     """Initialize Streamlit session state keys from settings."""
     defaults = {
-        "api_url": settings.BACKEND_URL,
-        "api_key": "" if settings.API_KEY == "..." else settings.API_KEY,
-        "api_base": settings.API_BASE,
+        "api_url": (settings.BACKEND_URL or "http://localhost:8000"),
+        "api_key": "" if settings.API_KEY == "..." else (settings.API_KEY or ""),
+        "api_base": (settings.API_BASE or "http://localhost:8070"),
         "embed_model": settings.EMBED_MODEL,
         "max_sentences": settings.MAX_SENTENCES,
         "faiss_min_score": settings.FAISS_MIN_SCORE,
@@ -99,7 +99,7 @@ def init_session_state():
         "seg_requested": False,
         "pipeline_mode": getattr(settings, "PIPELINE_MODE", "classic"),
         "ingested_docs": [],
-        "selected_doc_id": None,
+        "selected_doc_id": "",
         "active_document": None,
         "citation_selected_index": None,
         "citation_selected_target": None,
@@ -124,6 +124,8 @@ def init_session_state():
         "auto_resolve_on_upload": True,
         "citation_debug": False,
         "show_demo_claims": False,
+        # Query-param navigation is per-session only.
+        "_accept_query_params": False,
         # Workspace shell (Phase 08)
         WORKSPACE_DENSE_MODE: False,
         WORKSPACE_SETTINGS_OPEN: False,
@@ -321,8 +323,8 @@ def refresh_ingested_docs(show_error: bool = True) -> list[dict]:
     st.session_state["ingested_docs"] = documents
     doc_ids = [doc.get("id") for doc in documents if doc.get("id")]
     current = st.session_state.get("selected_doc_id")
-    if doc_ids and current not in doc_ids:
-        st.session_state["selected_doc_id"] = doc_ids[0]
+    if current and current not in doc_ids:
+        st.session_state["selected_doc_id"] = ""
     return documents
 
 
@@ -3111,7 +3113,7 @@ def render_workspace_left_pane() -> None:
         # Streamlit does not allow assigning to a file_uploader's widget key.
         # Rotate the uploader key to clear the widget after processing.
         st.session_state[uploader_version_key] = uploader_version + 1
-        _rerun()
+        # Callback reruns automatically; explicit st.rerun() is a no-op here.
 
     st.file_uploader(
         "Upload cited-source PDFs",
@@ -3205,20 +3207,18 @@ def render_workspace_left_pane() -> None:
     docs = docs or []
     if docs:
         doc_ids = [doc.get("id") for doc in docs if doc.get("id")]
-        current = st.session_state.get("selected_doc_id")
-        if doc_ids and current not in doc_ids:
-            st.session_state["selected_doc_id"] = doc_ids[0]
         if doc_ids:
+            options = [""] + list(doc_ids)
             st.selectbox(
                 "Active document",
-                doc_ids,
+                options,
                 format_func=lambda doc_id: next(
                     (
                         f"{doc.get('filename')} ({doc_id[:8]})"
                         for doc in docs
                         if doc.get("id") == doc_id
                     ),
-                    doc_id,
+                    "Select a document..." if not doc_id else doc_id,
                 ),
                 key="selected_doc_id",
                 on_change=load_selected_document,
@@ -3299,16 +3299,24 @@ def draw_workspace() -> None:
 
 
 def draw_ingestion_panel(*, center, right) -> None:
-    # Restore selected document from query params (clicking citation chips
-    # navigates with ?doc=...&cite=...).
+    # Restore selected document from query params.
+    # Note: query-param navigation is per-session only; on a fresh session we
+    # clear params so restart shows a clean slate.
     try:
         params = st.query_params  # type: ignore[attr-defined]
         param_doc = params.get("doc")
         if isinstance(param_doc, list):
             param_doc = param_doc[0] if param_doc else None
-        if param_doc and param_doc != st.session_state.get("selected_doc_id"):
-            st.session_state["selected_doc_id"] = str(param_doc)
-            load_selected_document(show_error=False)
+        if not st.session_state.get("_accept_query_params"):
+            if params.get("doc") or params.get("cite") or params.get("target"):
+                try:
+                    st.query_params.clear()  # type: ignore[attr-defined]
+                except Exception:
+                    st.experimental_set_query_params()
+        else:
+            if param_doc and param_doc != st.session_state.get("selected_doc_id"):
+                st.session_state["selected_doc_id"] = str(param_doc)
+                load_selected_document(show_error=False)
     except Exception:
         pass
     # Ingestion controls live in the left pane; this function hosts the
@@ -4577,7 +4585,7 @@ def run_prebuild():
         "faiss_min_score": float(faiss_min_score),
         "embed_model": st.session_state["embed_model"],
         "api_key": st.session_state["api_key"],
-        "base_url": st.session_state["base_url"],
+        "base_url": st.session_state.get("api_base", ""),
     }
     requests.post(f"{api_url}/prebuild", json=payload)
 
@@ -4588,6 +4596,8 @@ def main():
     inject_judgment_styles()
     inject_evidence_review_styles()
     draw_workspace()
+    # After first render, allow query-param navigation for in-text citation links.
+    st.session_state["_accept_query_params"] = True
 
 
 if __name__ == "__main__":

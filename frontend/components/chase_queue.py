@@ -55,6 +55,18 @@ def render(
         st.info("Click a citation in Document text to add it here.")
         return
 
+    def _sort_key(entry: dict) -> tuple[int, str]:
+        try:
+            cite_idx = int(entry.get("citation_index") or 0)
+        except Exception:
+            cite_idx = 0
+        tgt = entry.get("target_id")
+        return (cite_idx, "" if tgt is None else str(tgt))
+
+    # Render in stable document order; opening/activating an item must not
+    # reshuffle the list.
+    ordered_followed = sorted(list(followed), key=_sort_key)
+
     selected_entry_key = None
     if selected_index is not None:
         selected_entry_key = entry_key(int(selected_index), selected_target)
@@ -65,8 +77,11 @@ def render(
         open_key = selected_entry_key
         st.session_state[open_state_key] = open_key
 
-    for entry in followed:
-        cite_idx = int(entry.get("citation_index"))
+    for entry in ordered_followed:
+        try:
+            cite_idx = int(entry.get("citation_index") or 0)
+        except Exception:
+            cite_idx = 0
         tgt = entry.get("target_id")
         ek = entry_key(cite_idx, tgt)
         is_open = open_key == ek

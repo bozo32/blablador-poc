@@ -3199,6 +3199,14 @@ def render_workspace_left_pane() -> None:
         )
 
     attachment_queue.sync_backend_state()
+
+    # While sources are processing, keep the UI fresh.
+    if attachment_queue.has_inflight_jobs():
+        if st_autorefresh:
+            st_autorefresh(interval=4000, key="source-bin-autopoll")
+        else:
+            st.caption("Processing sources... click Refresh to update.")
+
     st.markdown('<div class="source-bin">', unsafe_allow_html=True)
     for item in attachment_queue.get_queue_items():
         _render_source_bin_row(item)

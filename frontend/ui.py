@@ -272,14 +272,30 @@ SEGMENT_PROMPT_TEMPLATE = (
 SEG_RE = re.compile(r"^\s*\d+[a-z]\.", re.I)
 
 
+def _segment_locally(sentence: str, row_idx: int) -> list[str]:
+    raw = (sentence or "").strip()
+    if not raw:
+        return []
+    parts = [p.strip() for p in re.split(r"(?<=[.!?])\s+", raw) if p.strip()]
+    if not parts:
+        parts = [raw]
+    segments: list[str] = []
+    for idx, part in enumerate(parts):
+        letter = chr(ord("a") + idx)
+        segments.append(f"{row_idx}{letter}. {part}")
+    return segments
+
+
 def seg_via_llm(sentence: str, row_idx: int, model: str) -> list[str]:
     prompt = SEGMENT_PROMPT_TEMPLATE.format(row_idx=row_idx, sentence=sentence)
     actual_model = model  # use the model string chosen in the UI
 
-    client = BlabladorClient(
-        api_key=st.session_state.get("api_key", ""),
-        base_url=st.session_state.get("api_base", ""),
-    )
+    api_key = (st.session_state.get("api_key") or "").strip()
+    base_url = (st.session_state.get("api_base") or "").strip()
+    if not api_key or not base_url or not actual_model:
+        return _segment_locally(sentence, row_idx)
+
+    client = BlabladorClient(api_key=api_key, base_url=base_url)
     try:
         text = client.completion(
             prompt,
@@ -288,12 +304,12 @@ def seg_via_llm(sentence: str, row_idx: int, model: str) -> list[str]:
             max_tokens=256,
         )
     except Exception as e:
-        st.error(f"Blablador API error: {e}")
-        return []
+        st.warning(f"Segmentation API error: {e}. Falling back locally.")
+        return _segment_locally(sentence, row_idx)
     # Split and extract numbered segments
     lines = [ln.strip() for ln in text.splitlines()]
     segments = [ln for ln in lines if SEG_RE.match(ln)]
-    return segments  # (use your fallback logic as before)
+    return segments or _segment_locally(sentence, row_idx)
 
 
 def handle_upload():

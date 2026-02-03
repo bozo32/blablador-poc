@@ -130,6 +130,7 @@ def init_session_state():
         WORKSPACE_DENSE_MODE: False,
         WORKSPACE_SETTINGS_OPEN: False,
         WORKSPACE_ACTIVE_TAB: WORKSPACE_TAB_DOCUMENT,
+        "workspace_upload_mode": "source",
     }
     for key, val in defaults.items():
         st.session_state.setdefault(key, val)
@@ -694,7 +695,8 @@ def _render_sentence_with_citation_chips(
         if not cleaned:
             cleaned = "citation"
         return (
-            f'<a class="citation-chip citation-chip-link" href="{html.escape(href)}">'
+            f'<a class="citation-chip citation-chip-link" '
+            f'href="{html.escape(href)}" target="_self">'
             f"{html.escape(cleaned)}"
             "</a>"
         )
@@ -753,7 +755,8 @@ def _render_sentence_with_citation_cluster(
     chip_inner = "citations"
     if href:
         chip = (
-            f'<a class="citation-chip citation-chip-link" href="{html.escape(href)}">'
+            f'<a class="citation-chip citation-chip-link" '
+            f'href="{html.escape(href)}" target="_self">'
             f"{chip_inner}</a>"
         )
     else:
@@ -3089,7 +3092,21 @@ def render_workspace_left_pane() -> None:
             unsafe_allow_html=True,
         )
 
-    st.markdown("**Source bin (cited PDFs)**")
+    st.markdown("**PDF upload**")
+
+    # Single upload surface: either ingest a citing document or add cited sources.
+    docs_present = bool(st.session_state.get("ingested_docs") or [])
+    default_mode = "source" if docs_present else "citing"
+    st.session_state.setdefault("workspace_upload_mode", default_mode)
+    st.selectbox(
+        "Upload as",
+        ["citing", "source"],
+        format_func=lambda v: (
+            "Citing document" if v == "citing" else "Cited source (Source bin)"
+        ),
+        key="workspace_upload_mode",
+        label_visibility="collapsed",
+    )
 
     uploader_version_key = "_source_bin_uploader_version"
     uploader_version = int(st.session_state.get(uploader_version_key, 0) or 0)
@@ -3099,30 +3116,76 @@ def render_workspace_left_pane() -> None:
         files = st.session_state.get(uploader_key) or []
         if not files:
             return
-        selected_target = normalize_target_id(
-            st.session_state.get("citation_selected_target")
-        )
-        doc_id = st.session_state.get("selected_doc_id")
-        reference_hint = {"reference_id": selected_target} if selected_target else {}
-        attachment_queue.enqueue_files(
-            files,
-            doc_id=str(doc_id) if doc_id else None,
-            reference_hint=reference_hint,
-            source="source-bin",
-        )
+
+        if st.session_state.get("workspace_upload_mode") == "citing":
+            api_url = st.session_state.get("api_url", "http://localhost:8000")
+            uploaded = []
+            with st.spinner("Uploading PDFs..."):
+                for file in files:
+                    try:
+                        uploaded_doc = upload_pdf(api_url, file)
+                    except RuntimeError as exc:
+                        st.error(
+                            f"Upload failed for {getattr(file, 'name', 'file')}: {exc}"
+                        )
+                        continue
+                    if uploaded_doc:
+                        uploaded.append(uploaded_doc)
+
+            if uploaded:
+                refresh_ingested_docs(show_error=False)
+                last_doc = uploaded[-1]
+                if last_doc.get("id"):
+                    st.session_state["selected_doc_id"] = last_doc["id"]
+                    st.session_state["active_document"] = last_doc
+
+                doc_id = last_doc.get("id")
+                if doc_id and st.session_state.get("auto_extract_on_upload"):
+                    with st.spinner("Running extraction..."):
+                        try:
+                            trigger_extraction(api_url, doc_id)
+                            document = load_selected_document(show_error=False)
+                            st.session_state["active_document"] = document
+                        except RuntimeError as exc:
+                            st.error(f"Extraction failed: {exc}")
+
+                if doc_id and st.session_state.get("auto_resolve_on_upload"):
+                    with st.spinner("Resolving references..."):
+                        try:
+                            trigger_resolution(api_url, doc_id)
+                            document = load_selected_document(show_error=False)
+                            st.session_state["active_document"] = document
+                        except RuntimeError as exc:
+                            st.warning(_resolution_error_message(exc))
+        else:
+            selected_target = normalize_target_id(
+                st.session_state.get("citation_selected_target")
+            )
+            doc_id = st.session_state.get("selected_doc_id")
+            reference_hint = (
+                {"reference_id": selected_target} if selected_target else {}
+            )
+            attachment_queue.enqueue_files(
+                files,
+                doc_id=str(doc_id) if doc_id else None,
+                reference_hint=reference_hint,
+                source="source-bin",
+            )
         # Streamlit does not allow assigning to a file_uploader's widget key.
         # Rotate the uploader key to clear the widget after processing.
         st.session_state[uploader_version_key] = uploader_version + 1
         # Callback reruns automatically; explicit st.rerun() is a no-op here.
 
     st.file_uploader(
-        "Upload cited-source PDFs",
+        "Upload PDFs",
         type=["pdf"],
         accept_multiple_files=True,
         key=uploader_key,
         on_change=_handle_source_bin_upload,
         label_visibility="collapsed",
     )
+
+    st.markdown("**Source bin**")
 
     # Keep controls readable (avoid narrow 4-col layouts that force vertical text).
     controls_row_1 = st.columns([1, 1], gap="small")
@@ -3162,44 +3225,38 @@ def render_workspace_left_pane() -> None:
         _render_source_bin_row(item)
     st.markdown("</div>", unsafe_allow_html=True)
 
-    clear_cols = st.columns([2, 1, 1], gap="small")
-    with clear_cols[0]:
-        confirm_clear = st.checkbox(
-            "Confirm archive all persisted Source bin items",
-            key="source-bin-clear-confirm",
-            help="This archives items on the backend; it does not delete files.",
-        )
-    with clear_cols[1]:
-        if st.button(
-            "Clear Source bin",
-            key="source-bin-clear",
-            use_container_width=True,
-            disabled=not bool(confirm_clear),
-        ):
-            archived = attachment_queue.archive_all_active()
-            attachment_queue.sync_backend_state()
-            st.info(f"Archived {archived} attachment(s).")
-            _rerun()
-    with clear_cols[2]:
-        if st.button(
-            "New session",
-            key="source-bin-new-session",
-            help="Clears this session's Source bin view without touching backend data.",
-            use_container_width=True,
-        ):
-            attachment_queue.clear_session_state()
-            _rerun()
+    with st.expander("Manage", expanded=False):
+        clear_cols = st.columns([2, 1, 1], gap="small")
+        with clear_cols[0]:
+            confirm_clear = st.checkbox(
+                "Confirm archive all persisted Source bin items",
+                key="source-bin-clear-confirm",
+                help="This archives items on the backend; it does not delete files.",
+            )
+        with clear_cols[1]:
+            if st.button(
+                "Clear Source bin",
+                key="source-bin-clear",
+                use_container_width=True,
+                disabled=not bool(confirm_clear),
+            ):
+                archived = attachment_queue.archive_all_active()
+                attachment_queue.sync_backend_state()
+                st.info(f"Archived {archived} attachment(s).")
+                _rerun()
+        with clear_cols[2]:
+            if st.button(
+                "New session",
+                key="source-bin-new-session",
+                help=("Clears this session's Source bin view (backend unchanged)."),
+                use_container_width=True,
+            ):
+                attachment_queue.clear_session_state()
+                _rerun()
 
     st.divider()
-    st.markdown("**Workspace documents (ingest)**")
-    st.file_uploader(
-        "PDF files",
-        type=["pdf"],
-        accept_multiple_files=True,
-        key="uploaded_pdfs",
-        on_change=handle_pdf_upload,
-    )
-    if st.button("Refresh ingested PDFs", key="refresh-ingested"):
+    st.markdown("**Active document**")
+    if st.button("Refresh", key="refresh-ingested"):
         refresh_ingested_docs()
     docs = st.session_state.get("ingested_docs")
     if docs is None:
@@ -4028,7 +4085,7 @@ def draw_ingestion_panel(*, center, right) -> None:
                         parts.append(
                             (
                                 f'<a class="{chip_class} citation-chip-link" '
-                                f'href="{html.escape(href)}">'
+                                f'href="{html.escape(href)}" target="_self">'
                                 f"{html.escape(label_text)}"
                                 "</a>"
                             )

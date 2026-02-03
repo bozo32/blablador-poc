@@ -313,16 +313,23 @@ def handle_upload():
 
 def refresh_ingested_docs(show_error: bool = True) -> list[dict]:
     api_url = st.session_state.get("api_url", "http://localhost:8000")
+    previous = st.session_state.get("ingested_docs") or []
     try:
         documents = list_documents(api_url)
     except RuntimeError as exc:
         if show_error:
             st.error(f"Failed to load ingested PDFs: {exc}")
-        return []
+        return list(previous)
+
+    # If the backend temporarily returns an empty list (startup, transient error),
+    # keep the previous list so we don't blank the workspace.
+    if not documents and previous:
+        return list(previous)
+
     st.session_state["ingested_docs"] = documents
     doc_ids = [doc.get("id") for doc in documents if doc.get("id")]
     current = st.session_state.get("selected_doc_id")
-    if current and current not in doc_ids:
+    if doc_ids and current and current not in doc_ids:
         st.session_state["selected_doc_id"] = ""
     return documents
 
@@ -440,8 +447,6 @@ def highlight_callout(text: str | None, callout: str | None) -> str:
 
 
 def inject_citation_styles() -> None:
-    if st.session_state.get("citation_styles_loaded"):
-        return
     st.markdown(
         """
         <style>
@@ -454,28 +459,28 @@ def inject_citation_styles() -> None:
             padding: 2px 6px !important;
             margin: 0 2px !important;
             border-radius: 10px !important;
-            background: #eef3ff !important;
-            color: #1f3a8a !important;
-            border: 1px solid #c9d8ff !important;
+            background: rgba(39, 128, 227, 0.08) !important;
+            color: #1f6fc7 !important;
+            border: 1px solid rgba(39, 128, 227, 0.22) !important;
             font-weight: 600 !important;
             font-size: 0.82rem !important;
             text-decoration: none !important;
         }
         .citation-chip:hover {
-            background: #dce7ff;
+            background: rgba(39, 128, 227, 0.12);
         }
         .citation-chip-link {
             text-decoration: underline;
             text-decoration-thickness: 1px;
             text-underline-offset: 2px;
-            text-decoration-color: rgba(31, 58, 138, 0.35);
+            text-decoration-color: rgba(39, 128, 227, 0.35);
             transition: background 120ms ease, text-decoration-color 120ms ease;
         }
         .citation-chip-link:hover {
-            text-decoration-color: rgba(31, 58, 138, 0.75);
+            text-decoration-color: rgba(39, 128, 227, 0.75);
         }
         .citation-chip-link:visited {
-            color: #1f3a8a;
+            color: #1f6fc7;
         }
         .citation-chip-selected {
             background: rgba(255, 242, 179, 0.55);
@@ -514,7 +519,6 @@ def inject_citation_styles() -> None:
         """,
         unsafe_allow_html=True,
     )
-    st.session_state["citation_styles_loaded"] = True
 
 
 def _sentence_anchor(sentence: str) -> str:
@@ -848,41 +852,24 @@ JUDGMENT_CSS_PATH = pathlib.Path(__file__).resolve().parent / "assets" / "judgme
 
 
 def inject_evidence_review_styles() -> None:
-    key = "_evidence_review_styles_loaded"
-    if st.session_state.get(key):
-        return
     if EVIDENCE_REVIEW_CSS_PATH.exists():
         st.markdown(
             f"<style>{EVIDENCE_REVIEW_CSS_PATH.read_text()}</style>",
             unsafe_allow_html=True,
         )
-    st.session_state[key] = True
 
 
 def inject_judgment_styles() -> None:
-    key = "_judgment_styles_loaded"
-    if st.session_state.get(key):
-        return
     if JUDGMENT_CSS_PATH.exists():
         st.markdown(
             f"<style>{JUDGMENT_CSS_PATH.read_text()}</style>",
             unsafe_allow_html=True,
         )
-    st.session_state[key] = True
 
 
 def inject_workspace_styles(*, dense: bool) -> None:
     """Load base workspace CSS plus optional dense overrides."""
-    cache_key = "_workspace_styles_loaded"
-    cache_dense_key = "_workspace_styles_dense"
-    if (
-        st.session_state.get(cache_key)
-        and st.session_state.get(cache_dense_key) == dense
-    ):
-        return
     if not WORKSPACE_CSS_PATH.exists():
-        st.session_state[cache_key] = True
-        st.session_state[cache_dense_key] = dense
         return
 
     raw = WORKSPACE_CSS_PATH.read_text()
@@ -894,20 +881,15 @@ def inject_workspace_styles(*, dense: bool) -> None:
         dense_css = splitter + dense_css
     css = base_css + (dense_css if dense else "")
     st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
-    st.session_state[cache_key] = True
-    st.session_state[cache_dense_key] = dense
 
 
 def inject_attachment_panel_styles() -> None:
     """Load CSS for the attachment queue workspace."""
-    if st.session_state.get("attachment_panel_styles_loaded"):
-        return
     if ATTACHMENT_CSS_PATH.exists():
         st.markdown(
             f"<style>{ATTACHMENT_CSS_PATH.read_text()}</style>",
             unsafe_allow_html=True,
         )
-    st.session_state["attachment_panel_styles_loaded"] = True
 
 
 def prepare_attachment_workspace() -> None:

@@ -226,6 +226,20 @@ div[data-testid="stButton"] button[kind="primary"]:hover {
   border-color: #1f6fc7 !important;
 }
 
+/* Download buttons (exports) */
+div[data-testid="stDownloadButton"] button {
+  border-radius: 10px !important;
+  border: 1px solid rgba(17, 24, 39, 0.14) !important;
+  background: rgba(17, 24, 39, 0.04) !important;
+  color: var(--ws-ink) !important;
+}
+
+div[data-testid="stDownloadButton"] button:hover {
+  border-color: rgba(39, 128, 227, 0.4) !important;
+  background: rgba(39, 128, 227, 0.08) !important;
+  color: #1f6fc7 !important;
+}
+
 /* Toggles (History/Archived/Dense) - force visible labels and switch chrome */
 div[data-testid="stToggle"] label,
 div[data-testid="stToggle"] p {

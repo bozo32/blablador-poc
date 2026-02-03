@@ -1632,7 +1632,7 @@ def render_evidence_panel() -> None:
     j_store = judgment_store.JudgmentStore()
     j_claim_state = j_store.sync_judgment(selected_claim)
     j_payload = j_claim_state.get("judgment") or {}
-    layout_main, layout_sidebar = st.columns([2, 1], gap="large")
+    layout_main, layout_sidebar = st.columns([3, 1], gap="large")
 
     def _claim_text_missing_error() -> Optional[str]:
         last_error = state.get("last_error") or ""
@@ -2814,22 +2814,30 @@ def render_evidence_panel() -> None:
         )
 
         st.divider()
-        st.subheader("Run history")
-        runs = state.get("history") or []
-        if not runs:
-            st.caption("No rerun history yet.")
-        else:
-            for run in runs[:5]:
-                run_id = run.get("run_id") or "(unknown)"
-                created = run.get("created_at") or ""
-                counts = (run.get("summary") or {}).get("label_counts") or {}
-                total = (run.get("summary") or {}).get("total")
-                label = f"{run_id}"
-                if created:
-                    label = f"{label} • {created}"
-                with st.expander(label, expanded=False):
-                    st.caption(f"total={total} label_counts={counts}")
-                    st.json(run.get("metadata") or {})
+        with st.expander("Diagnostics", expanded=False):
+            st.markdown("**Run history**")
+            runs = state.get("history") or []
+            if not runs:
+                st.caption("No rerun history yet.")
+            else:
+                for run in runs[:5]:
+                    run_id = run.get("run_id") or "(unknown)"
+                    created = run.get("created_at") or ""
+                    counts = (run.get("summary") or {}).get("label_counts") or {}
+                    total = (run.get("summary") or {}).get("total")
+                    attachments_state = (run.get("metadata") or {}).get(
+                        "attachments_state"
+                    ) or []
+                    label = run_id
+                    if created:
+                        label = f"{label} • {created}"
+                    with st.expander(label, expanded=False):
+                        st.caption(f"total={total} label_counts={counts}")
+                        st.caption(
+                            f"placed_sources={len(attachments_state)}"
+                            if isinstance(attachments_state, list)
+                            else "placed_sources=?"
+                        )
 
 
 def format_reference_summary(reference: dict, resolution: dict) -> str:

@@ -11,18 +11,49 @@
 :root {
   --ws-font-scale: 1;
 
+  /* Cosmo-ish palette (Bootstrap/Bootswatch lineage) */
+  --ws-app-bg: #f8f9fa;
+  --ws-surface: #ffffff;
+  --ws-border: #d9e2ef;
+  --ws-accent: #2780e3;
+  --ws-accent-ink: #ffffff;
+  --ws-focus: rgba(39, 128, 227, 0.22);
+  --ws-shadow: 0 8px 24px rgba(0, 0, 0, 0.06);
+
   --ws-space-0: 0.25rem;
   --ws-space-1: 0.5rem;
   --ws-space-2: 0.75rem;
   --ws-space-3: 1rem;
 
-  --ws-pane-border: 1px solid rgba(15, 23, 42, 0.08);
-  --ws-pane-bg: rgba(255, 255, 255, 0.92);
-  --ws-muted: #64748b;
-  --ws-ink: #0f172a;
+  --ws-pane-border: 1px solid var(--ws-border);
+  --ws-pane-bg: var(--ws-surface);
+  --ws-muted: #6c757d;
+  --ws-ink: #2c3e50;
 
   --ws-page-pad-top: 0.6rem;
   --ws-page-pad-x: 1.1rem;
+}
+
+html,
+body,
+div[data-testid="stAppViewContainer"] {
+  background: var(--ws-app-bg) !important;
+  color: var(--ws-ink) !important;
+}
+
+body {
+  font-family: "Source Sans 3", "Segoe UI", -apple-system, system-ui,
+    "Helvetica Neue", Arial, sans-serif;
+  text-rendering: geometricPrecision;
+}
+
+/* Links (avoid impacting citation chips) */
+a:not(.citation-chip-link) {
+  color: var(--ws-accent);
+  text-decoration: none;
+}
+a:not(.citation-chip-link):hover {
+  text-decoration: underline;
 }
 
 /* Streamlit layout density */
@@ -53,6 +84,7 @@ p {
   border: var(--ws-pane-border);
   border-radius: 12px;
   background: var(--ws-pane-bg);
+  box-shadow: var(--ws-shadow);
 }
 
 .ws-pane-header__title {
@@ -71,6 +103,51 @@ p {
 
 .ws-pane-body {
   margin-top: calc(var(--ws-space-2) * var(--ws-font-scale));
+}
+
+/* Text-heavy reading defaults */
+div[data-testid="stMarkdownContainer"] {
+  color: var(--ws-ink);
+  line-height: 1.55;
+}
+
+/* Controls: slimmer + cleaner (still accessible) */
+div[data-testid="stTextInput"] input,
+div[data-testid="stTextArea"] textarea,
+div[data-testid="stSelectbox"] div[role="button"],
+div[data-testid="stMultiselect"] div[role="button"] {
+  background: var(--ws-surface) !important;
+  border: 1px solid var(--ws-border) !important;
+  border-radius: 10px !important;
+}
+
+div[data-testid="stTextInput"] input:focus,
+div[data-testid="stTextArea"] textarea:focus,
+div[data-testid="stSelectbox"] div[role="button"]:focus,
+div[data-testid="stMultiselect"] div[role="button"]:focus {
+  box-shadow: 0 0 0 3px var(--ws-focus) !important;
+}
+
+div[data-testid="stButton"] button {
+  border-radius: 10px;
+  border: 1px solid var(--ws-border);
+  background: var(--ws-surface);
+}
+
+div[data-testid="stButton"] button:hover {
+  border-color: rgba(39, 128, 227, 0.35);
+  background: rgba(39, 128, 227, 0.06);
+}
+
+div[data-testid="stButton"] button[kind="primary"] {
+  background: var(--ws-accent) !important;
+  border-color: var(--ws-accent) !important;
+  color: var(--ws-accent-ink) !important;
+}
+
+div[data-testid="stButton"] button[kind="primary"]:hover {
+  background: #1f6fc7 !important;
+  border-color: #1f6fc7 !important;
 }
 
 /* Compact control row (used in center header) */

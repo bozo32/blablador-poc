@@ -3316,14 +3316,14 @@ def render_workspace_left_pane() -> None:
                 f"{active.get('filename')} • {active.get('status')} • {doc_id[:8]}"
             )
 
-    st.markdown("**Legacy upload (CSV + TEI)**")
-    st.file_uploader(
-        "CSV & TEI files",
-        type=["csv", "xml"],
-        accept_multiple_files=True,
-        key="uploaded_files",
-        on_change=handle_upload,
-    )
+    with st.expander("Legacy import (CSV + TEI)", expanded=False):
+        st.file_uploader(
+            "CSV & TEI files",
+            type=["csv", "xml"],
+            accept_multiple_files=True,
+            key="uploaded_files",
+            on_change=handle_upload,
+        )
 
     st.markdown("---")
     footer = st.columns([1, 1], gap="small")
@@ -3354,22 +3354,56 @@ def draw_workspace() -> None:
 
 
 def draw_ingestion_panel(*, center, right) -> None:
-    # Query params are used for chip navigation (?doc=...&cite=...&target=...).
-    # We apply them if present, then clear them to avoid sticky restarts.
     # Ingestion controls live in the left pane; this function hosts the
     # center (Document/Review) and right (collector) panes.
+
+    # Query params are used for chip navigation (?doc=...&cite=...&target=...).
+    # We apply them early (even in a fresh session), then clear them to avoid
+    # sticky restarts.
+    def _read_query_params() -> dict:
+        try:
+            raw = st.query_params  # type: ignore[attr-defined]
+            return {key: raw.get(key) for key in raw.keys()}
+        except Exception:
+            return st.experimental_get_query_params()
+
+    params = _read_query_params()
+    param_doc = params.get("doc")
+    param_cite = params.get("cite")
+    param_target = params.get("target")
+    if isinstance(param_doc, list):
+        param_doc = param_doc[0] if param_doc else None
+    if isinstance(param_cite, list):
+        param_cite = param_cite[0] if param_cite else None
+    if isinstance(param_target, list):
+        param_target = param_target[0] if param_target else None
+    should_clear_params = bool(param_doc or param_cite or param_target)
+
     docs = st.session_state.get("ingested_docs")
-    if docs is None:
-        docs = refresh_ingested_docs(show_error=True)
+    if docs is None or should_clear_params or not docs:
+        docs = refresh_ingested_docs(show_error=False)
+
+    if param_doc and str(param_doc) != str(
+        st.session_state.get("selected_doc_id") or ""
+    ):
+        st.session_state["selected_doc_id"] = str(param_doc)
+        load_selected_document(show_error=False)
+
+    if should_clear_params:
+        try:
+            st.query_params.clear()  # type: ignore[attr-defined]
+        except Exception:
+            try:
+                st.experimental_set_query_params()
+            except Exception:
+                pass
+
     if not docs:
-        # One more attempt in case we landed here via a chip click.
-        docs = refresh_ingested_docs(show_error=True)
-        if not docs:
-            with center:
-                st.info("Upload a PDF in the left pane to begin.")
-            with right:
-                st.info("Select a citation to build a citing-span list.")
-            return
+        with center:
+            st.info("Upload a PDF in the left pane to begin.")
+        with right:
+            st.info("Select a citation to build a citing-span list.")
+        return
     doc_id = st.session_state.get("selected_doc_id")
     if not doc_id:
         with center:
@@ -3618,39 +3652,6 @@ def draw_ingestion_panel(*, center, right) -> None:
         st.session_state["citation_graph"] = response
 
     inject_citation_styles()
-
-    def _read_query_params() -> dict:
-        try:
-            raw = st.query_params  # type: ignore[attr-defined]
-            return {key: raw.get(key) for key in raw.keys()}
-        except Exception:
-            return st.experimental_get_query_params()
-
-    params = _read_query_params()
-    param_doc = params.get("doc")
-    param_cite = params.get("cite")
-    param_target = params.get("target")
-    if isinstance(param_doc, list):
-        param_doc = param_doc[0] if param_doc else None
-    if isinstance(param_cite, list):
-        param_cite = param_cite[0] if param_cite else None
-    if isinstance(param_target, list):
-        param_target = param_target[0] if param_target else None
-
-    should_clear_params = bool(param_doc or param_cite or param_target)
-
-    if param_doc and param_doc != st.session_state.get("selected_doc_id"):
-        st.session_state["selected_doc_id"] = str(param_doc)
-        load_selected_document(show_error=False)
-
-    if should_clear_params:
-        try:
-            st.query_params.clear()  # type: ignore[attr-defined]
-        except Exception:
-            try:
-                st.experimental_set_query_params()
-            except Exception:
-                pass
 
     def _set_query_params(
         *, doc: str, cite: Optional[int], target: Optional[str]

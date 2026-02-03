@@ -464,7 +464,17 @@ def inject_citation_styles() -> None:
             background: #dce7ff;
         }
         .citation-chip-link {
-            text-decoration: none;
+            text-decoration: underline;
+            text-decoration-thickness: 1px;
+            text-underline-offset: 2px;
+            text-decoration-color: rgba(31, 58, 138, 0.35);
+            transition: background 120ms ease, text-decoration-color 120ms ease;
+        }
+        .citation-chip-link:hover {
+            text-decoration-color: rgba(31, 58, 138, 0.75);
+        }
+        .citation-chip-link:visited {
+            color: #1f3a8a;
         }
         .citation-chip-selected {
             background: rgba(255, 242, 179, 0.55);
@@ -3030,6 +3040,46 @@ def draw_ingestion_panel(*, center, right) -> None:
                     == normalized_target
                 ):
                     sentence_id = pending_tuple.get("sentence_id")
+
+        if sentence_id is None:
+            # Best-effort provenance: map selected callout to the first sentence_id
+            # we can find in the loaded document body. (Hyperlink navigation can't
+            # set session state like the old button rows did.)
+            try:
+                desired_idx = int(index)
+            except Exception:
+                desired_idx = None
+            if desired_idx is not None:
+                for para in paragraphs:
+                    para_sentences = para.get("sentences") or []
+                    if not para_sentences:
+                        para_sentences = [
+                            {
+                                "segments": para.get("segments") or [],
+                                "citation_indices": para.get("citation_indices") or [],
+                            }
+                        ]
+                    for sent in para_sentences:
+                        for seg in sent.get("segments") or []:
+                            if seg.get("type") != "citation":
+                                continue
+                            try:
+                                seg_idx = int(seg.get("citation_index"))
+                            except Exception:
+                                continue
+                            if seg_idx != desired_idx:
+                                continue
+                            seg_target = normalize_target_id(seg.get("target_id"))
+                            if seg_target != normalized_target:
+                                continue
+                            sentence_id = seg.get("sentence_id") or sent.get(
+                                "sentence_id"
+                            )
+                            break
+                        if sentence_id:
+                            break
+                    if sentence_id:
+                        break
         st.session_state["citation_selected_sentence_id"] = sentence_id
         st.session_state["selected_callout_tuple"] = {
             "doc_id": doc_id,
@@ -3482,11 +3532,6 @@ def draw_ingestion_panel(*, center, right) -> None:
                         }
                     ]
 
-                # Collect citations for this paragraph to render Streamlit-native
-                # buttons (keeps state in-session; hyperlinks would reload).
-                paragraph_citations: list[dict] = []
-                seen_keys: set[str] = set()
-
                 sentence_html: list[str] = []
                 for sent in para_sentences:
                     segments = sent.get("segments") or []
@@ -3561,22 +3606,12 @@ def draw_ingestion_panel(*, center, right) -> None:
                                 icon = "?"
 
                         parts.append(f'<a id="{anchor}"></a>')
-                        entry_key = f"{cite_index}:{normalized_target or ''}"
-                        sentence_id = seg.get("sentence_id") or sent.get("sentence_id")
+                        href = _citation_href(
+                            doc_id, cite_index, normalized_target, anchor
+                        )
 
-                        if entry_key not in seen_keys:
-                            seen_keys.add(entry_key)
-                            paragraph_citations.append(
-                                {
-                                    "citation_index": cite_index,
-                                    "target_id": normalized_target,
-                                    "label": label_text,
-                                    "anchor": anchor,
-                                    "sentence_id": sentence_id,
-                                }
-                            )
-
-                        # Render chip; selection via buttons below.
+                        # Render chip inline as a hyperlink so click drives existing
+                        # ?doc=...&cite=...&target=... routing and chase collection.
                         indicator_html = (
                             '<span class="citation-chip__indicator">'
                             f"{html.escape(icon)}"
@@ -3584,10 +3619,11 @@ def draw_ingestion_panel(*, center, right) -> None:
                         )
                         parts.append(
                             (
-                                f'<span class="{chip_class}">'
+                                f'<a class="{chip_class} citation-chip-link" '
+                                f'href="{html.escape(href)}">'
                                 f"{indicator_html}"
                                 f"{html.escape(label_text)}"
-                                "</span>"
+                                "</a>"
                             )
                         )
                     rendered_sentence = " ".join(part for part in parts if part)
@@ -3600,85 +3636,6 @@ def draw_ingestion_panel(*, center, right) -> None:
                     f'<div class="citation-paragraph">{rendered_para}</div>',
                     unsafe_allow_html=True,
                 )
-
-                if paragraph_citations:
-                    cols = st.columns(min(6, len(paragraph_citations)))
-                    for idx, item in enumerate(paragraph_citations):
-                        col = cols[idx % len(cols)]
-                        with col:
-                            cite_idx = int(item["citation_index"])
-                            tgt = normalize_target_id(item.get("target_id"))
-                            btn_label = str(
-                                item.get("label") or f"Citation {cite_idx + 1}"
-                            )
-                            cite_button_key = (
-                                f"doc-cite-btn::{doc_id}::{cite_idx}::"
-                                f"{tgt or ''}::{idx}"
-                            )
-                            status_snapshot = j_store.callout_status(
-                                str(doc_id), cite_idx, tgt
-                            )
-                            validated = bool(status_snapshot.get("validated"))
-                            outcome = (
-                                status_snapshot.get("outcome") if validated else None
-                            )
-
-                            icon = "o"
-                            if validated:
-                                if outcome == "support":
-                                    icon = "v"
-                                elif outcome == "contradict":
-                                    icon = "x"
-                                else:
-                                    icon = "?"
-
-                            left, right = st.columns([5, 1], gap="small")
-                            with left:
-                                if st.button(
-                                    btn_label,
-                                    key=cite_button_key,
-                                    use_container_width=True,
-                                ):
-                                    st.session_state["pending_callout_tuple"] = {
-                                        "doc_id": doc_id,
-                                        "citation_index": cite_idx,
-                                        "target_id": tgt,
-                                        "sentence_id": item.get("sentence_id"),
-                                    }
-                                    _set_query_params(
-                                        doc=doc_id,
-                                        cite=cite_idx,
-                                        target=tgt,
-                                    )
-                                    _rerun()
-
-                            with right:
-                                open_key = (
-                                    f"doc-cite-open::{doc_id}::{cite_idx}::"
-                                    f"{tgt or ''}::{idx}"
-                                )
-                                if st.button(
-                                    icon,
-                                    key=open_key,
-                                    help="Open judgment details",
-                                    use_container_width=True,
-                                ):
-                                    claim_ids = status_snapshot.get("claim_ids") or []
-                                    if claim_ids:
-                                        st.session_state[
-                                            "evidence-claim-select"
-                                        ] = claim_ids[0]
-                                        _rerun()
-                                    else:
-                                        st.session_state[
-                                            WORKSPACE_ACTIVE_TAB
-                                        ] = WORKSPACE_TAB_REVIEW
-                                        _set_query_params(
-                                            doc=doc_id,
-                                            cite=cite_idx,
-                                            target=tgt,
-                                        )
-                                        _rerun()
 
         else:
             st.markdown("#### Chasing claims")

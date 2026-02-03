@@ -115,6 +115,12 @@ div[data-testid="stButton"] button {
   font-size: calc(0.9rem * var(--ws-font-scale));
 }
 
+/* Dense: tighten further in left pane */
+.ws-pane-body div[data-testid="stButton"] button {
+  padding: 0.18rem 0.5rem;
+  min-height: 1.85rem;
+}
+
 div[data-testid="stSelectbox"] div[role="button"],
 div[data-testid="stMultiselect"] div[role="button"] {
   padding-top: 0.15rem;

@@ -199,8 +199,9 @@ def process_attachment(
             logger.info("Attachment %s processed successfully", attachment_id)
             try:
                 record = attachment_store.get_attachment(attachment_id)
-                claim_id = str(record.get("claim_id")) if record else None
-                claim_text = record.get("claim_text") if record else None
+                raw_claim_id = (record or {}).get("claim_id")
+                claim_id = str(raw_claim_id) if raw_claim_id else None
+                claim_text = (record or {}).get("claim_text")
                 if claim_id:
                     evidence_service.trigger_auto_rerun(claim_id, claim_text=claim_text)
             except (
@@ -208,7 +209,7 @@ def process_attachment(
             ):  # pragma: no cover - rerun failures shouldn't block pipeline
                 logger.exception(
                     "Unable to enqueue evidence rerun for claim %s",
-                    record.get("claim_id"),
+                    (record or {}).get("claim_id"),
                 )
             return
         except (

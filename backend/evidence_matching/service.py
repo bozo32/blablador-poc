@@ -230,6 +230,13 @@ class EvidenceMatchingService:
         self, claim_id: str, *, claim_text: str | None = None
     ) -> dict:
         """Best-effort auto-rerun invoked by attachment lifecycle hooks."""
+        if not claim_id or str(claim_id).strip().lower() == "none":
+            return {
+                "job_id": uuid4().hex,
+                "status": "skipped",
+                "position": 0,
+                "locked": False,
+            }
         resolved_claim_text = claim_text or self._claim_text_from_attachments(claim_id)
 
         if self._background_paused():

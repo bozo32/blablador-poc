@@ -449,16 +449,16 @@ def inject_citation_styles() -> None:
             line-height: 1.6;
         }
         .citation-chip {
-            display: inline-block;
-            padding: 2px 6px;
-            margin: 0 2px;
-            border-radius: 10px;
-            background: #eef3ff;
-            color: #1f3a8a;
-            border: 1px solid #c9d8ff;
-            font-weight: 600;
-            font-size: 0.82rem;
-            text-decoration: none;
+            display: inline-block !important;
+            padding: 2px 6px !important;
+            margin: 0 2px !important;
+            border-radius: 10px !important;
+            background: #eef3ff !important;
+            color: #1f3a8a !important;
+            border: 1px solid #c9d8ff !important;
+            font-weight: 600 !important;
+            font-size: 0.82rem !important;
+            text-decoration: none !important;
         }
         .citation-chip:hover {
             background: #dce7ff;
@@ -3089,8 +3089,12 @@ def render_workspace_left_pane() -> None:
 
     st.markdown("**Source bin (cited PDFs)**")
 
+    uploader_version_key = "_source_bin_uploader_version"
+    uploader_version = int(st.session_state.get(uploader_version_key, 0) or 0)
+    uploader_key = f"source_bin_files::{uploader_version}"
+
     def _handle_source_bin_upload() -> None:
-        files = st.session_state.get("source_bin_files") or []
+        files = st.session_state.get(uploader_key) or []
         if not files:
             return
         selected_target = normalize_target_id(
@@ -3104,35 +3108,41 @@ def render_workspace_left_pane() -> None:
             reference_hint=reference_hint,
             source="source-bin",
         )
-        st.session_state["source_bin_files"] = None
+        # Streamlit does not allow assigning to a file_uploader's widget key.
+        # Rotate the uploader key to clear the widget after processing.
+        st.session_state[uploader_version_key] = uploader_version + 1
+        _rerun()
 
     st.file_uploader(
         "Upload cited-source PDFs",
         type=["pdf"],
         accept_multiple_files=True,
-        key="source_bin_files",
+        key=uploader_key,
         on_change=_handle_source_bin_upload,
         label_visibility="collapsed",
     )
 
-    source_controls = st.columns([1, 1, 1, 1], gap="small")
-    with source_controls[0]:
+    # Keep controls readable (avoid narrow 4-col layouts that force vertical text).
+    controls_row_1 = st.columns([1, 1], gap="small")
+    with controls_row_1[0]:
         _ = st.toggle(
             "History",
             key=attachment_queue.SHOW_HISTORY_KEY,
             help="Show persisted items from previous sessions",
         )
-    with source_controls[1]:
+    with controls_row_1[1]:
         _ = st.toggle(
             "Archived",
             key=attachment_queue.SHOW_ARCHIVED_KEY,
             help="Include archived items",
         )
-    with source_controls[2]:
+
+    controls_row_2 = st.columns([1, 1], gap="small")
+    with controls_row_2[0]:
         if st.button("Refresh", key="source-bin-refresh", use_container_width=True):
             attachment_queue.sync_backend_state()
             _rerun()
-    with source_controls[3]:
+    with controls_row_2[1]:
         if st.button(
             "Retry failed", key="source-bin-bulk-retry", use_container_width=True
         ):
@@ -4000,15 +4010,6 @@ def draw_ingestion_panel(*, center, right) -> None:
                         else:
                             chip_class += " citation-chip--unvalidated"
 
-                        icon = "o"
-                        if validated:
-                            if outcome == "support":
-                                icon = "v"
-                            elif outcome == "contradict":
-                                icon = "x"
-                            else:
-                                icon = "?"
-
                         parts.append(f'<a id="{anchor}"></a>')
                         href = _citation_href(
                             doc_id, cite_index, normalized_target, anchor
@@ -4016,16 +4017,10 @@ def draw_ingestion_panel(*, center, right) -> None:
 
                         # Render chip inline as a hyperlink so click drives existing
                         # ?doc=...&cite=...&target=... routing and chase collection.
-                        indicator_html = (
-                            '<span class="citation-chip__indicator">'
-                            f"{html.escape(icon)}"
-                            "</span>"
-                        )
                         parts.append(
                             (
                                 f'<a class="{chip_class} citation-chip-link" '
                                 f'href="{html.escape(href)}">'
-                                f"{indicator_html}"
                                 f"{html.escape(label_text)}"
                                 "</a>"
                             )

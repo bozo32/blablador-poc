@@ -1084,6 +1084,206 @@ def format_filesize(num_bytes: Optional[int]) -> str:
     return f"{mb:.1f} MB"
 
 
+def _get_background_state(api_url: str) -> Optional[dict]:
+    url = (api_url or "").rstrip("/")
+    if not url:
+        return None
+    try:
+        response = requests.get(f"{url}/background/state", timeout=5)
+        response.raise_for_status()
+        return response.json()
+    except Exception:
+        return None
+
+
+def _cmdf_snippet(text: str, *, words: int = 4) -> str:
+    tokens = [tok for tok in re.findall(r"[A-Za-z0-9']+", str(text or "")) if tok]
+    if not tokens:
+        return ""
+    n = min(int(words), len(tokens))
+    if n <= 0:
+        return ""
+    if len(tokens) <= n:
+        return " ".join(tokens)
+    mid = len(tokens) // 2
+    start = max(0, min(len(tokens) - n, mid - (n // 2)))
+    return " ".join(tokens[start : start + n])
+
+
+def _local_path_for_attachment(attachment_id: str) -> Optional[str]:
+    if not attachment_id:
+        return None
+    snapshot = attachment_queue.get_queue_snapshot()
+    for item in (snapshot.get("items") or {}).values():
+        if item.get("attachment_id") != attachment_id:
+            continue
+        local_path = (item.get("local_path") or "").strip()
+        if local_path and os.path.exists(local_path):
+            return local_path
+    return None
+
+
+def _source_bin_status(item: dict) -> tuple[str, str]:
+    status = (item.get("status") or "").strip().lower()
+    claim_id = (item.get("claim_id") or "").strip()
+    if status in {"", "none"}:
+        return "Not started", "not-started"
+    if status in {"pending", "converting", "parsing"}:
+        return "Processing", "processing"
+    if status == "error":
+        return "Failed", "failed"
+    if status == "matched":
+        if claim_id:
+            return "Placed", "placed"
+        return "Needs placement", "needs-placement"
+    return status.title(), "processing"
+
+
+def _status_progress(status: str) -> Optional[float]:
+    normalized = (status or "").strip().lower()
+    if normalized == "pending":
+        return 0.15
+    if normalized == "converting":
+        return 0.45
+    if normalized == "parsing":
+        return 0.75
+    if normalized == "matched":
+        return 1.0
+    return None
+
+
+def _render_source_bin_row(item: dict) -> None:
+    queue_item_id = item.get("id")
+    if not queue_item_id:
+        return
+
+    filename = str(item.get("filename") or "attachment.pdf")
+    size_label = format_filesize(item.get("size"))
+    archived = bool(item.get("archived"))
+    status_label, status_class = _source_bin_status(item)
+    claim_id = item.get("claim_id")
+    claim_record = claim_queue.get_claim_record(str(claim_id)) if claim_id else None
+    claim_label = (claim_record or {}).get("callout") if claim_record else None
+    claim_text = (claim_record or {}).get("claim") if claim_record else None
+
+    classes = "source-row" + (" source-row--archived" if archived else "")
+    st.markdown(f'<div class="{classes}">', unsafe_allow_html=True)
+    st.markdown(
+        (
+            "<div class='source-row__header'>"
+            f"<div class='source-row__filename'>{html.escape(filename)}</div>"
+            f"<span class='source-status-pill {status_class}'>"
+            f"{html.escape(status_label)}"
+            "</span>"
+            "</div>"
+        ),
+        unsafe_allow_html=True,
+    )
+    meta_bits = [f"Size: {size_label}"]
+    if claim_label:
+        meta_bits.append(f"Assigned: {claim_label}")
+    st.caption(" • ".join(meta_bits))
+
+    progress = _status_progress(str(item.get("status") or ""))
+    if progress is not None and progress < 1.0:
+        st.progress(progress)
+
+    actions = st.columns([1, 1, 2, 1, 1], gap="small")
+    with actions[0]:
+        if st.button(
+            "View PDF", key=f"source-view-{queue_item_id}", use_container_width=True
+        ):
+            snippet_source = (
+                (claim_text or "")
+                if claim_text
+                else (item.get("reference_hint") or {}).get("callout") or filename
+            )
+            snippet = _cmdf_snippet(str(snippet_source), words=4)
+            copied = clipboard.copy_text(snippet) if snippet else False
+            if snippet:
+                if copied:
+                    st.caption(f"Cmd-F snippet copied: {snippet}")
+                else:
+                    st.info(f"Copy this Cmd-F snippet: {snippet}")
+            local_path = (item.get("local_path") or "").strip()
+            if local_path:
+                err = clipboard.open_file(local_path)
+                if err:
+                    st.info(f"Could not open PDF: {err}")
+            else:
+                st.info(
+                    "No local PDF path recorded for this item. "
+                    "Upload from this machine to enable open."
+                )
+    with actions[1]:
+        if str(item.get("status") or "").strip().lower() == "error":
+            if st.button(
+                "Retry", key=f"source-retry-{queue_item_id}", use_container_width=True
+            ):
+                attachment_queue.retry_attachment(str(queue_item_id))
+                _rerun()
+        else:
+            st.button(
+                "Retry",
+                key=f"source-retry-disabled-{queue_item_id}",
+                disabled=True,
+                use_container_width=True,
+            )
+    with actions[2]:
+        options = claim_queue.get_claim_options()
+        if options:
+            default_idx = _claim_option_index(
+                options, str(claim_id) if claim_id else None
+            )
+            selected = st.selectbox(
+                "Assign/Re-place",
+                options,
+                index=default_idx,
+                format_func=lambda option: option["label"],
+                key=f"source-assign-select-{queue_item_id}",
+                label_visibility="collapsed",
+            )
+            if st.button(
+                "Assign", key=f"source-assign-{queue_item_id}", use_container_width=True
+            ):
+                callout_tuple = st.session_state.get("selected_callout_tuple") or {}
+                selected_claim_id = selected.get("id")
+                claim_rec = claim_queue.get_claim_record(selected_claim_id) or {}
+                attachment_queue.place_attachment(
+                    str(queue_item_id),
+                    str(selected_claim_id),
+                    doc_id=claim_rec.get("doc_id")
+                    or st.session_state.get("selected_doc_id"),
+                    citation_index=callout_tuple.get("citation_index"),
+                    target_id=callout_tuple.get("target_id"),
+                    via="manual",
+                )
+                _rerun()
+        else:
+            st.caption("No claims yet.")
+    with actions[3]:
+        if archived:
+            if st.button(
+                "Unarchive",
+                key=f"source-unarchive-{queue_item_id}",
+                use_container_width=True,
+            ):
+                attachment_queue.archive_attachment(str(queue_item_id), archived=False)
+                _rerun()
+        else:
+            if st.button(
+                "Archive",
+                key=f"source-archive-{queue_item_id}",
+                use_container_width=True,
+            ):
+                attachment_queue.archive_attachment(str(queue_item_id), archived=True)
+                _rerun()
+    with actions[4]:
+        st.caption("")
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
 def _render_queue_summary(summary: dict) -> None:
     status_line = _format_queue_summary(summary)
     if status_line:
@@ -1312,15 +1512,32 @@ def render_evidence_panel() -> None:
     claim_record = claim_queue.get_claim_record(selected_claim) or {}
     claim_text_override = (claim_record.get("claim") or "").strip()
     initial_claim_text = claim_text_override or None
+    existing_lock = store.ensure_claim_state(selected_claim).get("lock_state") or {}
+    existing_status = str(existing_lock.get("status") or "").strip().lower()
+    polling = existing_status in {"queued", "running"} or bool(
+        existing_lock.get("locked")
+    )
     state = store.sync_for_claim(
         selected_claim,
         claim_text=initial_claim_text,
+        force=bool(polling),
     )
     metadata_claim_text = (state.get("metadata") or {}).get("claim_text") or ""
     active_claim_text = (metadata_claim_text or claim_text_override).strip()
     active_claim_text_payload = active_claim_text or None
     rerun_state = state.get("rerun", {})
     summary = build_progress_summary(state.get("candidates") or [])
+
+    lock_state = state.get("lock_state") or {}
+    lock_status = str(lock_state.get("status") or "").strip().lower()
+    selection_locked = bool(lock_state.get("locked"))
+    if lock_status in {"queued", "running"}:
+        if st_autorefresh:
+            st_autorefresh(interval=4000, key=f"evidence-lock-poll::{selected_claim}")
+        st.caption(
+            "Evidence run in progress. Candidates update live, "
+            "but selection is disabled until complete."
+        )
 
     j_store = judgment_store.JudgmentStore()
     j_claim_state = j_store.sync_judgment(selected_claim)
@@ -1928,6 +2145,7 @@ def render_evidence_panel() -> None:
                             type="primary" if prior == "entail" else "secondary",
                             help="Mark as supports",
                             use_container_width=True,
+                            disabled=bool(selection_locked),
                         ):
                             _toggle("entail")
                             _rerun()
@@ -1938,6 +2156,7 @@ def render_evidence_panel() -> None:
                             type="primary" if prior == "neutral" else "secondary",
                             help="Mark as neutral/unclear",
                             use_container_width=True,
+                            disabled=bool(selection_locked),
                         ):
                             _toggle("neutral")
                             _rerun()
@@ -1948,16 +2167,42 @@ def render_evidence_panel() -> None:
                             type="primary" if prior == "contradict" else "secondary",
                             help="Mark as contradicts",
                             use_container_width=True,
+                            disabled=bool(selection_locked),
                         ):
                             _toggle("contradict")
                             _rerun()
 
                     if candidate_id and st.button(
-                        "Open PDF",
-                        key=f"open-pdf-{selected_claim}-{candidate_id}",
+                        "View PDF",
+                        key=f"view-pdf-{selected_claim}-{candidate_id}",
                         use_container_width=True,
                     ):
-                        store.open_candidate_pdf(selected_claim, candidate_id)
+                        snippet = _cmdf_snippet(
+                            str(candidate.get("text") or ""), words=4
+                        )
+                        copied = clipboard.copy_text(snippet) if snippet else False
+                        if snippet:
+                            if copied:
+                                st.caption(f"Cmd-F snippet copied: {snippet}")
+                            else:
+                                st.info(f"Copy this Cmd-F snippet: {snippet}")
+                        meta = candidate.get("metadata") or {}
+                        attachment_id = meta.get("attachment_id") or candidate.get(
+                            "attachment_id"
+                        )
+                        local_path = _local_path_for_attachment(
+                            str(attachment_id or "")
+                        )
+                        if local_path:
+                            err = clipboard.open_file(local_path)
+                            if err:
+                                st.info(f"Could not open local PDF: {err}")
+                        else:
+                            st.info(
+                                "No local PDF path found for this evidence. "
+                                "Use the Source bin upload on this machine "
+                                "to enable opening."
+                            )
                         _rerun()
 
                 with right:
@@ -2121,6 +2366,7 @@ def render_evidence_panel() -> None:
                 "Save assessment",
                 key=f"overall-save-{selected_claim}",
                 type="primary",
+                disabled=bool(selection_locked),
             ):
                 store.save_selection(
                     selected_claim,
@@ -2793,7 +3039,80 @@ def render_workspace_left_pane() -> None:
 
     st.markdown('<div class="ws-pane-body">', unsafe_allow_html=True)
 
-    st.markdown("**Source bin (PDFs)**")
+    inject_attachment_panel_styles()
+    attachment_queue.init_attachment_queue_state()
+    claim_queue.sync_claims_from_results(st.session_state.get("results"))
+
+    api_url = st.session_state.get("api_url", "http://localhost:8000")
+    source_summary = attachment_queue.summarize_counts()
+    background_state = _get_background_state(api_url)
+    if (background_state or {}).get("paused"):
+        reason = (background_state or {}).get("reason") or "paused"
+        st.warning(f"Background paused: {reason}")
+    failed = int(source_summary.get("error", 0) or 0)
+    if failed:
+        st.markdown(
+            f"<span class='source-status-pill failed'>Failed: {failed}</span>",
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("**Source bin (cited PDFs)**")
+
+    def _handle_source_bin_upload() -> None:
+        files = st.session_state.get("source_bin_files") or []
+        if not files:
+            return
+        selected_target = normalize_target_id(
+            st.session_state.get("citation_selected_target")
+        )
+        doc_id = st.session_state.get("selected_doc_id")
+        reference_hint = {"reference_id": selected_target} if selected_target else {}
+        attachment_queue.enqueue_files(
+            files,
+            doc_id=str(doc_id) if doc_id else None,
+            reference_hint=reference_hint,
+            source="source-bin",
+        )
+        st.session_state["source_bin_files"] = None
+
+    st.file_uploader(
+        "Upload cited-source PDFs",
+        type=["pdf"],
+        accept_multiple_files=True,
+        key="source_bin_files",
+        on_change=_handle_source_bin_upload,
+        label_visibility="collapsed",
+    )
+
+    controls = st.columns([1, 1, 1], gap="small")
+    with controls[0]:
+        show_archived = st.toggle(
+            "Show archived",
+            value=attachment_queue.get_show_archived(),
+            key="source-bin-show-archived",
+        )
+    with controls[1]:
+        if st.button("Refresh", key="source-bin-refresh", use_container_width=True):
+            attachment_queue.set_show_archived(bool(show_archived))
+            attachment_queue.sync_backend_state()
+            _rerun()
+    with controls[2]:
+        if st.button(
+            "Bulk retry", key="source-bin-bulk-retry", use_container_width=True
+        ):
+            attachment_queue.set_show_archived(bool(show_archived))
+            attachment_queue.bulk_retry_failed()
+            _rerun()
+
+    attachment_queue.set_show_archived(bool(show_archived))
+    attachment_queue.sync_backend_state()
+    st.markdown('<div class="source-bin">', unsafe_allow_html=True)
+    for item in attachment_queue.get_queue_items():
+        _render_source_bin_row(item)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    st.divider()
+    st.markdown("**Workspace documents (ingest)**")
     st.file_uploader(
         "PDF files",
         type=["pdf"],
@@ -2828,7 +3147,7 @@ def render_workspace_left_pane() -> None:
                 on_change=load_selected_document,
             )
     else:
-        st.caption("No PDFs ingested yet.")
+        st.caption("No ingested PDFs yet.")
 
     active = st.session_state.get("active_document") or {}
     doc_id = st.session_state.get("selected_doc_id")
@@ -3648,7 +3967,6 @@ def draw_ingestion_panel(*, center, right) -> None:
                     scope="tab",
                 )
             st.divider()
-            render_attachment_workspace()
             render_evidence_panel()
 
             with st.expander("Citation graph", expanded=False):
@@ -3733,7 +4051,6 @@ def draw_ingestion_panel(*, center, right) -> None:
 def draw_main():
     st.title("Citation-Support Checker")
     draw_ingestion_panel()
-    render_attachment_workspace()
     render_evidence_panel()
     st.divider()
     if not st.session_state.started:

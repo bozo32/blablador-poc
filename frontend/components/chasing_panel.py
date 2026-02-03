@@ -6,6 +6,8 @@ from typing import Callable, Optional
 
 import streamlit as st
 
+from frontend import claim_queue as claim_queue_state
+from frontend import evidence_store
 from frontend.state_keys import (
     canonical_context_edit_key,
     canonical_segments_key,
@@ -116,6 +118,9 @@ def render(
             segment_id = parsed.get("segment_id") or f"seg-{idx+1}"
             claim_text = parsed.get("claim") or line
             claim_id = f"cite:{doc_id}:{int(citation_index)}:{segment_id}"
+
+            previous = claim_queue_state.get_claim_record(claim_id) or {}
+            previous_text = (previous.get("claim") or "").strip()
             claim_queue_register(
                 claim_id,
                 claim=claim_text,
@@ -124,7 +129,15 @@ def render(
                 reference_id=target_id,
                 reference_hint=reference_hint,
             )
-        st.success(f"Saved {len(lines)} claim(s) to the workspace.")
+
+            if claim_text.strip() and claim_text.strip() != previous_text:
+                evidence_store.queue_rerun(
+                    claim_id,
+                    claim_text=claim_text,
+                    note="auto-claim-save",
+                    quiet=True,
+                )
+        st.caption(f"Saved {len(lines)} claim(s) to the workspace.")
 
     if st.button(
         "Chase",

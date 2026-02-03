@@ -2,13 +2,79 @@
 
 from __future__ import annotations
 
+import os
 import json
 import re
+import subprocess
+import sys
 from datetime import datetime
 from typing import Optional
 
 import streamlit as st
 import streamlit.components.v1 as components
+
+
+def copy_text(text: str) -> bool:
+    """Copy plain text to the local OS clipboard (best effort).
+
+    This is intended for local-dev Streamlit flows where the server and user are
+    on the same machine.
+    """
+    payload = (text or "").strip()
+    if not payload:
+        return False
+
+    try:
+        if sys.platform == "darwin":
+            subprocess.run(["pbcopy"], input=payload, text=True, check=True)
+            return True
+        if sys.platform.startswith("win"):
+            # Windows clipboard expects UTF-16LE via `clip`.
+            subprocess.run(["clip"], input=payload, text=True, check=True)
+            return True
+        # Linux / other: try xclip then xsel.
+        subprocess.run(
+            ["xclip", "-selection", "clipboard"],
+            input=payload,
+            text=True,
+            check=True,
+        )
+        return True
+    except Exception:
+        try:
+            subprocess.run(
+                ["xsel", "--clipboard", "--input"],
+                input=payload,
+                text=True,
+                check=True,
+            )
+            return True
+        except Exception:
+            return False
+
+
+def open_file(path: str) -> Optional[str]:
+    """Open a file path on the local machine (best effort).
+
+    Returns an error string on failure, otherwise None.
+    """
+    resolved = str(path or "").strip()
+    if not resolved:
+        return "Missing local file path"
+    if not os.path.exists(resolved):
+        return f"File not found: {resolved}"
+
+    try:
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", resolved])
+            return None
+        if sys.platform.startswith("win"):
+            os.startfile(resolved)  # type: ignore[attr-defined]
+            return None
+        subprocess.Popen(["xdg-open", resolved])
+        return None
+    except Exception as exc:
+        return str(exc)
 
 
 def _session_prefix(key: str) -> str:

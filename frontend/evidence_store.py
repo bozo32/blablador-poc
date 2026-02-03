@@ -16,7 +16,9 @@ STORE_INSTANCE_KEY = "_evidence_store_instance"
 DEFAULT_PAGE_SIZE = 5
 
 
-def _toast(ui: Any, message: str, *, icon: str = "ℹ️") -> None:
+def _toast(ui: Any, message: str, *, icon: str = "ℹ️", quiet: bool = False) -> None:
+    if quiet:
+        return
     toast = getattr(ui, "toast", None)
     if callable(toast):  # pragma: no cover - Streamlit runtime only
         toast(message, icon=icon)
@@ -170,11 +172,17 @@ class EvidenceStore:
         claim_text: Optional[str] = None,
         note: Optional[str] = None,
         advanced_settings: Optional[Dict[str, Any]] = None,
+        quiet: bool = False,
     ) -> Dict[str, Any]:
         claim_state = self.ensure_claim_state(claim_id)
         rerun = claim_state.setdefault("rerun", self._default_rerun_state())
         if rerun.get("inflight"):
-            _toast(self.ui, "Rerun already requested for this claim.", icon="⚠️")
+            _toast(
+                self.ui,
+                "Rerun already requested for this claim.",
+                icon="⚠️",
+                quiet=quiet,
+            )
             return rerun
         rerun["inflight"] = True
         try:
@@ -194,10 +202,15 @@ class EvidenceStore:
         except evidence_api.EvidenceApiError as exc:
             rerun["status"] = "error"
             rerun["error"] = str(exc)
-            _toast(self.ui, f"Rerun failed: {exc}", icon="⚠️")
+            _toast(self.ui, f"Rerun failed: {exc}", icon="⚠️", quiet=quiet)
         finally:
             rerun["inflight"] = False
         return rerun
+
+    def is_selection_locked(self, claim_id: str) -> bool:
+        claim_state = self.ensure_claim_state(claim_id)
+        lock_state = claim_state.get("lock_state") or {}
+        return bool(lock_state.get("locked"))
 
     def sync_selection(
         self, claim_id: str, *, force: bool = False
@@ -574,12 +587,14 @@ def queue_rerun(
     claim_text: Optional[str] = None,
     note: Optional[str] = None,
     advanced_settings: Optional[Dict[str, Any]] = None,
+    quiet: bool = False,
 ) -> Dict[str, Any]:
     return _get_store().queue_rerun(
         claim_id,
         claim_text=claim_text,
         note=note,
         advanced_settings=advanced_settings,
+        quiet=quiet,
     )
 
 

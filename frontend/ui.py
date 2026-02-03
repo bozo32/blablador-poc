@@ -1107,9 +1107,15 @@ def _local_path_for_attachment(attachment_id: str) -> Optional[str]:
 
 
 class _LocalUploadFile:
-    def __init__(self, path: str, *, content_type: str = "application/pdf"):
+    def __init__(
+        self,
+        path: str,
+        *,
+        name: Optional[str] = None,
+        content_type: str = "application/pdf",
+    ):
         self.path = path
-        self.name = os.path.basename(path)
+        self.name = name or os.path.basename(path)
         self.type = content_type
 
     def getbuffer(self):
@@ -1244,7 +1250,15 @@ def _render_source_bin_row(item: dict) -> None:
             else:
                 api_url = st.session_state.get("api_url", "http://localhost:8000")
                 try:
-                    uploaded_doc = upload_pdf(api_url, _LocalUploadFile(local_path))
+                    uploaded_doc = upload_pdf(
+                        api_url,
+                        _LocalUploadFile(
+                            local_path,
+                            name=str(
+                                item.get("filename") or os.path.basename(local_path)
+                            ),
+                        ),
+                    )
                 except RuntimeError as exc:
                     st.error(f"Could not ingest PDF: {exc}")
                 else:
@@ -3291,7 +3305,8 @@ def render_workspace_left_pane() -> None:
     st.divider()
     st.markdown("**Active document**")
     if st.button("Refresh", key="refresh-ingested"):
-        refresh_ingested_docs()
+        refresh_ingested_docs(show_error=False)
+        st.session_state["_ingested_docs_loaded"] = True
     docs = st.session_state.get("ingested_docs")
     if docs is None:
         docs = refresh_ingested_docs(show_error=False)

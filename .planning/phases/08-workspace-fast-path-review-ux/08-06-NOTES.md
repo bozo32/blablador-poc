@@ -109,3 +109,81 @@ To make the queries reliable later, Phase 8 components should persist:
 - stable `sentence_id` in document body (08-01 fallback already handles this)
 - stable `span_id` for attachments (already used for PDF jumping)
 - identifier aliases for works (doi/openalex/local)
+
+---
+
+## UI Contract: Quarto/Cosmo (Phase 8 Cleanup)
+
+This captures the agreed styling + layout direction so we can resume after a
+`/clear` without losing intent.
+
+### Target Feel
+
+- Quarto / Bootswatch "Cosmo"-like: light, crisp, modern, text-forward.
+- Subtle shadows only; borders over heavy drop-shadows; high contrast.
+
+### Key Insight
+
+Most "messiness" is structural: the app mixes epistemic modes (Reading vs
+Chasing/Validation vs Graph) in the same center surface. Fix by making center
+mode explicit and suppressing irrelevant affordances per mode.
+
+### CSS Strategy (Streamlit-safe)
+
+- Avoid relying on Streamlit internal DOM class names for component semantics.
+- Use wrapper divs emitted by `st.markdown(..., unsafe_allow_html=True)`:
+  - `.bb-card`, `.bb-section-header`, `.bb-toolbar`
+  - `.bb-primary` / `.bb-danger` wrappers around Streamlit buttons
+  - `.bb-sticky` wrapper for the right rail (export/judgment)
+
+### Proposed Files
+
+- Add: `frontend/assets/cosmo_streamlit.css`
+  - tokens + primitives:
+    - `--primary #2780E3`, `--success #3FB618`, `--warning #FF7518`, `--danger #FF0039`
+    - `--text #2C3E50`, `--muted #6C757D`, `--border #DEE2E6`, `--bg #FFFFFF`, `--bg-subtle #F8F9FA`
+    - `--radius 10px`, `--shadow-sm 0 1px 6px rgba(0,0,0,.06)`
+  - `.bb-card`, `.bb-section-header`, `.bb-badge*`, `.bb-chip*`, `.bb-evidence*`, `.bb-toolbar`
+- Loader: keep `frontend/assets/workspace.css` for layout scaffolding, but load
+  Cosmo CSS after it so tokens/primitives win.
+
+### Center Panel Mode Contract
+
+- Wrap the center column content in exactly one of:
+  - `.bb-center bb-mode-reading`
+  - `.bb-center bb-mode-chasing`
+  - `.bb-center bb-mode-graph`
+
+- Add sticky center header:
+  - `.bb-center-header` with `Mode: Reading | Chasing | Graph`
+  - This prevents disorientation when content changes drastically.
+
+### Mode Suppression Rules (high-level)
+
+- Reading:
+  - text-first; hide `.bb-toolbar`, `.bb-chiprow`, `.bb-badge` in center
+  - keep citation chips for navigation
+- Chasing:
+  - object-first; show cards, toolbars, evidence list
+  - show claim focus banner persistently
+- Graph:
+  - canvas-first; hide cards/headers/toolbars in center, show only canvas + small overlay
+  - keep controls in right rail if cross-mode
+
+### Where to Implement (code anchors)
+
+- `frontend/ui.py`
+  - `render_evidence_panel()`
+    - Wrap judgment controls + rerun controls + filters into `.bb-card` blocks
+    - Make exactly one primary action per block (e.g. Save judgment)
+    - Move run history/diagnostics into a collapsed section in the right rail
+  - `draw_ingestion_panel(center=..., right=...)`
+    - Introduce center-mode wrapper + sticky header
+    - Ensure mode switching is explicit and stable
+
+### UX Requirements
+
+- One primary action per panel (avoid multiple equally loud buttons).
+- Right rail is sticky; center is scrollable.
+- Export block uses modern download buttons; no dark blocks.
+- Maintain accessibility: visible focus, readable placeholder/text, no hidden toggles.

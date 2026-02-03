@@ -327,10 +327,6 @@ def refresh_ingested_docs(show_error: bool = True) -> list[dict]:
         return list(previous)
 
     st.session_state["ingested_docs"] = documents
-    doc_ids = [doc.get("id") for doc in documents if doc.get("id")]
-    current = st.session_state.get("selected_doc_id")
-    if doc_ids and current and current not in doc_ids:
-        st.session_state["selected_doc_id"] = ""
     return documents
 
 
@@ -370,6 +366,7 @@ def handle_pdf_upload():
         last_doc = uploaded[-1]
         if last_doc.get("id"):
             st.session_state["selected_doc_id"] = last_doc["id"]
+            st.session_state["selected_doc_choice"] = last_doc["id"]
             st.session_state["active_document"] = last_doc
         st.success(f"Uploaded {len(uploaded)} PDF(s).")
         doc_id = last_doc.get("id")
@@ -3117,6 +3114,7 @@ def render_workspace_left_pane() -> None:
                 last_doc = uploaded[-1]
                 if last_doc.get("id"):
                     st.session_state["selected_doc_id"] = last_doc["id"]
+                    st.session_state["selected_doc_choice"] = last_doc["id"]
                     st.session_state["active_document"] = last_doc
 
                 doc_id = last_doc.get("id")
@@ -3246,6 +3244,9 @@ def render_workspace_left_pane() -> None:
         doc_ids = [doc.get("id") for doc in docs if doc.get("id")]
         if doc_ids:
             options = [""] + list(doc_ids)
+            st.session_state.setdefault(
+                "selected_doc_choice", st.session_state.get("selected_doc_id") or ""
+            )
             st.selectbox(
                 "Active document",
                 options,
@@ -3257,9 +3258,12 @@ def render_workspace_left_pane() -> None:
                     ),
                     "Select a document..." if not doc_id else doc_id,
                 ),
-                key="selected_doc_id",
-                on_change=load_selected_document,
+                key="selected_doc_choice",
             )
+            chosen = st.session_state.get("selected_doc_choice")
+            if chosen and chosen != st.session_state.get("selected_doc_id"):
+                st.session_state["selected_doc_id"] = chosen
+                load_selected_document(show_error=False)
     else:
         st.caption("No ingested PDFs yet.")
 

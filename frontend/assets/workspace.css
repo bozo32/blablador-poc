@@ -27,8 +27,8 @@
 
   --ws-pane-border: 1px solid var(--ws-border);
   --ws-pane-bg: var(--ws-surface);
-  --ws-muted: #6c757d;
-  --ws-ink: #2c3e50;
+  --ws-muted: #4b5563;
+  --ws-ink: #111827;
 
   --ws-page-pad-top: 0.6rem;
   --ws-page-pad-x: 1.1rem;
@@ -102,6 +102,23 @@ div[data-testid="stFileUploader"] small {
   color: var(--ws-muted) !important;
 }
 
+div[data-testid="stFileUploader"] section,
+div[data-testid="stFileUploader"] section * {
+  color: var(--ws-ink) !important;
+}
+
+div[data-testid="stFileUploader"] button {
+  border-radius: 10px !important;
+  border: 1px solid rgba(39, 128, 227, 0.35) !important;
+  background: rgba(39, 128, 227, 0.08) !important;
+  color: #1f6fc7 !important;
+}
+
+div[data-testid="stFileUploader"] button:hover {
+  background: rgba(39, 128, 227, 0.12) !important;
+  border-color: rgba(39, 128, 227, 0.55) !important;
+}
+
 .ws-pane-header__title {
   margin: 0;
   font-size: calc(0.98rem * var(--ws-font-scale));
@@ -124,6 +141,22 @@ div[data-testid="stFileUploader"] small {
 div[data-testid="stMarkdownContainer"] {
   color: var(--ws-ink);
   line-height: 1.55;
+}
+
+div[data-testid="stTextArea"] textarea,
+div[data-testid="stTextInput"] input {
+  color: var(--ws-ink) !important;
+}
+
+div[data-testid="stTextArea"] textarea::placeholder,
+div[data-testid="stTextInput"] input::placeholder {
+  color: rgba(75, 85, 99, 0.78) !important;
+}
+
+div[data-testid="stTextArea"] textarea::selection,
+div[data-testid="stTextInput"] input::selection {
+  background: rgba(39, 128, 227, 0.32);
+  color: var(--ws-ink);
 }
 
 /* Controls: slimmer + cleaner (still accessible) */

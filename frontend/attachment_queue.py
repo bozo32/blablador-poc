@@ -19,6 +19,8 @@ from frontend import claim_queue
 QUEUE_KEY = "attachment_queue"
 TMP_DIR_KEY = "attachment_tmp_dir"
 SHOW_ARCHIVED_KEY = "attachment_queue_show_archived"
+SHOW_HISTORY_KEY = "attachment_queue_show_history"
+SESSION_ATTACHMENT_IDS_KEY = "attachment_queue_session_attachment_ids"
 STATUS_FLOW = ("pending", "converting", "parsing", "matched")
 DEFAULT_STATUSES = ("pending", "converting", "parsing", "matched", "error")
 API_TIMEOUT = 15
@@ -67,6 +69,8 @@ def init_attachment_queue_state() -> None:
             "summary": {status: 0 for status in DEFAULT_STATUSES},
         }
     st.session_state.setdefault(SHOW_ARCHIVED_KEY, False)
+    st.session_state.setdefault(SHOW_HISTORY_KEY, False)
+    st.session_state.setdefault(SESSION_ATTACHMENT_IDS_KEY, [])
     if TMP_DIR_KEY not in st.session_state:
         tmp_dir = tempfile.mkdtemp(prefix="attachments-")
         st.session_state[TMP_DIR_KEY] = tmp_dir
@@ -128,6 +132,27 @@ def set_show_archived(value: bool) -> None:
     st.session_state[SHOW_ARCHIVED_KEY] = bool(value)
 
 
+def get_show_history() -> bool:
+    """Whether to include persisted attachments from previous sessions."""
+    init_attachment_queue_state()
+    return bool(st.session_state.get(SHOW_HISTORY_KEY, False))
+
+
+def set_show_history(value: bool) -> None:
+    init_attachment_queue_state()
+    st.session_state[SHOW_HISTORY_KEY] = bool(value)
+
+
+def clear_session_state() -> None:
+    """Clear in-memory Source bin items without touching backend data."""
+    init_attachment_queue_state()
+    queue = st.session_state.get(QUEUE_KEY) or {}
+    queue["items"] = {}
+    queue["order"] = []
+    queue["summary"] = {status: 0 for status in DEFAULT_STATUSES}
+    st.session_state[SESSION_ATTACHMENT_IDS_KEY] = []
+
+
 def _hydrate_from_backend(item: dict, payload: dict) -> None:
     if not payload:
         return
@@ -155,6 +180,15 @@ def _hydrate_from_backend(item: dict, payload: dict) -> None:
             "matched",
             {"attachment_id": payload.get("id")},
         )
+
+
+def _remember_session_attachment_id(attachment_id: Optional[str]) -> None:
+    if not attachment_id:
+        return
+    init_attachment_queue_state()
+    ids = st.session_state.setdefault(SESSION_ATTACHMENT_IDS_KEY, [])
+    if attachment_id not in ids:
+        ids.append(attachment_id)
 
 
 def _find_by_attachment_id(attachment_id: Optional[str]) -> Optional[dict]:
@@ -231,20 +265,68 @@ def _upload_to_backend(queue_item_id: str) -> None:
     if attachment:
         _hydrate_from_backend(item, attachment)
         item["status"] = _normalize_status(item.get("status"))
+        _remember_session_attachment_id(item.get("attachment_id"))
     refresh_summary_counts()
 
 
 def sync_backend_state() -> None:
+    queue = _queue_state()
     archived = get_show_archived()
-    try:
-        payload = _request("get", f"/attachments?archived={str(archived).lower()}")
-    except RuntimeError:
+    include_history = get_show_history()
+
+    if include_history:
+        try:
+            payload = _request("get", f"/attachments?archived={str(archived).lower()}")
+        except RuntimeError:
+            return
+        attachments = (payload or {}).get("attachments") or []
+        for record in attachments:
+            _apply_backend_payload(record)
+        refresh_summary_counts()
+        auto_match_queue_items()
         return
-    attachments = (payload or {}).get("attachments") or []
-    for record in attachments:
-        _apply_backend_payload(record)
+
+    # Clean start: only sync attachments that this Streamlit session knows about.
+    session_ids = set(st.session_state.get(SESSION_ATTACHMENT_IDS_KEY) or [])
+    for item in (queue.get("items") or {}).values():
+        attachment_id = (item or {}).get("attachment_id")
+        if attachment_id:
+            session_ids.add(str(attachment_id))
+
+    for attachment_id in sorted(session_ids):
+        try:
+            payload = _request("get", f"/attachments/{attachment_id}")
+        except RuntimeError:
+            continue
+        attachment = (payload or {}).get("attachment")
+        if attachment:
+            _apply_backend_payload(attachment)
     refresh_summary_counts()
     auto_match_queue_items()
+
+
+def archive_all_active() -> int:
+    """Archive all non-archived attachments (explicit user action)."""
+    try:
+        payload = _request("get", "/attachments?archived=false")
+    except RuntimeError:
+        return 0
+    attachments = (payload or {}).get("attachments") or []
+    archived = 0
+    for record in attachments:
+        attachment_id = (record or {}).get("id")
+        if not attachment_id:
+            continue
+        try:
+            _ = _request(
+                "patch",
+                f"/attachments/{attachment_id}",
+                json={"archived": True},
+            )
+        except RuntimeError:
+            continue
+        archived += 1
+    return archived
 
 
 def has_inflight_jobs() -> bool:

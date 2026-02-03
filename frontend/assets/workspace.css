@@ -177,6 +177,26 @@ div[data-testid="stMultiselect"] div[role="button"] {
   border-radius: 10px !important;
 }
 
+/* Ensure drawer/sidebar widgets stay legible in all themes */
+section[data-testid="stSidebar"],
+section[data-testid="stSidebar"] * {
+  color: var(--ws-ink) !important;
+}
+
+section[data-testid="stSidebar"] div[data-testid="stTextInput"] input,
+section[data-testid="stSidebar"] div[data-testid="stTextArea"] textarea,
+section[data-testid="stSidebar"] div[data-testid="stSelectbox"] div[role="button"],
+section[data-testid="stSidebar"] div[data-testid="stMultiselect"] div[role="button"] {
+  background: var(--ws-surface) !important;
+  color: var(--ws-ink) !important;
+}
+
+section[data-testid="stSidebar"] label,
+section[data-testid="stSidebar"] p,
+section[data-testid="stSidebar"] span {
+  color: var(--ws-ink) !important;
+}
+
 div[data-testid="stTextInput"] input:focus,
 div[data-testid="stTextArea"] textarea:focus,
 div[data-testid="stSelectbox"] div[role="button"]:focus,

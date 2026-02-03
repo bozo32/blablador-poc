@@ -99,3 +99,31 @@ p {
   --ws-page-pad-top: 0.35rem;
   --ws-page-pad-x: 0.95rem;
 }
+
+/* Make the difference obvious: tighten global Streamlit spacing */
+div[data-testid="stMarkdownContainer"] p {
+  margin: calc(var(--ws-space-0) * var(--ws-font-scale)) 0;
+}
+
+div[data-testid="stCaptionContainer"] {
+  margin-top: calc(var(--ws-space-0) * 0.5);
+}
+
+div[data-testid="stButton"] button {
+  padding: 0.25rem 0.6rem;
+  min-height: 2.1rem;
+  font-size: calc(0.9rem * var(--ws-font-scale));
+}
+
+div[data-testid="stSelectbox"] div[role="button"],
+div[data-testid="stMultiselect"] div[role="button"] {
+  padding-top: 0.15rem;
+  padding-bottom: 0.15rem;
+  min-height: 2.1rem;
+}
+
+div[data-testid="stTextArea"] textarea,
+div[data-testid="stTextInput"] input {
+  padding-top: 0.35rem;
+  padding-bottom: 0.35rem;
+}

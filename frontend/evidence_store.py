@@ -451,6 +451,17 @@ class EvidenceStore:
         claim_state["offset"] = payload.get("offset", claim_state.get("offset", 0))
         claim_state["run"] = payload.get("run")
         claim_state["lock_state"] = payload.get("lock_state")
+
+        # Keep UI rerun banner aligned with backend lock state.
+        rerun = claim_state.setdefault("rerun", self._default_rerun_state())
+        lock_state = claim_state.get("lock_state") or {}
+        lock_status = (lock_state.get("status") or "").strip().lower()
+        if lock_status in {"queued", "running"}:
+            rerun["status"] = lock_status
+        else:
+            rerun["status"] = "idle"
+            rerun["job"] = None
+            rerun["queue"] = []
         claim_state["focus_order"] = [
             cand.get("id") for cand in claim_state["candidates"] if cand.get("id")
         ]

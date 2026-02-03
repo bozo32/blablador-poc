@@ -163,9 +163,13 @@ def set_active_claim(claim_id: Optional[str]) -> Optional[str]:
 
 def _claim_option_label(record: dict, *, max_claim_chars: int = 60) -> str:
     callout = record.get("callout") or "Unlabeled citation"
+    claim_id = str(record.get("id") or "")
+    suffix = claim_id.split(":")[-1] if ":" in claim_id else ""
     claim_text = (record.get("claim") or "Untitled claim").strip()
     if len(claim_text) > max_claim_chars:
         claim_text = claim_text[: max_claim_chars - 1].rstrip() + "…"
+    if suffix:
+        return f"{callout} ({suffix}) • {claim_text}"
     return f"{callout} • {claim_text}"
 
 

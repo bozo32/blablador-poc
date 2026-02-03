@@ -1928,12 +1928,22 @@ def render_evidence_panel() -> None:
                         force=True,
                     )
                     _rerun()
-            status = rerun_state.get("status")
-            if status in {"queued", "running"}:
+            lock_state = state.get("lock_state") or {}
+            lock_status = (lock_state.get("status") or "").strip().lower()
+            if lock_status in {"queued", "running"}:
                 st.info("Evidence rerun in progress…", icon="🔁")
             history = state.get("history") or []
             if history:
                 latest = history[0]
+                attachments_state = (latest.get("metadata") or {}).get(
+                    "attachments_state"
+                ) or []
+                if not attachments_state:
+                    st.warning(
+                        "No placed sources are recorded for this claim. "
+                        "Assign a Source bin PDF to this specific claim and rerun.",
+                        icon="⚠️",
+                    )
                 log_url = latest.get("log_url") or latest.get("artifact_path")
                 if log_url:
                     st.caption(f"Latest rerun logs: {log_url}")

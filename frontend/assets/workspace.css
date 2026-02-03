@@ -206,6 +206,22 @@ div[data-testid="stButton"] button[kind="primary"]:hover {
   border-color: #1f6fc7 !important;
 }
 
+/* Toggles (History/Archived/Dense) - force visible labels and switch chrome */
+div[data-testid="stToggle"] label,
+div[data-testid="stToggle"] p {
+  color: var(--ws-ink) !important;
+}
+
+div[data-testid="stToggle"] div[role="switch"] {
+  border: 1px solid rgba(17, 24, 39, 0.22) !important;
+  background: rgba(17, 24, 39, 0.06) !important;
+}
+
+div[data-testid="stToggle"] div[role="switch"][aria-checked="true"] {
+  border-color: rgba(39, 128, 227, 0.55) !important;
+  background: rgba(39, 128, 227, 0.22) !important;
+}
+
 /* Compact control row (used in center header) */
 .ws-controls {
   display: flex;

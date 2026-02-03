@@ -1106,6 +1106,17 @@ def _local_path_for_attachment(attachment_id: str) -> Optional[str]:
     return None
 
 
+class _LocalUploadFile:
+    def __init__(self, path: str, *, content_type: str = "application/pdf"):
+        self.path = path
+        self.name = os.path.basename(path)
+        self.type = content_type
+
+    def getbuffer(self):
+        with open(self.path, "rb") as handle:
+            return handle.read()
+
+
 def _source_bin_status(item: dict) -> tuple[str, str]:
     status = (item.get("status") or "").strip().lower()
     claim_id = (item.get("claim_id") or "").strip()
@@ -1218,6 +1229,35 @@ def _render_source_bin_row(item: dict) -> None:
                     "No local PDF path recorded for this item. "
                     "Upload from this machine to enable open."
                 )
+        elif choice == "Use as citing document":
+            local_path = (item.get("local_path") or "").strip() or (
+                _local_path_for_attachment(
+                    str(item.get("attachment_id") or queue_item_id)
+                )
+                or ""
+            )
+            if not local_path or not os.path.exists(local_path):
+                st.info(
+                    "No local PDF path is available to re-upload. "
+                    "Re-upload the PDF using 'Citing document' mode."
+                )
+            else:
+                api_url = st.session_state.get("api_url", "http://localhost:8000")
+                try:
+                    uploaded_doc = upload_pdf(api_url, _LocalUploadFile(local_path))
+                except RuntimeError as exc:
+                    st.error(f"Could not ingest PDF: {exc}")
+                else:
+                    if uploaded_doc and uploaded_doc.get("id"):
+                        refresh_ingested_docs(show_error=False)
+                        st.session_state["selected_doc_id"] = uploaded_doc["id"]
+                        st.session_state["selected_doc_choice"] = uploaded_doc["id"]
+                        st.session_state["active_document"] = uploaded_doc
+                        # Archive the source-bin item to avoid duplicates/confusion.
+                        if not archived:
+                            attachment_queue.archive_attachment(
+                                str(queue_item_id), archived=True
+                            )
         elif choice == "Retry":
             if str(item.get("status") or "").strip().lower() == "error":
                 attachment_queue.retry_attachment(str(queue_item_id))
@@ -1232,7 +1272,14 @@ def _render_source_bin_row(item: dict) -> None:
         _rerun()
 
     with row[0]:
-        action_options = [None, "View PDF", "Retry", "Archive", "Unarchive"]
+        action_options = [
+            None,
+            "View PDF",
+            "Use as citing document",
+            "Retry",
+            "Archive",
+            "Unarchive",
+        ]
         st.selectbox(
             "Action",
             action_options,

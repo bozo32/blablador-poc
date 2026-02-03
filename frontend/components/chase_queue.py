@@ -85,9 +85,9 @@ def render(
         tgt = entry.get("target_id")
         ek = entry_key(cite_idx, tgt)
         is_open = open_key == ek
-        # Streamlit button labels may be rendered with markdown; escape leading '>'
-        # so it doesn't become a blockquote.
-        caret = "v" if is_open else "\\>"
+        # Avoid literal leading letters (e.g., "v") in labels; use ASCII-only
+        # disclosure markers so the citation label stays clean.
+        caret = "[-]" if is_open else "[+]"
 
         label = truncate_two_lines(get_label(entry))
         status = get_status(cite_idx, tgt)

@@ -1656,8 +1656,9 @@ def render_evidence_panel() -> None:
             caveats_key = f"judgment-notes-caveats::{selected_claim}"
             followups_key = f"judgment-notes-followups::{selected_claim}"
 
-            st.session_state.setdefault(status_key, status_default)
-            st.session_state.setdefault(verdict_key, verdict_default)
+            # Avoid Streamlit "default value + Session State" warnings by letting
+            # widgets own their keys; only pass an explicit index when the key
+            # does not exist yet.
             st.session_state.setdefault(notes_open_key, False)
             st.session_state.setdefault(
                 rationale_key, (notes_default or {}).get("rationale") or ""
@@ -1683,26 +1684,44 @@ def render_evidence_panel() -> None:
 
             row = st.columns([2, 4, 2], gap="small")
             with row[0]:
-                status = st.selectbox(
-                    "Status",
-                    ["draft", "final"],
-                    index=0 if st.session_state.get(status_key) != "final" else 1,
-                    format_func=lambda v: "Draft" if v == "draft" else "Final",
-                    key=status_key,
-                )
+                status_options = ["draft", "final"]
+                status_kwargs = {
+                    "format_func": lambda v: "Draft" if v == "draft" else "Final",
+                    "key": status_key,
+                }
+                if status_key in st.session_state:
+                    status = st.selectbox("Status", status_options, **status_kwargs)
+                else:
+                    status = st.selectbox(
+                        "Status",
+                        status_options,
+                        index=0 if status_default != "final" else 1,
+                        **status_kwargs,
+                    )
             with row[1]:
-                verdict = st.radio(
-                    "Verdict",
-                    [None, "support", "contradict", "uncertain"],
-                    horizontal=True,
-                    format_func=lambda v: {
+                verdict_options = [None, "support", "contradict", "uncertain"]
+                verdict_kwargs = {
+                    "horizontal": True,
+                    "format_func": lambda v: {
                         None: "No verdict",
                         "support": "Support",
                         "contradict": "Contradict",
                         "uncertain": "Uncertain",
                     }.get(v, "No verdict"),
-                    key=verdict_key,
-                )
+                    "key": verdict_key,
+                }
+                if verdict_key in st.session_state:
+                    verdict = st.radio("Verdict", verdict_options, **verdict_kwargs)
+                else:
+                    default_idx = 0
+                    if verdict_default in verdict_options:
+                        default_idx = verdict_options.index(verdict_default)
+                    verdict = st.radio(
+                        "Verdict",
+                        verdict_options,
+                        index=default_idx,
+                        **verdict_kwargs,
+                    )
             with row[2]:
                 must_have_verdict = status == "final"
                 disabled = bool(must_have_verdict and verdict is None)

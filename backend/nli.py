@@ -10,9 +10,11 @@ import torch
 from backend.settings import settings as app_settings
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, pipeline
 
-logging.basicConfig(
-    level=logging.DEBUG, format="%(asctime)s %(levelname)s ▶ %(message)s"
-)
+_log_level_name = os.environ.get("LOG_LEVEL", "INFO").upper().strip()
+_log_level = getattr(logging, _log_level_name, logging.INFO)
+logging.basicConfig(level=_log_level, format="%(asctime)s %(levelname)s ▶ %(message)s")
+for _logger_name in ("urllib3", "huggingface_hub", "transformers"):
+    logging.getLogger(_logger_name).setLevel(max(logging.WARNING, _log_level))
 
 
 def _threshold() -> float:

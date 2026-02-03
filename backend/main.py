@@ -61,11 +61,21 @@ from backend.ingestion_store import (
 from backend.claim_store import claim_store
 from backend.reference_retrieval import build_retrieval_dossier
 
-# Configure logging (so that logger.debug/info/etc. actually prints)
+# Configure logging.
+# Default to INFO to avoid extremely noisy dependency logs (urllib3/HF).
+_log_level_name = os.environ.get("LOG_LEVEL", "INFO").upper().strip()
+_log_level = getattr(logging, _log_level_name, logging.INFO)
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s ▶ %(message)s",
-    level=logging.DEBUG,
+    level=_log_level,
 )
+for _logger_name in (
+    "urllib3",
+    "huggingface_hub",
+    "transformers",
+    "sentence_transformers",
+):
+    logging.getLogger(_logger_name).setLevel(max(logging.WARNING, _log_level))
 logger = logging.getLogger(__name__)
 
 # Setup pipeline via registry and settings

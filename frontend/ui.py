@@ -98,7 +98,8 @@ def init_session_state():
         "started": False,
         "seg_requested": False,
         "pipeline_mode": getattr(settings, "PIPELINE_MODE", "classic"),
-        "ingested_docs": [],
+        "ingested_docs": None,
+        "_ingested_docs_loaded": False,
         "selected_doc_id": "",
         "active_document": None,
         "citation_selected_index": None,
@@ -3366,7 +3367,10 @@ def draw_ingestion_panel(*, center, right) -> None:
     should_clear_params = bool(param_doc or param_cite or param_target)
 
     docs = st.session_state.get("ingested_docs")
-    if docs is None or should_clear_params or not docs:
+    if docs is None or not st.session_state.get("_ingested_docs_loaded"):
+        docs = refresh_ingested_docs(show_error=False)
+        st.session_state["_ingested_docs_loaded"] = True
+    elif should_clear_params:
         docs = refresh_ingested_docs(show_error=False)
 
     if param_doc and str(param_doc) != str(

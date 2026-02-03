@@ -107,6 +107,14 @@ div[data-testid="stFileUploader"] section * {
   color: var(--ws-ink) !important;
 }
 
+div[data-testid="stFileUploader"] section {
+  opacity: 1 !important;
+}
+
+div[data-testid="stFileUploader"] section p {
+  color: var(--ws-ink) !important;
+}
+
 div[data-testid="stFileUploader"] button {
   border-radius: 10px !important;
   border: 1px solid rgba(39, 128, 227, 0.35) !important;

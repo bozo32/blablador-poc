@@ -132,6 +132,8 @@ def init_session_state():
         "workspace_upload_mode": "source",
         # Phase 08-07: named execution profiles for evidence reruns.
         "execution_profile": "Fast/Local",
+        # Phase 08-08: optional HF Inference API toggle for NLI.
+        "hf_remote": bool(getattr(settings, "HF_REMOTE_INFERENCE", False)),
     }
     for key, val in defaults.items():
         st.session_state.setdefault(key, val)
@@ -1995,15 +1997,18 @@ def render_evidence_panel() -> None:
                     key=f"rerun-{selected_claim}",
                     disabled=disabled,
                 ):
+                    advanced = {
+                        "profile": st.session_state.get(
+                            "execution_profile", "Fast/Local"
+                        )
+                    }
+                    if st.session_state.get("hf_remote"):
+                        advanced["hf_remote"] = True
                     store.queue_rerun(
                         selected_claim,
                         claim_text=active_claim_text_payload,
                         note="manual rerun",
-                        advanced_settings={
-                            "profile": st.session_state.get(
-                                "execution_profile", "Fast/Local"
-                            )
-                        },
+                        advanced_settings=advanced,
                     )
                     _rerun()
             with btn_cols[1]:
@@ -2067,6 +2072,8 @@ def render_evidence_panel() -> None:
                                 "profile",
                                 st.session_state.get("execution_profile", "Fast/Local"),
                             )
+                            if st.session_state.get("hf_remote"):
+                                payload.setdefault("hf_remote", True)
                         store.queue_rerun(
                             selected_claim,
                             claim_text=active_claim_text_payload,
@@ -3053,6 +3060,15 @@ def render_settings_controls() -> None:
     )
     if st.session_state["execution_profile"] == "Best/Local":
         st.caption("Best/Local enables the hybrid pipeline with ColBERT reranking.")
+
+    st.toggle(
+        "Use HF Inference API (demo)",
+        key="hf_remote",
+        help=(
+            "When enabled and HF_API_TOKEN is set, NLI can use Hugging Face Inference "
+            "API. Remote failures fall back to local automatically."
+        ),
+    )
 
     st.markdown("**Pipeline**")
     mode = st.selectbox(

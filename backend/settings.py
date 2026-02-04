@@ -93,6 +93,18 @@ class AppSettings(PydanticBaseSettings):
     NLI_MODEL: str = Field("MoritzLaurer/DeBERTa-v3-large-mnli-fever-anli-ling-wanli")
     NLI_THRESHOLD: float = Field(0.5)
 
+    # — Optional Hugging Face Inference API (Phase 08-08)
+    # When enabled and a token is present, supported steps may use remote HF
+    # inference instead of local Transformers pipelines.
+    HF_REMOTE_INFERENCE: bool = Field(
+        False,
+        description="Use Hugging Face Inference API for supported demo steps",
+    )
+    HF_API_TOKEN: str = Field(
+        "",
+        description="Hugging Face access token (optional, kept local)",
+    )
+
     # — Hybrid pipeline configuration —
 
     HYBRID_WINDOW_SIZE: int = Field(

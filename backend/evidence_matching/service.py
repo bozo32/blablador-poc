@@ -355,6 +355,20 @@ class EvidenceMatchingService:
         if profile_overrides:
             advanced.setdefault("profile_overrides", dict(profile_overrides))
 
+        # Phase 08-08: allow per-rerun HF remote toggle.
+        # This sets the per-run settings copy without mutating global settings.
+        if "hf_remote" in advanced:
+            advanced["hf_remote"] = bool(advanced.get("hf_remote"))
+            if advanced["hf_remote"]:
+                try:
+                    effective_settings = effective_settings.model_copy(
+                        update={"HF_REMOTE_INFERENCE": True}
+                    )
+                except Exception:
+                    payload = dict(effective_settings.model_dump())
+                    payload["HF_REMOTE_INFERENCE"] = True
+                    effective_settings = AppSettings(**payload)
+
         windows = self._load_claim_windows(claim_id)
         seeds = self._seed_windows(
             claim_text,

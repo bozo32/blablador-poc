@@ -131,6 +131,7 @@ class EvidencePipeline:
                 passages,
                 metadatas,
                 nli_model=getattr(self.settings, "NLI_MODEL", None),
+                settings=self.settings,
             )
         except Exception:  # pragma: no cover - fall back to neutral labels
             nli_results = []

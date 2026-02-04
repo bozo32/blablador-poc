@@ -5,7 +5,7 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import List, Literal, Optional, Tuple, Union  # new import
+from typing import Any, List, Literal, Optional, Tuple, Union  # new import
 
 import pandas as pd
 from sentence_transformers import CrossEncoder, SentenceTransformer
@@ -15,6 +15,43 @@ from backend.bl_client import BlabladorClient
 from functools import lru_cache
 import io
 import hashlib
+
+
+HF_INFERENCE_API_BASE = "https://api-inference.huggingface.co/models"
+
+
+def hf_inference_post(
+    model_id: str,
+    *,
+    token: str,
+    payload: dict[str, Any],
+    timeout: int = 30,
+) -> Any:
+    """POST a JSON payload to the Hugging Face Inference API.
+
+    Raises RuntimeError on any non-200 response or malformed JSON.
+    """
+    model = (model_id or "").strip()
+    if not model:
+        raise RuntimeError("HF inference model_id is empty")
+    url = f"{HF_INFERENCE_API_BASE}/{model}"
+    headers = {}
+    token_value = (token or "").strip()
+    if token_value:
+        headers["Authorization"] = f"Bearer {token_value}"
+    try:
+        resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
+    except Exception as exc:  # noqa: BLE001 - callers treat as fallback
+        raise RuntimeError(f"HF inference request failed: {exc}") from exc
+    if resp.status_code != 200:
+        detail = (resp.text or "").strip()
+        if len(detail) > 400:
+            detail = detail[:400] + "…"
+        raise RuntimeError(f"HF inference HTTP {resp.status_code}: {detail}")
+    try:
+        return resp.json()
+    except Exception as exc:  # noqa: BLE001 - callers treat as fallback
+        raise RuntimeError(f"HF inference returned invalid JSON: {exc}") from exc
 
 
 # testing for parallelism support

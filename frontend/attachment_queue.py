@@ -791,11 +791,17 @@ def _trigger_evidence_rerun(claim_id: str, *, note: str) -> None:
     claim_text = (record.get("claim") or "").strip()
     if not claim_text:
         return
+    profile = (st.session_state.get("execution_profile") or "").strip()
+    advanced_settings = {"profile": profile} if profile else {}
     try:
         _ = _request(
             "post",
             f"/claims/{claim_id}/evidence/rerun",
-            json={"claim_text": claim_text, "note": note},
+            json={
+                "claim_text": claim_text,
+                "note": note,
+                "advanced_settings": advanced_settings,
+            },
         )
     except RuntimeError:
         # Quiet failure: evidence view will show errors inline.

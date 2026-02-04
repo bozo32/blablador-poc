@@ -130,6 +130,8 @@ def init_session_state():
         WORKSPACE_SETTINGS_OPEN: False,
         WORKSPACE_ACTIVE_TAB: WORKSPACE_TAB_DOCUMENT,
         "workspace_upload_mode": "source",
+        # Phase 08-07: named execution profiles for evidence reruns.
+        "execution_profile": "Fast/Local",
     }
     for key, val in defaults.items():
         st.session_state.setdefault(key, val)
@@ -1997,6 +1999,11 @@ def render_evidence_panel() -> None:
                         selected_claim,
                         claim_text=active_claim_text_payload,
                         note="manual rerun",
+                        advanced_settings={
+                            "profile": st.session_state.get(
+                                "execution_profile", "Fast/Local"
+                            )
+                        },
                     )
                     _rerun()
             with btn_cols[1]:
@@ -2055,6 +2062,11 @@ def render_evidence_panel() -> None:
                             st.error(f"Advanced settings JSON invalid: {exc}")
                             payload = None
                     if payload is not None:
+                        if isinstance(payload, dict):
+                            payload.setdefault(
+                                "profile",
+                                st.session_state.get("execution_profile", "Fast/Local"),
+                            )
                         store.queue_rerun(
                             selected_claim,
                             claim_text=active_claim_text_payload,
@@ -3027,6 +3039,21 @@ def draw_sidebar():
 
 def render_settings_controls() -> None:
     """Render settings shared by the legacy sidebar and Phase 8 drawer."""
+    st.markdown("**Execution**")
+    profile_options = ["Fast/Local", "Best/Local"]
+    current_profile = st.session_state.get("execution_profile")
+    st.session_state["execution_profile"] = st.selectbox(
+        "Execution profile",
+        profile_options,
+        index=profile_options.index(current_profile)
+        if current_profile in profile_options
+        else 0,
+        help="Controls backend retrieval/reranking for evidence reruns.",
+        key="execution_profile_selectbox",
+    )
+    if st.session_state["execution_profile"] == "Best/Local":
+        st.caption("Best/Local enables the hybrid pipeline with ColBERT reranking.")
+
     st.markdown("**Pipeline**")
     mode = st.selectbox(
         "Choose pipeline",

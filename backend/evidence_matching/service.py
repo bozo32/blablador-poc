@@ -10,7 +10,11 @@ from typing import Any, Callable, Sequence
 from uuid import uuid4
 
 from backend import attachment_store, background_state
-from backend.settings import AppSettings, settings as app_settings
+from backend.settings import (
+    AppSettings,
+    apply_execution_profile,
+    settings as app_settings,
+)
 
 from . import deterministic_matcher, loaders, serializers
 from .pipeline import EvidencePipeline
@@ -339,14 +343,32 @@ class EvidenceMatchingService:
         note: str | None = None,
         advanced_settings: dict | None = None,
     ) -> dict:
+        advanced = dict(advanced_settings or {})
+        requested_profile = advanced.get("profile")
+        (
+            effective_settings,
+            resolved_profile,
+            profile_overrides,
+        ) = apply_execution_profile(self.settings, requested_profile)
+        if resolved_profile:
+            advanced["profile"] = resolved_profile
+        if profile_overrides:
+            advanced.setdefault("profile_overrides", dict(profile_overrides))
+
         windows = self._load_claim_windows(claim_id)
         seeds = self._seed_windows(
             claim_text,
             windows,
             cited_attachment_ids=cited_attachment_ids,
-            settings_override=self.settings,
+            settings_override=effective_settings,
         )
-        candidates = self.pipeline.run(
+
+        pipeline = (
+            self.pipeline
+            if effective_settings is self.settings
+            else EvidencePipeline(settings=effective_settings)
+        )
+        candidates = pipeline.run(
             claim_id=claim_id,
             claim_text=claim_text,
             seeds=seeds,
@@ -356,7 +378,7 @@ class EvidenceMatchingService:
             "claim_text": claim_text,
             "attachments_state": attachments_state,
             "note": note,
-            "advanced_settings": dict(advanced_settings or {}),
+            "advanced_settings": advanced,
         }
         return self.store.record_run(claim_id, candidates=serialized, metadata=metadata)
 

@@ -3,7 +3,7 @@
 from pydantic import Field
 from pydantic_settings import BaseSettings as PydanticBaseSettings
 from pydantic_settings import SettingsConfigDict
-from typing import Literal, List
+from typing import Any, Literal, List, Tuple
 from pathlib import Path
 
 NLI_BATCH_SIZE = 50
@@ -252,6 +252,68 @@ class AppSettings(PydanticBaseSettings):
         ge=1,
         description="Maximum concurrent evidence rerun jobs",
     )
+
+
+# ---------------------------------------------------------------------------
+#  Execution profiles (Phase 08-07)
+# ---------------------------------------------------------------------------
+
+# Keep the registry intentionally small. Profiles are referenced by name from
+# frontend rerun requests via `advanced_settings.profile`.
+EXECUTION_PROFILES: dict[str, dict[str, Any]] = {
+    # Mirrors current defaults: classic pipeline with cross-encoder reranking.
+    "Fast/Local": {
+        "PIPELINE_MODE": "classic",
+        "RERANKER_MODEL": "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1",
+        "RERANKER_TOP_K": 10,
+        # Explicitly disable ColBERT so the profile routing is deterministic.
+        "COLBERT_MODE": "off",
+    },
+    # Re-enable the ColBERT reranker path via hybrid pipeline configuration.
+    "Best/Local": {
+        "PIPELINE_MODE": "hybrid",
+        "HYBRID_RERANK_MODEL": "ColBERT",
+        "HYBRID_RERANK_TOP_K": 10,
+        "COLBERT_MODE": "external",
+    },
+}
+
+DEFAULT_EXECUTION_PROFILE = "Fast/Local"
+
+
+def resolve_execution_profile(profile: str | None) -> Tuple[str | None, dict[str, Any]]:
+    """Return (resolved_name, overrides) for a requested profile."""
+    if not profile:
+        return None, {}
+    requested = str(profile).strip()
+    if not requested:
+        return None, {}
+    if requested in EXECUTION_PROFILES:
+        return requested, dict(EXECUTION_PROFILES[requested])
+    lowered = requested.casefold()
+    for name in EXECUTION_PROFILES:
+        if name.casefold() == lowered:
+            return name, dict(EXECUTION_PROFILES[name])
+    return None, {}
+
+
+def apply_execution_profile(
+    base_settings: "AppSettings", profile: str | None
+) -> Tuple["AppSettings", str | None, dict[str, Any]]:
+    """Return (effective_settings, resolved_profile, overrides).
+
+    This is intended for per-run overrides (e.g., evidence reruns) and MUST NOT
+    mutate the global settings object.
+    """
+    resolved, overrides = resolve_execution_profile(profile)
+    if not overrides:
+        return base_settings, resolved, {}
+    try:
+        return base_settings.model_copy(update=overrides), resolved, dict(overrides)
+    except Exception:
+        payload = dict(base_settings.model_dump())
+        payload.update(overrides)
+        return AppSettings(**payload), resolved, dict(overrides)
 
 
 # ---------------------------------------------------------------------------

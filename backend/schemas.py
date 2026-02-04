@@ -449,6 +449,17 @@ class EvidenceRerunRequest(BaseModel):
     note: Optional[str] = None
     advanced_settings: Optional[Dict[str, Any]] = None
 
+    @field_validator("advanced_settings")
+    def validate_advanced_settings(cls, value: Optional[Dict[str, Any]]):
+        if value is None:
+            return None
+        if not isinstance(value, dict):
+            raise ValueError("advanced_settings must be an object")
+        profile = value.get("profile")
+        if profile is not None and not isinstance(profile, str):
+            raise ValueError("advanced_settings.profile must be a string")
+        return value
+
 
 class EvidenceRerunResponse(BaseModel):
     job_id: str

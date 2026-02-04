@@ -10,16 +10,16 @@ See: .planning/PROJECT.md (updated 2026-01-23)
 ## Current Position
 
 Phase: 8 of 8 (Workspace + Fast-Path Review UX)
-Plan: 5 of 8 in current phase
+Plan: 7 of 8 in current phase
 Status: In progress
-Last activity: 2026-02-03 — Completed 08-05-PLAN.md
+Last activity: 2026-02-04 — Completed 08-07-PLAN.md
 
-Progress: ██████████░░ 84%
+Progress: ███████████░ 89%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 32
+- Total plans completed: 34
 - Average duration: 14 min
 - Total execution time: 3.6 hours
 
@@ -49,6 +49,10 @@ Recent decisions affecting current work:
   - Global background pause state is persisted under data/ and exposed via /background/* endpoints to gate new background work (08-02).
 
   - Workspace uses a headerless 3-pane shell with a gear-toggled settings drawer and a session-persisted dense mode toggle (08-04).
+
+  - Evidence reruns accept a named execution profile via `advanced_settings.profile`, and the backend applies it per run via a settings copy (08-07).
+
+  - `Best/Local` explicitly enables the hybrid + ColBERT reranker path while `Fast/Local` keeps classic behavior deterministic (08-07).
 
  - Evidence pipeline caches attachment sentences centrally so deterministic windows reuse a single source of truth (05-01).
  - BM25 seeding now carries provenance/badge metadata with spaCy tokenization and regex fallback for deterministic output (05-01).
@@ -90,6 +94,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-02-03T02:14:31Z
-Stopped at: Completed 08-05-PLAN.md
+Last session: 2026-02-04T00:12:42Z
+Stopped at: Completed 08-07-PLAN.md
 Resume file: None

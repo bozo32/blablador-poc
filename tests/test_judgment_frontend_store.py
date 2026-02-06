@@ -19,12 +19,18 @@ class StubJudgmentApi:
         self.judgments_by_claim_id = judgments_by_claim_id or {}
         self.doc_lists: Dict[str, List[Dict[str, Any]]] = {}
 
-    def get_judgment(self, claim_id: str) -> Dict[str, Any]:
+    def get_judgment(
+        self, claim_id: str, *, reviewer_uid: str | None = None
+    ) -> Dict[str, Any]:
         self.get_calls.append(claim_id)
+        _ = reviewer_uid  # reviewer scoping handled by backend in real impl
         return self.judgments_by_claim_id.get(claim_id, {})
 
-    def put_judgment(self, claim_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def put_judgment(
+        self, claim_id: str, payload: Dict[str, Any], *, reviewer_uid: str | None = None
+    ) -> Dict[str, Any]:
         self.put_calls.append((claim_id, payload))
+        _ = reviewer_uid
         stored = {"claim_id": claim_id, **payload}
         self.judgments_by_claim_id[claim_id] = stored
         return stored

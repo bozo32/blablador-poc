@@ -43,6 +43,7 @@ from frontend.state_keys import (
     WORKSPACE_SETTINGS_OPEN,
     WORKSPACE_TAB_DOCUMENT,
     WORKSPACE_TAB_REVIEW,
+    WORKSPACE_TAB_GRAPH,
     canonical_segments_key,
 )
 from frontend.components.evidence_card import CardActionCallbacks, EvidenceCardRenderer
@@ -67,6 +68,8 @@ from frontend.ingestion_api import (
     trigger_resolution,
     upload_pdf,
 )
+from frontend import ledger_api
+from frontend import project_api
 from typing import Any, Dict, List, Optional
 
 
@@ -77,6 +80,18 @@ from typing import Any, Dict, List, Optional
 
 # === Settings & State Initialization ===
 settings = AppSettings()
+
+
+DEFAULT_BACKEND_URL = (settings.BACKEND_URL or "http://localhost:8000").strip()
+
+
+def get_api_url() -> str:
+    """Return a usable backend URL even if the widget is blank."""
+    url = (st.session_state.get("api_url") or "").strip()
+    if not url:
+        url = DEFAULT_BACKEND_URL
+        st.session_state["api_url"] = url
+    return url
 
 
 def init_session_state():
@@ -134,6 +149,14 @@ def init_session_state():
         "execution_profile": "Fast/Local",
         # Phase 08-08: optional HF Inference API toggle for NLI.
         "hf_remote": bool(getattr(settings, "HF_REMOTE_INFERENCE", False)),
+        # Phase 09: document ledger (backend graph).
+        "ledger_payload": None,
+        "ledger_editor_doc": None,
+        "ledger_editor_side": None,
+        # Phase 09: project shell + export/import.
+        "project_meta": None,
+        "project_export_blob": None,
+        "project_import_confirm": False,
     }
     for key, val in defaults.items():
         st.session_state.setdefault(key, val)
@@ -333,7 +356,7 @@ def handle_upload():
 
 
 def refresh_ingested_docs(show_error: bool = True) -> list[dict]:
-    api_url = st.session_state.get("api_url", "http://localhost:8000")
+    api_url = get_api_url()
     previous = st.session_state.get("ingested_docs") or []
     try:
         documents = list_documents(api_url)
@@ -356,7 +379,7 @@ def load_selected_document(show_error: bool = True) -> Optional[dict]:
     if not doc_id:
         st.session_state["active_document"] = None
         return None
-    api_url = st.session_state.get("api_url", "http://localhost:8000")
+    api_url = get_api_url()
     try:
         document = get_document(api_url, doc_id)
     except RuntimeError as exc:
@@ -371,7 +394,7 @@ def handle_pdf_upload():
     files = st.session_state.get("uploaded_pdfs") or []
     if not files:
         return
-    api_url = st.session_state.get("api_url", "http://localhost:8000")
+    api_url = get_api_url()
     uploaded = []
     with st.spinner("Uploading PDFs..."):
         for file in files:
@@ -847,7 +870,7 @@ ATTACHMENT_CSS_PATH = (
 ATTACHMENT_STATUS_LABELS = {
     "pending": "Pending",
     "converting": "Converting",
-    "parsing": "Parsing",
+    "parsing": "Extracting",
     "matched": "Matched",
     "error": "Error",
 }
@@ -916,7 +939,9 @@ def prepare_attachment_workspace() -> None:
     claim_queue.sync_claims_from_results(st.session_state.get("results"))
     if not claim_queue.get_claim_records() and st.session_state.get("show_demo_claims"):
         claim_queue.ensure_demo_claims()
-    attachment_queue.sync_backend_state()
+    if not st.session_state.get("_source_bin_loaded"):
+        attachment_queue.sync_backend_state()
+        st.session_state["_source_bin_loaded"] = True
     attachment_queue.ensure_open_when_activity()
     attachment_queue.collapse_when_idle()
 
@@ -926,13 +951,12 @@ def render_attachment_workspace() -> None:
     inject_attachment_panel_styles()
     prepare_attachment_workspace()
     if attachment_queue.has_inflight_jobs():
-        if st_autorefresh:
-            st_autorefresh(interval=5000, key="attachment-autopoll")
-        else:
-            st.caption(
+        st.caption(
+            (
                 "Attachments are processing in the background. "
                 "Use the queue panel to refresh statuses."
             )
+        )
     st.subheader("Evidence attachments & queue")
     st.caption(
         "Drop cited PDFs onto claims, then monitor their status in the queue panel."
@@ -1268,7 +1292,7 @@ def _render_source_bin_row(item: dict) -> None:
                     "Re-upload the PDF using 'Citing document' mode."
                 )
             else:
-                api_url = st.session_state.get("api_url", "http://localhost:8000")
+                api_url = get_api_url()
                 try:
                     uploaded_doc = upload_pdf(
                         api_url,
@@ -1388,7 +1412,7 @@ def _render_queue_summary(summary: dict) -> None:
         st.info(
             (
                 f"{converting} attachment{'s' if converting != 1 else ''} "
-                "converting before parsing completes."
+                "converting before extraction completes."
             ),
             icon="⏳",
         )
@@ -1409,6 +1433,556 @@ def _format_queue_summary(summary: dict) -> str:
             continue
         parts.append(f"{label}: {count}")
     return " • ".join(parts)
+
+
+def _format_ledger_bracket(nums: List[int]) -> str:
+    cleaned = [int(n) for n in (nums or []) if n]
+    if not cleaned:
+        return "[]"
+    shown = cleaned[:6]
+    inside = ", ".join(str(n) for n in shown)
+    if len(cleaned) > len(shown):
+        inside = inside + ", ..."
+    return f"[{inside}]"
+
+
+def _ledger_fetch(api_url: str, *, force: bool = False) -> dict:
+    payload = st.session_state.get("ledger_payload")
+    if force or not isinstance(payload, dict):
+        payload = None
+    if payload is None or force:
+        try:
+            payload = ledger_api.get_ledger(api_url)
+        except RuntimeError as exc:
+            payload = {"rows": [], "options": [], "error": str(exc)}
+        st.session_state["ledger_payload"] = payload
+    return payload or {}
+
+
+def render_documents_panel() -> None:
+    api_url = get_api_url()
+    st.markdown("**Documents**")
+    controls = st.columns([2, 1], gap="small")
+    with controls[0]:
+        st.text_input(
+            "Search",
+            key="docs-search",
+            placeholder="Search author, title, DOI, or #",
+            label_visibility="collapsed",
+        )
+    with controls[1]:
+        if st.button("Refresh", key="ledger-refresh", use_container_width=True):
+            _ledger_fetch(api_url, force=True)
+
+    st.toggle(
+        "Show placeholders",
+        key="docs-show-placeholders",
+        help="Show documents that only exist as bibliography entries (no PDF yet).",
+    )
+
+    with st.expander("Upload documents", expanded=False):
+        st.caption("Uploads create/refresh document nodes in the graph.")
+        upload_key = "docs-upload"
+
+        def _handle_docs_upload() -> None:
+            files = st.session_state.get(upload_key) or []
+            if not files:
+                return
+            uploaded = []
+            with st.spinner("Uploading PDFs..."):
+                for file in files:
+                    try:
+                        uploaded_doc = upload_pdf(api_url, file)
+                    except RuntimeError as exc:
+                        st.error(
+                            f"Upload failed for {getattr(file, 'name', 'file')}: {exc}"
+                        )
+                        continue
+                    if uploaded_doc:
+                        uploaded.append(uploaded_doc)
+            if uploaded:
+                refresh_ingested_docs(show_error=False)
+                last_doc = uploaded[-1]
+                if last_doc.get("id"):
+                    st.session_state["selected_doc_id"] = last_doc["id"]
+                    st.session_state["active_document"] = last_doc
+                # Refresh ledger to pull new node.
+                _ledger_fetch(api_url, force=True)
+
+        st.file_uploader(
+            "Upload PDFs",
+            type=["pdf"],
+            accept_multiple_files=True,
+            key=upload_key,
+            on_change=_handle_docs_upload,
+        )
+
+    payload = _ledger_fetch(api_url, force=False)
+    if payload.get("error"):
+        st.caption(str(payload.get("error")))
+
+    rows = payload.get("rows") or []
+    if not rows:
+        st.caption(
+            "No ledger entries yet. Upload a citing document and run extraction."
+        )
+        return
+
+    options = payload.get("options") or []
+    option_nums = [int(opt.get("num")) for opt in options if opt.get("num")]
+    option_by_num = {int(opt.get("num")): opt for opt in options if opt.get("num")}
+
+    q = (st.session_state.get("docs-search") or "").strip().lower()
+    show_placeholders = bool(st.session_state.get("docs-show-placeholders"))
+    filtered = []
+    for row in rows:
+        if not show_placeholders and not bool(row.get("anchored")):
+            continue
+        hay = " ".join(
+            str(x or "")
+            for x in [
+                row.get("num"),
+                row.get("short"),
+                row.get("title"),
+                row.get("apa"),
+                row.get("doi"),
+            ]
+        ).lower()
+        if q and q not in hay and (not q.startswith("#") or q[1:] not in hay):
+            continue
+        filtered.append(row)
+
+    if not show_placeholders:
+        hidden = sum(1 for r in rows if not bool(r.get("anchored")))
+        if hidden:
+            st.caption(f"Hiding {hidden} placeholder(s).")
+
+    selected_num = st.session_state.get("documents_selected_num")
+    if selected_num is None and filtered:
+        selected_num = int(filtered[0].get("num") or 0)
+        st.session_state["documents_selected_num"] = selected_num
+
+    def _open_process_doc(ingest_id: str, *, reprocess: bool = False) -> None:
+        st.session_state["selected_doc_id"] = str(ingest_id)
+        doc = load_selected_document(show_error=False) or {}
+        if not doc:
+            return
+        extraction = doc.get("extraction") or {}
+        resolution = doc.get("resolution") or {}
+        extraction_done = (extraction.get("status") or "").strip().lower() == "complete"
+        resolution_done = (resolution.get("status") or "").strip().lower() == "complete"
+
+        if reprocess:
+            extraction_done = False
+            resolution_done = False
+
+        if not extraction_done:
+            with st.spinner("Extracting..."):
+                trigger_extraction(api_url, str(ingest_id))
+            doc = load_selected_document(show_error=False) or doc
+        if not resolution_done:
+            with st.spinner("Resolving references..."):
+                try:
+                    trigger_resolution(api_url, str(ingest_id))
+                except RuntimeError:
+                    # Resolution is optional; don't block opening.
+                    pass
+            doc = load_selected_document(show_error=False) or doc
+        refresh_ingested_docs(show_error=False)
+        _ledger_fetch(api_url, force=True)
+
+    for row in filtered:
+        try:
+            num = int(row.get("num"))
+        except Exception:
+            continue
+        status = str(row.get("status") or "orange").strip().lower()
+        dot_class = (
+            "ledger-dot ledger-dot--green"
+            if status == "green"
+            else "ledger-dot ledger-dot--orange"
+        )
+        short = str(row.get("short") or f"Document {num}")
+        apa = str(row.get("apa") or short)
+        ingest_id = row.get("ingest_id")
+        extracted = bool(row.get("extracted"))
+        resolved = bool(row.get("resolved"))
+
+        incoming = row.get("incoming") or []
+        outgoing = row.get("outgoing") or []
+        incoming_live = (
+            row.get("incoming_live")
+            if row.get("incoming_live") is not None
+            else incoming
+        )
+        outgoing_live = (
+            row.get("outgoing_live")
+            if row.get("outgoing_live") is not None
+            else outgoing
+        )
+
+        deg_html = (
+            f"<span class='doc-degree'>"
+            f"<sup>{len(incoming_live)}</sup><sub>{len(outgoing_live)}</sub>"
+            f"</span>"
+        )
+
+        cols = st.columns([1.1, 6.0, 0.9], gap="small")
+        with cols[0]:
+            selected = bool(
+                int(st.session_state.get("documents_selected_num") or 0) == int(num)
+            )
+            label = f"#{num}" + ("" if not selected else "")
+            if st.button(
+                label,
+                key=f"doc-select-{num}",
+                use_container_width=True,
+                type="primary" if selected else "secondary",
+            ):
+                st.session_state["documents_selected_num"] = int(num)
+                if ingest_id:
+                    _open_process_doc(str(ingest_id), reprocess=False)
+        with cols[1]:
+            title = row.get("title") or ""
+            title_hint = f" - {title}" if title else ""
+            chips = []
+            if ingest_id:
+                chips.append("PDF")
+            if extracted:
+                chips.append("E")
+            if resolved:
+                chips.append("R")
+            chips_text = (" " + " ".join(chips)) if chips else ""
+            # Tooltip: full APA.
+            st.markdown(
+                f"<div class='ledger-label' title='{html.escape(apa)}'>"
+                f"<span class='{dot_class}'></span> "
+                f"{html.escape(short)}{html.escape(title_hint)}"
+                f"<span class='doc-chips'>{html.escape(chips_text)}</span>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+        with cols[2]:
+            st.markdown(deg_html, unsafe_allow_html=True)
+
+    # Editor for currently selected document.
+    editor_doc = int(st.session_state.get("documents_selected_num") or 0)
+    selected_row = next((r for r in rows if int(r.get("num") or 0) == editor_doc), None)
+    if not selected_row:
+        return
+
+    st.divider()
+    st.markdown(f"**Selected: #{editor_doc}**")
+
+    ingest_id = selected_row.get("ingest_id")
+    if ingest_id:
+        if st.button(
+            "Open", key=f"doc-editor-open-{editor_doc}", use_container_width=True
+        ):
+            _open_process_doc(str(ingest_id), reprocess=False)
+        if st.button(
+            "Reprocess + open",
+            key=f"doc-editor-reprocess-{editor_doc}",
+            use_container_width=True,
+        ):
+            _open_process_doc(str(ingest_id), reprocess=True)
+
+    assigned_key = f"ledger-assigned::{editor_doc}"
+    st.session_state.setdefault(assigned_key, bool(selected_row.get("assigned")))
+    if st.toggle("Assigned to workflow", key=assigned_key):
+        pass
+    if st.button(
+        "Save assignment",
+        key=f"ledger-assign-save-{editor_doc}",
+        use_container_width=True,
+    ):
+        try:
+            st.session_state["ledger_payload"] = ledger_api.set_assigned(
+                api_url,
+                int(editor_doc),
+                bool(st.session_state.get(assigned_key)),
+            )
+        except RuntimeError as exc:
+            st.error(str(exc))
+
+    def _format_opt(num: int) -> str:
+        opt = option_by_num.get(int(num)) or {}
+        short = str(opt.get("short") or f"#{num}")
+        return f"#{int(num)} {short}"
+
+    # Linking is rarely needed now that uploads auto-merge into the tree.
+    if bool(st.session_state.get("docs-show-placeholders")):
+        with st.expander("Links (advanced)", expanded=False):
+            st.caption("Edit citation links in the local graph.")
+
+            last_key = "_docs_editor_last"
+            prev = st.session_state.get(last_key)
+            if prev != editor_doc:
+                st.session_state.pop(f"ledger-links::incoming::{editor_doc}", None)
+                st.session_state.pop(f"ledger-links::outgoing::{editor_doc}", None)
+                st.session_state[last_key] = editor_doc
+
+            in_key = f"ledger-links::incoming::{editor_doc}"
+            out_key = f"ledger-links::outgoing::{editor_doc}"
+            incoming_default = [
+                int(n) for n in (selected_row.get("incoming") or []) if n
+            ]
+            outgoing_default = [
+                int(n) for n in (selected_row.get("outgoing") or []) if n
+            ]
+
+            st.markdown("**Cited by**")
+            incoming_chosen = st.multiselect(
+                "Incoming",
+                options=[n for n in option_nums if int(n) != int(editor_doc)],
+                default=incoming_default,
+                format_func=_format_opt,
+                key=in_key,
+                label_visibility="collapsed",
+            )
+            if st.button(
+                "Save cited-by",
+                key=f"ledger-in-apply-{editor_doc}",
+                use_container_width=True,
+            ):
+                try:
+                    st.session_state["ledger_payload"] = ledger_api.set_incoming(
+                        api_url, int(editor_doc), [int(n) for n in incoming_chosen]
+                    )
+                except RuntimeError as exc:
+                    st.error(str(exc))
+
+            st.markdown("**Cites**")
+            outgoing_chosen = st.multiselect(
+                "Outgoing",
+                options=[n for n in option_nums if int(n) != int(editor_doc)],
+                default=outgoing_default,
+                format_func=_format_opt,
+                key=out_key,
+                label_visibility="collapsed",
+            )
+            if st.button(
+                "Save cites",
+                key=f"ledger-out-apply-{editor_doc}",
+                use_container_width=True,
+            ):
+                try:
+                    st.session_state["ledger_payload"] = ledger_api.set_outgoing(
+                        api_url, int(editor_doc), [int(n) for n in outgoing_chosen]
+                    )
+                except RuntimeError as exc:
+                    st.error(str(exc))
+
+
+def _project_fetch_meta(api_url: str, *, force: bool = False) -> dict:
+    meta = st.session_state.get("project_meta")
+    if force or not isinstance(meta, dict):
+        meta = None
+    if meta is None or force:
+        try:
+            meta = project_api.get_meta()
+        except project_api.ProjectApiError as exc:
+            meta = {"name": "default", "error": str(exc)}
+        st.session_state["project_meta"] = meta
+    return meta or {}
+
+
+def _normalize_reviewer_name(value: str | None) -> str:
+    text = str(value or "").strip()
+    text = " ".join(text.split())
+    return text
+
+
+def _project_reviewers(meta: dict) -> list[str]:
+    raw = meta.get("reviewers")
+    if not isinstance(raw, list):
+        return []
+    return [
+        _normalize_reviewer_name(item) for item in raw if _normalize_reviewer_name(item)
+    ]
+
+
+def _project_active_reviewer_uid(meta: dict) -> Optional[str]:
+    active = _normalize_reviewer_name(meta.get("active_reviewer_uid"))
+    return active or None
+
+
+def _active_reviewer_uid() -> Optional[str]:
+    meta = st.session_state.get("project_meta")
+    if not isinstance(meta, dict):
+        return None
+    return _project_active_reviewer_uid(meta)
+
+
+def render_project_panel() -> None:
+    """Project-level controls (export/import) shown in left pane."""
+    api_url = get_api_url()
+    meta = _project_fetch_meta(api_url, force=False)
+    name_default = str(meta.get("name") or "default")
+
+    st.markdown(
+        "<div class='ws-pane-header'>"
+        f"<div class='ws-pane-header__title'>{html.escape(name_default)}</div>"
+        "<div class='ws-pane-header__meta'>Export + import</div>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown('<div class="ws-pane-body">', unsafe_allow_html=True)
+
+    if meta.get("error"):
+        st.caption(str(meta.get("error")))
+
+    name_key = "project-name"
+    st.session_state.setdefault(name_key, name_default)
+    name_row = st.columns([3, 1], gap="small")
+    with name_row[0]:
+        st.text_input("Name", key=name_key, label_visibility="collapsed")
+    with name_row[1]:
+        if st.button("Save", key="project-name-save", use_container_width=True):
+            try:
+                st.session_state["project_meta"] = project_api.put_meta(
+                    st.session_state.get(name_key)
+                )
+            except project_api.ProjectApiError as exc:
+                st.error(str(exc))
+
+    st.divider()
+    st.markdown("**Current user**")
+    st.caption("Scopes all judgment saves/loads.")
+
+    reviewers = _project_reviewers(meta)
+    active_uid = _project_active_reviewer_uid(meta)
+    reviewer_select_key = "project-active-reviewer"
+    reviewer_add_key = "project-add-reviewer"
+
+    if reviewer_select_key not in st.session_state:
+        st.session_state[reviewer_select_key] = (
+            active_uid if active_uid in reviewers else None
+        )
+
+    def _on_reviewer_change() -> None:
+        chosen = _normalize_reviewer_name(st.session_state.get(reviewer_select_key))
+        chosen_value = chosen or None
+        if chosen_value == active_uid:
+            return
+        try:
+            st.session_state["project_meta"] = project_api.put_meta(
+                {"active_reviewer_uid": chosen_value}
+            )
+        except project_api.ProjectApiError as exc:
+            st.error(str(exc))
+            st.session_state[reviewer_select_key] = active_uid
+            return
+        _rerun()
+
+    select_options: list[Optional[str]] = [None] + reviewers
+    st.selectbox(
+        "Current user",
+        select_options,
+        key=reviewer_select_key,
+        on_change=_on_reviewer_change,
+        format_func=lambda v: "Select reviewer…" if v is None else str(v),
+        label_visibility="collapsed",
+    )
+
+    add_row = st.columns([3, 1], gap="small")
+    with add_row[0]:
+        st.text_input(
+            "Add reviewer",
+            key=reviewer_add_key,
+            placeholder="Add reviewer name…",
+            label_visibility="collapsed",
+        )
+    with add_row[1]:
+        if st.button("Add", key="project-add-reviewer-btn", use_container_width=True):
+            raw = _normalize_reviewer_name(st.session_state.get(reviewer_add_key))
+            if not raw:
+                return
+
+            lookup = {name.casefold(): name for name in reviewers}
+            chosen = lookup.get(raw.casefold()) or raw
+            updated = list(reviewers)
+            if chosen.casefold() not in lookup:
+                updated.append(chosen)
+
+            try:
+                st.session_state["project_meta"] = project_api.put_meta(
+                    {"reviewers": updated, "active_reviewer_uid": chosen}
+                )
+            except project_api.ProjectApiError as exc:
+                st.error(str(exc))
+                return
+
+            st.session_state[reviewer_select_key] = chosen
+            st.session_state[reviewer_add_key] = ""
+            _rerun()
+
+    if not reviewers:
+        st.info("Add a reviewer name to enable saving judgments.")
+
+    export_cols = st.columns([1, 1], gap="small")
+    with export_cols[0]:
+        if st.button(
+            "Export project",
+            key="project-export-prepare",
+            use_container_width=True,
+        ):
+            try:
+                st.session_state["project_export_blob"] = project_api.export_zip()
+            except project_api.ProjectApiError as exc:
+                st.error(str(exc))
+    with export_cols[1]:
+        blob = st.session_state.get("project_export_blob")
+        filename = (
+            f"{(st.session_state.get(name_key) or 'project').strip() or 'project'}.zip"
+        )
+        st.download_button(
+            "Download",
+            data=blob or b"",
+            file_name=filename,
+            mime="application/zip",
+            use_container_width=True,
+            disabled=not bool(blob),
+        )
+
+    st.divider()
+    st.markdown("**Import project**")
+    st.caption(
+        "Import overwrites local data stores. A backup zip is created automatically."
+    )
+    uploaded = st.file_uploader(
+        "Import .zip",
+        type=["zip"],
+        key="project-import-uploader",
+        label_visibility="collapsed",
+    )
+    st.toggle(
+        "Confirm overwrite local data",
+        key="project_import_confirm",
+        help=(
+            "This replaces ingestion/attachments/graph/judgments/etc. "
+            "Restart backend+UI after import."
+        ),
+    )
+    if st.button(
+        "Import",
+        key="project-import-run",
+        use_container_width=True,
+        disabled=not bool(uploaded)
+        or not bool(st.session_state.get("project_import_confirm")),
+    ):
+        try:
+            data = uploaded.getvalue() if uploaded else b""
+            result = project_api.import_zip(data, overwrite=True)
+        except project_api.ProjectApiError as exc:
+            st.error(str(exc))
+        else:
+            backup_path = (result or {}).get("backup_zip")
+            st.success("Project imported. Restart backend + Streamlit.")
+            if backup_path:
+                st.caption(f"Backup written: {backup_path}")
+
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 def _claim_option_index(options: List[dict], claim_id: Optional[str]) -> int:
@@ -1580,7 +2154,7 @@ def render_queue_item(item: dict) -> None:
 def render_evidence_panel() -> None:
     inject_evidence_review_styles()
     inject_judgment_styles()
-    st.subheader("Ranked evidence preview")
+    st.markdown("## Ranked evidence preview")
     claims = claim_queue.get_claim_records()
     if not claims:
         st.info("Run segmentation to populate claims before ranking evidence.")
@@ -1593,12 +2167,14 @@ def render_evidence_panel() -> None:
     label_map = {opt["id"]: opt["label"] for opt in options if opt.get("id")}
     store = evidence_store.EvidenceStore()
     active_claim = store.active_claim_id() or claim_ids[0]
+    st.markdown("**Focus claim**")
     selected_claim = st.selectbox(
         "Focus claim",
         claim_ids,
         index=claim_ids.index(active_claim) if active_claim in claim_ids else 0,
         format_func=lambda cid: label_map.get(cid, cid),
         key="evidence-claim-select",
+        label_visibility="collapsed",
     )
     if selected_claim != active_claim:
         claim_queue.set_active_claim(selected_claim)
@@ -1626,17 +2202,21 @@ def render_evidence_panel() -> None:
     lock_status = str(lock_state.get("status") or "").strip().lower()
     selection_locked = bool(lock_state.get("locked"))
     if lock_status in {"queued", "running"}:
-        if st_autorefresh:
-            st_autorefresh(interval=4000, key=f"evidence-lock-poll::{selected_claim}")
         st.caption(
-            "Evidence run in progress. Candidates update live, "
-            "but selection is disabled until complete."
+            "Evidence run in progress. Use 'Refresh list' to update. "
+            "Selection is disabled until complete."
         )
 
+    active_reviewer_uid = _active_reviewer_uid()
     j_store = judgment_store.JudgmentStore()
-    j_claim_state = j_store.sync_judgment(selected_claim)
+    if active_reviewer_uid:
+        j_claim_state = j_store.sync_judgment(
+            selected_claim, reviewer_uid=active_reviewer_uid
+        )
+    else:
+        j_claim_state = {"judgment": None, "error": None}
     j_payload = j_claim_state.get("judgment") or {}
-    layout_main, layout_sidebar = st.columns([3, 1], gap="large")
+    layout_main = st.container()
 
     def _claim_text_missing_error() -> Optional[str]:
         last_error = state.get("last_error") or ""
@@ -1787,8 +2367,11 @@ def render_evidence_panel() -> None:
                         **verdict_kwargs,
                     )
             with row[2]:
+                reviewer_missing = not bool(active_reviewer_uid)
                 must_have_verdict = status == "final"
-                disabled = bool(must_have_verdict and verdict is None)
+                disabled = bool(
+                    reviewer_missing or (must_have_verdict and verdict is None)
+                )
                 if st.button(
                     "Save judgment",
                     key=f"judgment-save::{selected_claim}",
@@ -1796,6 +2379,14 @@ def render_evidence_panel() -> None:
                     use_container_width=True,
                     disabled=disabled,
                 ):
+                    if reviewer_missing:
+                        st.warning(
+                            (
+                                "Set Current user in the Project panel before "
+                                "saving judgments."
+                            )
+                        )
+                        return
                     notes = {
                         "rationale": (st.session_state.get(rationale_key) or "").strip()
                         or None,
@@ -1853,6 +2444,7 @@ def render_evidence_panel() -> None:
 
                     stored = j_store.save_judgment(
                         selected_claim,
+                        reviewer_uid=active_reviewer_uid,
                         status=str(status),
                         verdict=None if verdict is None else str(verdict),
                         notes=notes_payload,
@@ -1864,7 +2456,10 @@ def render_evidence_panel() -> None:
                         _rerun()
 
                 if disabled:
-                    st.caption("Final judgments require a verdict.")
+                    if reviewer_missing:
+                        st.caption("Pick a Current user to enable saving.")
+                    elif must_have_verdict and verdict is None:
+                        st.caption("Final judgments require a verdict.")
 
             notes_open = bool(st.session_state.get(notes_open_key))
             toggle_label = "Hide notes" if notes_open else "Edit notes"
@@ -1916,6 +2511,73 @@ def render_evidence_panel() -> None:
                     height=80,
                     placeholder="What should be checked next?",
                 )
+
+            st.markdown("**Other reviewers**")
+            if not active_reviewer_uid:
+                st.caption("Pick a Current user to compare judgments.")
+            else:
+                try:
+                    payload = judgment_api.get_all_judgments(selected_claim)
+                except judgment_api.JudgmentApiError as exc:
+                    st.caption(f"Other reviewers unavailable: {exc}")
+                else:
+                    items = (
+                        payload.get("judgments") if isinstance(payload, dict) else None
+                    )
+                    if not isinstance(items, list):
+                        items = []
+
+                    others: list[dict] = []
+                    for entry in items:
+                        if not isinstance(entry, dict):
+                            continue
+                        reviewer = _normalize_reviewer_name(entry.get("reviewer_uid"))
+                        if not reviewer or reviewer == active_reviewer_uid:
+                            continue
+                        others.append(entry)
+
+                    if not others:
+                        st.caption("No other reviewer judgments for this claim yet.")
+                    else:
+                        for entry in sorted(
+                            others,
+                            key=lambda item: _normalize_reviewer_name(
+                                item.get("reviewer_uid")
+                            ).casefold(),
+                        ):
+                            reviewer = _normalize_reviewer_name(
+                                entry.get("reviewer_uid")
+                            )
+                            status = str(entry.get("status") or "draft").strip().lower()
+                            verdict = entry.get("verdict")
+                            verdict_text = (
+                                str(verdict).strip()
+                                if verdict in {"support", "contradict", "uncertain"}
+                                else "No verdict"
+                            )
+                            notes = (
+                                entry.get("notes")
+                                if isinstance(entry.get("notes"), dict)
+                                else {}
+                            )
+                            note_bits = [
+                                str(notes.get("rationale") or "").strip(),
+                                str(notes.get("caveats") or "").strip(),
+                                str(notes.get("followups") or "").strip(),
+                            ]
+                            preview = next((val for val in note_bits if val), "")
+                            preview = re.sub(r"\s+", " ", preview).strip()
+                            if preview:
+                                preview = (
+                                    preview
+                                    if len(preview) <= 95
+                                    else preview[:94].rstrip() + "..."
+                                )
+                                st.caption(
+                                    f"{reviewer}: {verdict_text} ({status}) — {preview}"
+                                )
+                            else:
+                                st.caption(f"{reviewer}: {verdict_text} ({status})")
 
             st.markdown("</div>", unsafe_allow_html=True)
 
@@ -2263,55 +2925,56 @@ def render_evidence_panel() -> None:
 
             def _render_candidate_row(candidate: Dict[str, Any], *, label: str) -> None:
                 candidate_id = candidate.get("id") or ""
-                left, right = st.columns([1, 9], gap="small")
-                with left:
-                    prior = review_labels.get(candidate_id)
 
-                    def _toggle(label_value: str) -> None:
-                        if not candidate_id:
-                            return
-                        if review_labels.get(candidate_id) == label_value:
-                            review_labels.pop(candidate_id, None)
-                            return
-                        review_labels[candidate_id] = label_value
+                prior = review_labels.get(candidate_id)
 
-                    icon_cols = st.columns(3, gap="small")
-                    with icon_cols[0]:
-                        if st.button(
-                            "✓",
-                            key=f"review-entail-{selected_claim}-{candidate_id}",
-                            type="primary" if prior == "entail" else "secondary",
-                            help="Mark as supports",
-                            use_container_width=True,
-                            disabled=bool(selection_locked),
-                        ):
-                            _toggle("entail")
-                            _rerun()
-                    with icon_cols[1]:
-                        if st.button(
-                            "–",
-                            key=f"review-neutral-{selected_claim}-{candidate_id}",
-                            type="primary" if prior == "neutral" else "secondary",
-                            help="Mark as neutral/unclear",
-                            use_container_width=True,
-                            disabled=bool(selection_locked),
-                        ):
-                            _toggle("neutral")
-                            _rerun()
-                    with icon_cols[2]:
-                        if st.button(
-                            "✗",
-                            key=f"review-contrad-{selected_claim}-{candidate_id}",
-                            type="primary" if prior == "contradict" else "secondary",
-                            help="Mark as contradicts",
-                            use_container_width=True,
-                            disabled=bool(selection_locked),
-                        ):
-                            _toggle("contradict")
-                            _rerun()
+                def _toggle(label_value: str) -> None:
+                    if not candidate_id:
+                        return
+                    if review_labels.get(candidate_id) == label_value:
+                        review_labels.pop(candidate_id, None)
+                        return
+                    review_labels[candidate_id] = label_value
 
+                conf = _confidence(candidate)
+                conf_text = f"{conf:.2f}" if conf is not None else "—"
+                st.caption(f"[{label}] confidence {conf_text}")
+                st.write((candidate.get("text") or "").strip() or "(empty)")
+
+                action_cols = st.columns([1, 1, 1, 2], gap="small")
+                with action_cols[0]:
+                    if st.button(
+                        "Support",
+                        key=f"review-entail-{selected_claim}-{candidate_id}",
+                        type="primary" if prior == "entail" else "secondary",
+                        use_container_width=True,
+                        disabled=False,
+                    ):
+                        _toggle("entail")
+                        _rerun()
+                with action_cols[1]:
+                    if st.button(
+                        "Neutral",
+                        key=f"review-neutral-{selected_claim}-{candidate_id}",
+                        type="primary" if prior == "neutral" else "secondary",
+                        use_container_width=True,
+                        disabled=False,
+                    ):
+                        _toggle("neutral")
+                        _rerun()
+                with action_cols[2]:
+                    if st.button(
+                        "Contradict",
+                        key=f"review-contrad-{selected_claim}-{candidate_id}",
+                        type="primary" if prior == "contradict" else "secondary",
+                        use_container_width=True,
+                        disabled=False,
+                    ):
+                        _toggle("contradict")
+                        _rerun()
+                with action_cols[3]:
                     if candidate_id and st.button(
-                        "View PDF",
+                        "Open PDF",
                         key=f"view-pdf-{selected_claim}-{candidate_id}",
                         use_container_width=True,
                     ):
@@ -2338,16 +3001,9 @@ def render_evidence_panel() -> None:
                         else:
                             st.info(
                                 "No local PDF path found for this evidence. "
-                                "Use the Source bin upload on this machine "
-                                "to enable opening."
+                                "Upload sources on this machine to enable opening."
                             )
                         _rerun()
-
-                with right:
-                    conf = _confidence(candidate)
-                    conf_text = f"{conf:.2f}" if conf is not None else "—"
-                    st.caption(f"[{label}] confidence {conf_text}")
-                    st.write((candidate.get("text") or "").strip() or "(empty)")
 
             # Optional calibration ("troll") item:
             # high-score but low-confidence boundary.
@@ -2450,8 +3106,14 @@ def render_evidence_panel() -> None:
                     for cand in neutral_candidates:
                         _render_candidate_row(cand, label="neutral")
 
-            st.divider()
+            st.markdown("<div style='height:0.35rem'></div>", unsafe_allow_html=True)
             st.markdown("#### Overall source assessment")
+
+            selection_payload = store.sync_selection(selected_claim, force=False) or {}
+            selection_verdict = (
+                str(selection_payload.get("verdict") or "none").strip().lower()
+            )
+            selection_note = selection_payload.get("note") or ""
 
             entail_votes = sum(1 for v in review_labels.values() if v == "entail")
             contradict_votes = sum(
@@ -2468,7 +3130,14 @@ def render_evidence_panel() -> None:
 
             overall_state = state.setdefault("overall", {})
             overall_options = ["supports", "contradicts", "inconsistent", "silent"]
-            current_overall = overall_state.get("verdict") or computed
+            selection_to_overall = {
+                "support": "supports",
+                "contradict": "contradicts",
+                "uncertain": "inconsistent",
+                "none": "silent",
+            }
+            mapped_overall = selection_to_overall.get(selection_verdict)
+            current_overall = overall_state.get("verdict") or mapped_overall or computed
             if current_overall not in overall_options:
                 current_overall = computed
             overall_verdict = st.radio(
@@ -2486,9 +3155,12 @@ def render_evidence_panel() -> None:
                 )
             )
 
+            note_default = str(overall_state.get("note") or "")
+            if not note_default and selection_note:
+                note_default = str(selection_note)
             note = st.text_area(
                 "Optional note",
-                value=str(overall_state.get("note") or ""),
+                value=note_default,
                 height=80,
                 key=f"overall-note-{selected_claim}",
             )
@@ -2500,18 +3172,235 @@ def render_evidence_panel() -> None:
                 "inconsistent": "uncertain",
                 "silent": "none",
             }
+
+            st.markdown("#### Final judgment")
+
+            # Prefill from stored judgment payload.
+            judgment = j_payload if isinstance(j_payload, dict) else {}
+
+            notes_default = (
+                judgment.get("notes") if isinstance(judgment.get("notes"), dict) else {}
+            )
+            rationale_key = f"judgment-notes-rationale::{selected_claim}"
+            caveats_key = f"judgment-notes-caveats::{selected_claim}"
+            followups_key = f"judgment-notes-followups::{selected_claim}"
+            st.session_state.setdefault(
+                rationale_key, (notes_default or {}).get("rationale") or ""
+            )
+            st.session_state.setdefault(
+                caveats_key, (notes_default or {}).get("caveats") or ""
+            )
+            st.session_state.setdefault(
+                followups_key, (notes_default or {}).get("followups") or ""
+            )
+
+            validation_default = (
+                judgment.get("validation")
+                if isinstance(judgment.get("validation"), dict)
+                else {}
+            )
+            advanced_key = f"judgment-advanced::{selected_claim}"
+            st.session_state.setdefault(advanced_key, False)
+            advanced = bool(st.session_state.get(advanced_key))
+            st.toggle(
+                "Advanced validation",
+                key=advanced_key,
+                help=(
+                    (
+                        "Adds separate ratings for source validity and relevance, "
+                        "each with a comment."
+                    )
+                ),
+            )
+
+            validation_rating_options = [
+                "strongly_agree",
+                "agree",
+                "neutral",
+                "disagree",
+                "strongly_disagree",
+            ]
+            rating_labels = {
+                "strongly_agree": "Strongly agree",
+                "agree": "Agree",
+                "neutral": "Neutral",
+                "disagree": "Disagree",
+                "strongly_disagree": "Strongly disagree",
+            }
+            valid_key = f"judgment-valid::{selected_claim}"
+            valid_comment_key = f"judgment-valid-comment::{selected_claim}"
+            rel_key = f"judgment-relevant::{selected_claim}"
+            rel_comment_key = f"judgment-relevant-comment::{selected_claim}"
+            st.session_state.setdefault(
+                valid_key, (validation_default or {}).get("source_valid")
+            )
+            st.session_state.setdefault(
+                valid_comment_key,
+                (validation_default or {}).get("source_valid_comment") or "",
+            )
+            st.session_state.setdefault(
+                rel_key, (validation_default or {}).get("source_relevant")
+            )
+            st.session_state.setdefault(
+                rel_comment_key,
+                (validation_default or {}).get("source_relevant_comment") or "",
+            )
+
+            if advanced:
+                st.markdown("**Validity & relevance**")
+                st.radio(
+                    "Source is valid",
+                    options=[None] + validation_rating_options,
+                    format_func=lambda v: "Unrated"
+                    if v is None
+                    else rating_labels.get(str(v), str(v)),
+                    horizontal=True,
+                    key=valid_key,
+                )
+                st.text_area(
+                    "Validity comment",
+                    key=valid_comment_key,
+                    height=70,
+                    placeholder="Why is the source valid/invalid?",
+                )
+                st.radio(
+                    "Source is relevant to the citing context",
+                    options=[None] + validation_rating_options,
+                    format_func=lambda v: "Unrated"
+                    if v is None
+                    else rating_labels.get(str(v), str(v)),
+                    horizontal=True,
+                    key=rel_key,
+                )
+                st.text_area(
+                    "Relevance comment",
+                    key=rel_comment_key,
+                    height=70,
+                    placeholder="Why is the source relevant/irrelevant?",
+                )
+
+            with st.expander("Notes", expanded=False):
+                st.text_area(
+                    "Rationale",
+                    key=rationale_key,
+                    height=70,
+                    placeholder="Brief explanation of your overall judgment.",
+                )
+                st.text_area(
+                    "Caveats",
+                    key=caveats_key,
+                    height=70,
+                    placeholder="Anything unclear, conditional, or potentially wrong?",
+                )
+                st.text_area(
+                    "Follow-ups",
+                    key=followups_key,
+                    height=70,
+                    placeholder="What should be checked next?",
+                )
+
+            stored_verdict = verdict_map.get(overall_verdict, "none")
+            judgment_verdict = None if stored_verdict == "none" else stored_verdict
+            status_to_save = "final" if judgment_verdict is not None else "draft"
+            disabled = bool(selection_locked)
             if st.button(
-                "Save assessment",
-                key=f"overall-save-{selected_claim}",
+                "Save",
+                key=f"final-save-{selected_claim}",
                 type="primary",
-                disabled=bool(selection_locked),
+                disabled=disabled,
             ):
+                if not active_reviewer_uid:
+                    st.warning(
+                        "Set Current user in the Project panel before saving judgments."
+                    )
+                    return
                 store.save_selection(
                     selected_claim,
-                    verdict=verdict_map.get(overall_verdict, "none"),
+                    verdict=stored_verdict,
                     note=str(note or "").strip() or None,
                 )
+                notes = {
+                    "rationale": (st.session_state.get(rationale_key) or "").strip()
+                    or None,
+                    "caveats": (st.session_state.get(caveats_key) or "").strip()
+                    or None,
+                    "followups": (st.session_state.get(followups_key) or "").strip()
+                    or None,
+                }
+                notes_payload = (
+                    None
+                    if not any(notes.values())
+                    else {k: v for k, v in notes.items()}
+                )
+
+                validation_payload = None
+                if advanced:
+                    validation_payload = {
+                        "source_valid": st.session_state.get(valid_key),
+                        "source_valid_comment": (
+                            st.session_state.get(valid_comment_key) or ""
+                        ).strip()
+                        or None,
+                        "source_relevant": st.session_state.get(rel_key),
+                        "source_relevant_comment": (
+                            st.session_state.get(rel_comment_key) or ""
+                        ).strip()
+                        or None,
+                    }
+                    if not any(validation_payload.values()):
+                        validation_payload = None
+
+                record = claim_queue.get_claim_record(selected_claim) or {}
+                claim_text_snapshot = (
+                    record.get("claim") or ""
+                ).strip() or active_claim_text
+                doi_snapshot = record.get("doi") or (
+                    record.get("reference_hint") or {}
+                ).get("doi")
+                callout_snapshot = record.get("callout") or (
+                    record.get("reference_hint") or {}
+                ).get("callout")
+                selected_tuple = st.session_state.get("selected_callout_tuple") or {}
+                tuple_doc_id = selected_tuple.get("doc_id")
+                tuple_cite = selected_tuple.get("citation_index")
+                tuple_target = normalize_target_id(selected_tuple.get("target_id"))
+                tuple_sentence = selected_tuple.get("sentence_id")
+                record_doc_id = record.get("doc_id")
+
+                provenance = {
+                    "doc_id": record_doc_id or tuple_doc_id,
+                    "callout": callout_snapshot,
+                    "reference_id": record.get("reference_id"),
+                    "doi": doi_snapshot,
+                    "author": record.get("author"),
+                    "year": record.get("year"),
+                    "claim_text": claim_text_snapshot,
+                    "citation_index": None,
+                    "target_id": None,
+                    "sentence_id": None,
+                }
+                if (
+                    record_doc_id
+                    and tuple_doc_id
+                    and str(record_doc_id) == str(tuple_doc_id)
+                ):
+                    provenance["citation_index"] = tuple_cite
+                    provenance["target_id"] = tuple_target
+                    provenance["sentence_id"] = tuple_sentence
+
+                j_store.save_judgment(
+                    selected_claim,
+                    reviewer_uid=active_reviewer_uid,
+                    status=status_to_save,
+                    verdict=judgment_verdict,
+                    notes=notes_payload,
+                    validation=validation_payload,
+                    provenance=provenance,
+                )
                 _rerun()
+
+            if disabled and selection_locked:
+                st.caption("Save disabled while evidence run is locked.")
 
         def _render_source_review() -> None:
             candidates = state.get("candidates") or []
@@ -2572,7 +3461,10 @@ def render_evidence_panel() -> None:
                     excerpt = store.preview_excerpt(selected_claim, candidate)
                     if not excerpt:
                         st.info(
-                            "Excerpt unavailable yet (attachment may still be parsing)."
+                            (
+                                "Excerpt unavailable yet (attachment may still be "
+                                "extracting)."
+                            )
                         )
                         continue
                     sentences = excerpt.get("sentences") or []
@@ -2670,7 +3562,7 @@ def render_evidence_panel() -> None:
                         if not excerpt:
                             st.info(
                                 "Excerpt unavailable yet (attachment may still be "
-                                "parsing)."
+                                "extracting)."
                             )
                             continue
                         sentences = excerpt.get("sentences") or []
@@ -2731,132 +3623,14 @@ def render_evidence_panel() -> None:
                 _rerun()
 
         _render_claim_header()
-        _render_judgment_controls()
         _render_status_messages()
-        _render_filter_chips()
         _render_rerun_controls()
         _render_progress_glance()
-        view_mode = st.radio(
-            "Evidence view",
-            ["Citing", "Source"],
-            horizontal=True,
-            key=f"evidence-view-mode-{selected_claim}",
-        )
-        if view_mode == "Source":
-            _render_source_review()
-        else:
-            _render_evidence_lists()
+        _render_evidence_lists()
         _render_share_panel()
         _render_pdf_notice()
 
-    with layout_sidebar:
-        st.subheader("Export")
-
-        include_drafts = st.checkbox(
-            "Include drafts",
-            value=False,
-            key="judgment-export-include-drafts",
-            help="Default exports include only final judgments.",
-        )
-        export_mode = st.selectbox(
-            "Mode",
-            ["core", "verbose"],
-            index=0,
-            key="judgment-export-mode",
-        )
-
-        export_cache = st.session_state.setdefault("_judgment_export_cache", {})
-        cache_namespace = (bool(include_drafts), str(export_mode))
-        if st.button(
-            "Refresh exports",
-            key="judgment-export-refresh",
-            help="Refetch export payloads from the backend.",
-        ):
-            for key in list(export_cache.keys()):
-                if isinstance(key, tuple) and key[:2] == cache_namespace:
-                    export_cache.pop(key, None)
-            st.session_state["_judgment_export_cache"] = export_cache
-
-        def _get_export(shape: str, fmt: str) -> Optional[dict]:
-            key = (bool(include_drafts), str(export_mode), str(shape), str(fmt))
-            if key in export_cache:
-                return export_cache.get(key)
-            try:
-                payload = judgment_api.download_export(
-                    shape=shape,
-                    format=fmt,
-                    include_drafts=bool(include_drafts),
-                    mode=str(export_mode),
-                )
-            except judgment_api.JudgmentApiError:
-                payload = None
-            export_cache[key] = payload
-            st.session_state["_judgment_export_cache"] = export_cache
-            return payload
-
-        claim_json = _get_export("claim", "json")
-        callout_json = _get_export("callout", "json")
-        claim_csv = _get_export("claim", "csv")
-        callout_csv = _get_export("callout", "csv")
-
-        st.download_button(
-            "Export claims (JSON)",
-            data=(claim_json or {}).get("content") or "",
-            file_name=(claim_json or {}).get("filename") or "judgments_claim.json",
-            mime=(claim_json or {}).get("mime") or "application/json",
-            disabled=claim_json is None,
-            use_container_width=True,
-        )
-        st.download_button(
-            "Export callouts (JSON)",
-            data=(callout_json or {}).get("content") or "",
-            file_name=(callout_json or {}).get("filename") or "judgments_callout.json",
-            mime=(callout_json or {}).get("mime") or "application/json",
-            disabled=callout_json is None,
-            use_container_width=True,
-        )
-        st.download_button(
-            "Export claims (CSV)",
-            data=(claim_csv or {}).get("content") or b"",
-            file_name=(claim_csv or {}).get("filename") or "judgments_claim.csv",
-            mime=(claim_csv or {}).get("mime") or "text/csv",
-            disabled=claim_csv is None,
-            use_container_width=True,
-        )
-        st.download_button(
-            "Export callouts (CSV)",
-            data=(callout_csv or {}).get("content") or b"",
-            file_name=(callout_csv or {}).get("filename") or "judgments_callout.csv",
-            mime=(callout_csv or {}).get("mime") or "text/csv",
-            disabled=callout_csv is None,
-            use_container_width=True,
-        )
-
-        st.divider()
-        with st.expander("Diagnostics", expanded=False):
-            st.markdown("**Run history**")
-            runs = state.get("history") or []
-            if not runs:
-                st.caption("No rerun history yet.")
-            else:
-                for run in runs[:5]:
-                    run_id = run.get("run_id") or "(unknown)"
-                    created = run.get("created_at") or ""
-                    counts = (run.get("summary") or {}).get("label_counts") or {}
-                    total = (run.get("summary") or {}).get("total")
-                    attachments_state = (run.get("metadata") or {}).get(
-                        "attachments_state"
-                    ) or []
-                    label = run_id
-                    if created:
-                        label = f"{label} • {created}"
-                    with st.expander(label, expanded=False):
-                        st.caption(f"total={total} label_counts={counts}")
-                        st.caption(
-                            f"placed_sources={len(attachments_state)}"
-                            if isinstance(attachments_state, list)
-                            else "placed_sources=?"
-                        )
+    # No right sidebar: keep evidence content full-width.
 
 
 def format_reference_summary(reference: dict, resolution: dict) -> str:
@@ -3181,6 +3955,10 @@ def render_settings_controls() -> None:
 
 
 def render_workspace_left_pane() -> None:
+    render_project_panel()
+
+    st.divider()
+
     st.markdown(
         '<div class="ws-pane-header">'
         '<div class="ws-pane-header__title">Workspace</div>'
@@ -3191,90 +3969,20 @@ def render_workspace_left_pane() -> None:
 
     st.markdown('<div class="ws-pane-body">', unsafe_allow_html=True)
 
-    inject_attachment_panel_styles()
-    attachment_queue.init_attachment_queue_state()
-    claim_queue.sync_claims_from_results(st.session_state.get("results"))
+    # Graph-backed document navigation + editing.
+    render_documents_panel()
 
-    api_url = st.session_state.get("api_url", "http://localhost:8000")
-    source_summary = attachment_queue.summarize_counts()
-    background_state = _get_background_state(api_url)
-    if (background_state or {}).get("paused"):
-        reason = (background_state or {}).get("reason") or "paused"
-        st.warning(f"Background paused: {reason}")
-    failed = int(source_summary.get("error", 0) or 0)
-    if failed:
-        st.markdown(
-            f"<span class='source-status-pill failed'>Failed: {failed}</span>",
-            unsafe_allow_html=True,
-        )
+    # Keep cited-source uploads available, but hidden.
+    with st.expander("Advanced: cited source uploads", expanded=False):
+        inject_attachment_panel_styles()
+        attachment_queue.init_attachment_queue_state()
+        st.caption("Upload cited PDFs to enable 'Open PDF' for evidence snippets.")
+        uploader_key = "source-bin-hidden-upload"
 
-    st.markdown("**PDF upload**")
-
-    # Single upload surface: either ingest a citing document or add cited sources.
-    docs_present = bool(st.session_state.get("ingested_docs") or [])
-    default_mode = "source" if docs_present else "citing"
-    st.session_state.setdefault("workspace_upload_mode", default_mode)
-    st.selectbox(
-        "Upload as",
-        ["citing", "source"],
-        format_func=lambda v: (
-            "Citing document" if v == "citing" else "Cited source (Source bin)"
-        ),
-        key="workspace_upload_mode",
-        label_visibility="collapsed",
-    )
-
-    uploader_version_key = "_source_bin_uploader_version"
-    uploader_version = int(st.session_state.get(uploader_version_key, 0) or 0)
-    uploader_key = f"source_bin_files::{uploader_version}"
-
-    def _handle_source_bin_upload() -> None:
-        files = st.session_state.get(uploader_key) or []
-        if not files:
-            return
-
-        if st.session_state.get("workspace_upload_mode") == "citing":
-            api_url = st.session_state.get("api_url", "http://localhost:8000")
-            uploaded = []
-            with st.spinner("Uploading PDFs..."):
-                for file in files:
-                    try:
-                        uploaded_doc = upload_pdf(api_url, file)
-                    except RuntimeError as exc:
-                        st.error(
-                            f"Upload failed for {getattr(file, 'name', 'file')}: {exc}"
-                        )
-                        continue
-                    if uploaded_doc:
-                        uploaded.append(uploaded_doc)
-
-            if uploaded:
-                refresh_ingested_docs(show_error=False)
-                last_doc = uploaded[-1]
-                if last_doc.get("id"):
-                    st.session_state["selected_doc_id"] = last_doc["id"]
-                    st.session_state["selected_doc_choice"] = last_doc["id"]
-                    st.session_state["active_document"] = last_doc
-
-                doc_id = last_doc.get("id")
-                if doc_id and st.session_state.get("auto_extract_on_upload"):
-                    with st.spinner("Running extraction..."):
-                        try:
-                            trigger_extraction(api_url, doc_id)
-                            document = load_selected_document(show_error=False)
-                            st.session_state["active_document"] = document
-                        except RuntimeError as exc:
-                            st.error(f"Extraction failed: {exc}")
-
-                if doc_id and st.session_state.get("auto_resolve_on_upload"):
-                    with st.spinner("Resolving references..."):
-                        try:
-                            trigger_resolution(api_url, doc_id)
-                            document = load_selected_document(show_error=False)
-                            st.session_state["active_document"] = document
-                        except RuntimeError as exc:
-                            st.warning(_resolution_error_message(exc))
-        else:
+        def _handle_hidden_sources_upload() -> None:
+            files = st.session_state.get(uploader_key) or []
+            if not files:
+                return
             selected_target = normalize_target_id(
                 st.session_state.get("citation_selected_target")
             )
@@ -3288,167 +3996,14 @@ def render_workspace_left_pane() -> None:
                 reference_hint=reference_hint,
                 source="source-bin",
             )
-        # Streamlit does not allow assigning to a file_uploader's widget key.
-        # Rotate the uploader key to clear the widget after processing.
-        st.session_state[uploader_version_key] = uploader_version + 1
-        # Callback reruns automatically; explicit st.rerun() is a no-op here.
 
-    st.file_uploader(
-        "Upload PDFs",
-        type=["pdf"],
-        accept_multiple_files=True,
-        key=uploader_key,
-        on_change=_handle_source_bin_upload,
-        label_visibility="collapsed",
-    )
-
-    st.markdown("**Source bin**")
-
-    # Keep controls readable (avoid narrow 4-col layouts that force vertical text).
-    controls_row_1 = st.columns([1, 1], gap="small")
-    with controls_row_1[0]:
-        _ = st.toggle(
-            "History",
-            key=attachment_queue.SHOW_HISTORY_KEY,
-            help="Show persisted items from previous sessions",
+        st.file_uploader(
+            "Upload source PDFs",
+            type=["pdf"],
+            accept_multiple_files=True,
+            key=uploader_key,
+            on_change=_handle_hidden_sources_upload,
         )
-    with controls_row_1[1]:
-        _ = st.toggle(
-            "Archived",
-            key=attachment_queue.SHOW_ARCHIVED_KEY,
-            help="Include archived items",
-        )
-
-    controls_row_2 = st.columns([1, 1], gap="small")
-    with controls_row_2[0]:
-        if st.button("Refresh", key="source-bin-refresh", use_container_width=True):
-            attachment_queue.sync_backend_state()
-            _rerun()
-    with controls_row_2[1]:
-        if st.button(
-            "Retry failed", key="source-bin-bulk-retry", use_container_width=True
-        ):
-            attachment_queue.bulk_retry_failed()
-            _rerun()
-
-    if not attachment_queue.get_show_history():
-        st.caption(
-            "Showing current session only. Toggle History to reveal prior uploads."
-        )
-
-    attachment_queue.sync_backend_state()
-
-    # While sources are processing, keep the UI fresh.
-    if attachment_queue.has_inflight_jobs():
-        if st_autorefresh:
-            st_autorefresh(interval=4000, key="source-bin-autopoll")
-        else:
-            st.caption("Processing sources... click Refresh to update.")
-
-    st.markdown('<div class="source-bin">', unsafe_allow_html=True)
-    for item in attachment_queue.get_queue_items():
-        _render_source_bin_row(item)
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    with st.expander("Manage", expanded=False):
-        clear_cols = st.columns([2, 1, 1], gap="small")
-        with clear_cols[0]:
-            confirm_clear = st.checkbox(
-                "Confirm archive all persisted Source bin items",
-                key="source-bin-clear-confirm",
-                help="This archives items on the backend; it does not delete files.",
-            )
-        with clear_cols[1]:
-            if st.button(
-                "Clear Source bin",
-                key="source-bin-clear",
-                use_container_width=True,
-                disabled=not bool(confirm_clear),
-            ):
-                archived = attachment_queue.archive_all_active()
-                attachment_queue.sync_backend_state()
-                st.info(f"Archived {archived} attachment(s).")
-                _rerun()
-        with clear_cols[2]:
-            if st.button(
-                "New session",
-                key="source-bin-new-session",
-                help=("Clears this session's Source bin view (backend unchanged)."),
-                use_container_width=True,
-            ):
-                attachment_queue.clear_session_state()
-                _rerun()
-
-    st.divider()
-    st.markdown("**Active document**")
-    if st.button("Refresh", key="refresh-ingested"):
-        refresh_ingested_docs(show_error=False)
-        st.session_state["_ingested_docs_loaded"] = True
-    docs = st.session_state.get("ingested_docs")
-    if docs is None:
-        docs = refresh_ingested_docs(show_error=False)
-    docs = docs or []
-    if docs:
-        doc_ids = [doc.get("id") for doc in docs if doc.get("id")]
-        if doc_ids:
-            options = [""] + list(doc_ids)
-            st.session_state.setdefault(
-                "selected_doc_choice", st.session_state.get("selected_doc_id") or ""
-            )
-            st.selectbox(
-                "Active document",
-                options,
-                format_func=lambda doc_id: next(
-                    (
-                        f"{doc.get('filename')} ({doc_id[:8]})"
-                        for doc in docs
-                        if doc.get("id") == doc_id
-                    ),
-                    "Select a document..." if not doc_id else doc_id,
-                ),
-                key="selected_doc_choice",
-            )
-            chosen = st.session_state.get("selected_doc_choice")
-            if chosen and chosen != st.session_state.get("selected_doc_id"):
-                st.session_state["selected_doc_id"] = chosen
-                load_selected_document(show_error=False)
-    else:
-        st.caption("No ingested PDFs yet.")
-
-    active = st.session_state.get("active_document") or {}
-    doc_id = st.session_state.get("selected_doc_id")
-    if doc_id and active.get("id") != doc_id:
-        active = load_selected_document(show_error=False) or {}
-    if doc_id:
-        action_cols = st.columns([1, 1], gap="small")
-        with action_cols[0]:
-            if st.button("Extract", key="left-extract"):
-                api_url = st.session_state.get("api_url", "http://localhost:8000")
-                with st.spinner("Running extraction..."):
-                    try:
-                        trigger_extraction(api_url, doc_id)
-                        st.session_state["active_document"] = load_selected_document(
-                            show_error=False
-                        )
-                        st.success("Extraction complete.")
-                    except RuntimeError as exc:
-                        st.error(f"Extraction failed: {exc}")
-        with action_cols[1]:
-            if st.button("Resolve", key="left-resolve"):
-                api_url = st.session_state.get("api_url", "http://localhost:8000")
-                with st.spinner("Resolving references..."):
-                    try:
-                        trigger_resolution(api_url, doc_id)
-                        st.session_state["active_document"] = load_selected_document(
-                            show_error=False
-                        )
-                        st.success("Resolution complete.")
-                    except RuntimeError as exc:
-                        st.warning(_resolution_error_message(exc))
-        if active:
-            st.caption(
-                f"{active.get('filename')} • {active.get('status')} • {doc_id[:8]}"
-            )
 
     with st.expander("Legacy import (CSV + TEI)", expanded=False):
         st.file_uploader(
@@ -3554,49 +4109,11 @@ def draw_ingestion_panel(*, center, right) -> None:
             st.info("Select a PDF to view details.")
         return
 
-    # Keep extraction/citation details available, but tuck them away to keep the
-    # workspace vertically dense.
-    with center:
-        extraction = document.get("extraction") or {}
-        extraction_data = extraction.get("data") or {}
-        resolution = document.get("resolution") or {}
-        resolution_data = resolution.get("data") or []
-        with st.expander("Document details", expanded=False):
-            st.write(
-                {
-                    "Filename": document.get("filename"),
-                    "Uploaded": document.get("uploaded_at"),
-                    "Status": document.get("status"),
-                    "Size (bytes)": document.get("size_bytes"),
-                }
-            )
-            metadata = extraction_data.get("metadata") or {}
-            if metadata:
-                rows = [
-                    {"Field": key, "Value": stringify_value(value)}
-                    for key, value in metadata.items()
-                ]
-                st.dataframe(pd.DataFrame(rows), width="stretch")
-            citations = extraction_data.get("citations") or []
-            if citations:
-                st.markdown("**Citations**")
-                st.dataframe(
-                    pd.DataFrame(normalize_records(citations)),
-                    width="stretch",
-                )
-            references = extraction_data.get("references") or []
-            if references:
-                st.markdown("**Bibliography**")
-                st.dataframe(
-                    pd.DataFrame(normalize_records(references)),
-                    width="stretch",
-                )
-            if resolution_data:
-                st.markdown("**Resolution results**")
-                st.dataframe(
-                    pd.DataFrame(normalize_records(resolution_data)),
-                    width="stretch",
-                )
+    # Document details are rendered at the bottom of the center pane.
+    extraction = document.get("extraction") or {}
+    extraction_data = extraction.get("data") or {}
+    resolution = document.get("resolution") or {}
+    resolution_data = resolution.get("data") or []
 
     selected_index = st.session_state.get("citation_selected_index")
     selected_target = normalize_target_id(
@@ -3638,7 +4155,15 @@ def draw_ingestion_panel(*, center, right) -> None:
     with center:
         st.caption(header)
 
-    api_url = st.session_state.get("api_url", "http://localhost:8000")
+    api_url = get_api_url()
+    extraction_stage = (
+        (document.get("extraction") or {}) if isinstance(document, dict) else {}
+    )
+    if (extraction_stage.get("status") or "").strip().lower() != "complete":
+        with center:
+            st.info("Run extraction to populate the document text.")
+        return
+
     try:
         body_payload = get_document_body(api_url, doc_id)
     except RuntimeError as exc:
@@ -4104,30 +4629,60 @@ def draw_ingestion_panel(*, center, right) -> None:
         st.markdown("</div>", unsafe_allow_html=True)
 
     with center:
+        project_name = (
+            str(st.session_state.get("project-name") or "").strip()
+            or str(
+                (st.session_state.get("project_meta") or {}).get("name") or ""
+            ).strip()
+            or "Project"
+        )
+        doc_label = str(document.get("filename") or doc_id)
+        if extraction_data.get("metadata", {}).get("title"):
+            doc_label = str(extraction_data.get("metadata", {}).get("title"))
+
+        project_html = html.escape(project_name)
+        doc_html = html.escape(doc_label)
+        st.markdown(
+            (
+                "<div class='ws-contextbar'>"
+                f"<div class='ws-contextbar__project'>{project_html}</div>"
+                f"<div class='ws-contextbar__doc'>{doc_html}</div>"
+                "</div>"
+            ),
+            unsafe_allow_html=True,
+        )
         st.markdown(
             '<div class="ws-pane-header">'
             '<div class="ws-pane-header__title">Work area</div>'
-            '<div class="ws-pane-header__meta">Document / Review</div>'
+            '<div class="ws-pane-header__meta">Document / Review / Graph</div>'
             "</div>",
             unsafe_allow_html=True,
         )
         st.markdown('<div class="ws-pane-body">', unsafe_allow_html=True)
         st.session_state.setdefault(WORKSPACE_ACTIVE_TAB, WORKSPACE_TAB_DOCUMENT)
+        st.markdown('<div class="ws-tabs">', unsafe_allow_html=True)
         workspace_tab = st.radio(
             "Workspace tab",
-            [WORKSPACE_TAB_DOCUMENT, WORKSPACE_TAB_REVIEW],
+            [WORKSPACE_TAB_DOCUMENT, WORKSPACE_TAB_REVIEW, WORKSPACE_TAB_GRAPH],
             key=WORKSPACE_ACTIVE_TAB,
             horizontal=True,
             label_visibility="collapsed",
         )
+        st.markdown("</div>", unsafe_allow_html=True)
 
         if workspace_tab == WORKSPACE_TAB_DOCUMENT:
             st.caption("Click an in-text citation chip to inspect context.")
 
+            active_reviewer_uid = _active_reviewer_uid()
             j_store = judgment_store.JudgmentStore()
-            j_doc_state = j_store.sync_doc(str(doc_id), include_drafts=True)
-            if j_doc_state.get("error"):
-                st.caption(f"Judgments unavailable: {j_doc_state['error']}")
+            if active_reviewer_uid:
+                j_doc_state = j_store.sync_doc(
+                    str(doc_id), reviewer_uid=active_reviewer_uid, include_drafts=True
+                )
+                if j_doc_state.get("error"):
+                    st.caption(f"Judgments unavailable: {j_doc_state['error']}")
+            else:
+                j_doc_state = {}
 
             for para in paragraphs:
                 para_sentences = para.get("sentences") or []
@@ -4192,9 +4747,19 @@ def draw_ingestion_panel(*, center, right) -> None:
                             chip_class += " citation-chip-selected"
                         normalized_target = normalize_target_id(target_id)
 
-                        status_snapshot = j_store.callout_status(
-                            str(doc_id), cite_index, normalized_target
-                        )
+                        if active_reviewer_uid:
+                            status_snapshot = j_store.callout_status(
+                                str(doc_id),
+                                cite_index,
+                                normalized_target,
+                                reviewer_uid=active_reviewer_uid,
+                            )
+                        else:
+                            status_snapshot = {
+                                "validated": False,
+                                "outcome": None,
+                                "claim_ids": [],
+                            }
                         validated = bool(status_snapshot.get("validated"))
                         outcome = status_snapshot.get("outcome") if validated else None
                         if validated:
@@ -4230,10 +4795,9 @@ def draw_ingestion_panel(*, center, right) -> None:
                     unsafe_allow_html=True,
                 )
 
-        else:
-            st.markdown("#### Chasing claims")
+        elif workspace_tab == WORKSPACE_TAB_REVIEW:
             if selected_index is None:
-                st.info("Select a citation in Document to segment and chase.")
+                st.info("Select a citation in Document to edit context + review.")
             else:
                 _render_chasing_panel(
                     int(selected_index),
@@ -4243,81 +4807,120 @@ def draw_ingestion_panel(*, center, right) -> None:
             st.divider()
             render_evidence_panel()
 
-            with st.expander("Citation graph", expanded=False):
-                if selected_target is None:
-                    st.info("Select a citation callout to view the graph.")
+        else:
+            st.markdown("### Citation graph")
+            if selected_target is None:
+                st.info("Select a citation callout to view the graph.")
+            else:
+                context_snapshot = st.session_state.get("citation_context") or {}
+                resolution_entry = context_snapshot.get("resolution") or {}
+                reference_entry = context_snapshot.get("reference") or {}
+                resolved_identifier = (
+                    resolution_entry.get("openalex_id")
+                    or resolution_entry.get("openalex_work_id")
+                    or resolution_entry.get("doi")
+                    or reference_entry.get("doi")
+                )
+                if resolved_identifier:
+                    st.caption(f"Resolved identifier: {resolved_identifier}")
                 else:
-                    context_snapshot = st.session_state.get("citation_context") or {}
-                    resolution_entry = context_snapshot.get("resolution") or {}
-                    reference_entry = context_snapshot.get("reference") or {}
-                    resolved_identifier = (
-                        resolution_entry.get("openalex_id")
-                        or resolution_entry.get("openalex_work_id")
-                        or resolution_entry.get("doi")
-                        or reference_entry.get("doi")
-                    )
-                    if resolved_identifier:
-                        st.caption(f"Resolved identifier: {resolved_identifier}")
+                    st.caption("No DOI resolved for this citation yet.")
+                st.caption(f"Target ID: {selected_target}")
+                st.slider(
+                    "Depth",
+                    min_value=1,
+                    max_value=3,
+                    key="citation_graph_depth",
+                )
+                st.number_input(
+                    "Node cap",
+                    min_value=5,
+                    max_value=50,
+                    key="citation_graph_max_nodes",
+                )
+                graph_request = {
+                    "api_url": api_url,
+                    "doc_id": doc_id,
+                    "target_id": selected_target,
+                    "doi": resolved_identifier,
+                    "depth": int(st.session_state.get("citation_graph_depth", 1)),
+                    "max_nodes": int(
+                        st.session_state.get("citation_graph_max_nodes", 10)
+                    ),
+                }
+                if st.button("Load", key="citation-graph-load"):
+                    load_citation_graph(graph_request)
+                graph_key = (
+                    graph_request["doc_id"],
+                    graph_request["target_id"],
+                    graph_request.get("doi"),
+                    graph_request["depth"],
+                    graph_request["max_nodes"],
+                )
+                graph_data = None
+                if st.session_state.get("citation_graph_key") == graph_key:
+                    graph_data = st.session_state.get("citation_graph")
+                if graph_data:
+                    nodes = graph_data.get("nodes") or []
+                    if not nodes:
+                        st.info("No data available for this citation graph.")
                     else:
-                        st.caption("No DOI resolved for this citation yet.")
-                    st.caption(f"Target ID: {selected_target}")
-                    st.slider(
-                        "Depth",
-                        min_value=1,
-                        max_value=3,
-                        key="citation_graph_depth",
-                    )
-                    st.number_input(
-                        "Node cap",
-                        min_value=5,
-                        max_value=50,
-                        key="citation_graph_max_nodes",
-                    )
-                    graph_request = {
-                        "api_url": api_url,
-                        "doc_id": doc_id,
-                        "target_id": selected_target,
-                        "doi": resolved_identifier,
-                        "depth": int(st.session_state.get("citation_graph_depth", 1)),
-                        "max_nodes": int(
-                            st.session_state.get("citation_graph_max_nodes", 10)
-                        ),
-                    }
-                    if st.button("Load citation graph", key="citation-graph-load"):
-                        load_citation_graph(graph_request)
-                    graph_key = (
-                        graph_request["doc_id"],
-                        graph_request["target_id"],
-                        graph_request.get("doi"),
-                        graph_request["depth"],
-                        graph_request["max_nodes"],
-                    )
-                    graph_data = None
-                    if st.session_state.get("citation_graph_key") == graph_key:
-                        graph_data = st.session_state.get("citation_graph")
-                    if graph_data:
-                        nodes = graph_data.get("nodes") or []
-                        if not nodes:
-                            st.info("No data available for this citation graph.")
-                        else:
-                            graph = build_citation_graphviz(graph_data)
-                            st.graphviz_chart(graph)
-                    else:
-                        st.caption("Load the citation graph to explore references.")
-                    if st.session_state.get("citation_graph_error"):
-                        error_message = st.session_state.get("citation_graph_error", "")
-                        if "OpenAlex request failed (404)" in error_message:
-                            st.caption(
-                                "OpenAlex could not find this work. "
-                                "Check that reference resolution populated a DOI "
-                                "or OpenAlex ID."
-                            )
-                        if st.button("Retry graph", key="citation-graph-retry"):
-                            last_request = st.session_state.get(
-                                "citation_last_graph_request"
-                            )
-                            if last_request:
-                                load_citation_graph(last_request)
+                        graph = build_citation_graphviz(graph_data)
+                        st.graphviz_chart(graph)
+                else:
+                    st.caption("Load the citation graph to explore references.")
+                if st.session_state.get("citation_graph_error"):
+                    error_message = st.session_state.get("citation_graph_error", "")
+                    if "OpenAlex request failed (404)" in error_message:
+                        st.caption(
+                            "OpenAlex could not find this work. "
+                            "Check that reference resolution populated a DOI "
+                            "or OpenAlex ID."
+                        )
+                    if st.button("Retry", key="citation-graph-retry"):
+                        last_request = st.session_state.get(
+                            "citation_last_graph_request"
+                        )
+                        if last_request:
+                            load_citation_graph(last_request)
+
+        # Document details at bottom.
+        with st.expander("Document details", expanded=False):
+            st.write(
+                {
+                    "Filename": document.get("filename"),
+                    "Uploaded": document.get("uploaded_at"),
+                    "Status": document.get("status"),
+                    "Size (bytes)": document.get("size_bytes"),
+                }
+            )
+            metadata = extraction_data.get("metadata") or {}
+            if metadata:
+                rows = [
+                    {"Field": key, "Value": stringify_value(value)}
+                    for key, value in metadata.items()
+                ]
+                st.dataframe(pd.DataFrame(rows), width="stretch")
+            citations = extraction_data.get("citations") or []
+            if citations:
+                st.markdown("**Citations**")
+                st.dataframe(
+                    pd.DataFrame(normalize_records(citations)),
+                    width="stretch",
+                )
+            references = extraction_data.get("references") or []
+            if references:
+                st.markdown("**Bibliography**")
+                st.dataframe(
+                    pd.DataFrame(normalize_records(references)),
+                    width="stretch",
+                )
+            if resolution_data:
+                st.markdown("**Resolution results**")
+                st.dataframe(
+                    pd.DataFrame(normalize_records(resolution_data)),
+                    width="stretch",
+                )
 
         st.markdown("</div>", unsafe_allow_html=True)
 
@@ -4383,7 +4986,7 @@ def draw_main():
 
         # If form submitted, process all user inputs together
         if submitted:
-            api_url = st.session_state.get("api_url", "http://localhost:8000")
+            api_url = get_api_url()
             with st.spinner("Running citation-support for all rows…"):
                 for i, row in enumerate(df.itertuples(index=False), 1):
                     row_id = row.row_id.strip()
@@ -4697,7 +5300,7 @@ def draw_main():
     ):
         # now kick off backend index build in background
         with st.spinner("Building FAISS index in background…"):
-            api_url = st.session_state.get("api_url", "http://localhost:8000")
+            api_url = get_api_url()
             try:
                 import math
 
@@ -4754,7 +5357,7 @@ def draw_main():
 
 def run_prebuild():
     """Trigger the backend FAISS prebuild process."""
-    api_url = st.session_state.get("api_url", "http://localhost:8000")
+    api_url = get_api_url()
     # (somewhere you collect these from sliders/text inputs)
     max_chunks = st.session_state["max_chunks"]
     faiss_min_score = st.session_state["faiss_min_score"]

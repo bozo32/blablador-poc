@@ -343,6 +343,7 @@ class AttachmentStatus(BaseModel):
     doc_id: Optional[str] = None
     citation_index: Optional[int] = None
     target_id: Optional[str] = None
+    source_ingest_id: Optional[str] = None
     filename: str
     size: Optional[int] = None
     status: str
@@ -585,10 +586,37 @@ class JudgmentNotes(BaseModel):
         return text or None
 
 
+ValidationRating = Literal[
+    "strongly_agree",
+    "agree",
+    "neutral",
+    "disagree",
+    "strongly_disagree",
+]
+
+
+class JudgmentValidation(BaseModel):
+    source_valid: Optional[ValidationRating] = None
+    source_valid_comment: Optional[str] = None
+    source_relevant: Optional[ValidationRating] = None
+    source_relevant_comment: Optional[str] = None
+
+    @field_validator(
+        "source_valid_comment",
+        "source_relevant_comment",
+    )
+    def normalize_validation_comment(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
+
 class JudgmentUpsertRequest(BaseModel):
     status: JudgmentStatus = "draft"
     verdict: Optional[JudgmentVerdict] = None
     notes: Optional[JudgmentNotes] = None
+    validation: Optional[JudgmentValidation] = None
 
     doc_id: Optional[str] = None
     citation_index: Optional[int] = None
@@ -614,6 +642,7 @@ class JudgmentPayload(BaseModel):
     status: JudgmentStatus = "draft"
     verdict: Optional[JudgmentVerdict] = None
     notes: Optional[JudgmentNotes] = None
+    validation: Optional[JudgmentValidation] = None
 
     doc_id: Optional[str] = None
     citation_index: Optional[int] = None
@@ -642,3 +671,119 @@ class JudgmentPayload(BaseModel):
 
 class JudgmentListResponse(BaseModel):
     judgments: List[JudgmentPayload] = Field(default_factory=list)
+
+
+# --- Document ledger / graph (Phase 09) ------------------------------------
+
+
+class LedgerOption(BaseModel):
+    num: int
+    short: str
+    apa: str
+    status: Literal["green", "orange"]
+
+
+class LedgerRow(BaseModel):
+    num: int
+    node_id: str
+    status: Literal["green", "orange"]
+    short: str
+    title: Optional[str] = None
+    apa: str
+    incoming: List[int] = Field(default_factory=list)
+    outgoing: List[int] = Field(default_factory=list)
+    incoming_live: List[int] = Field(default_factory=list)
+    outgoing_live: List[int] = Field(default_factory=list)
+    assigned: bool = False
+    anchored: bool = False
+    extracted: bool = False
+    resolved: bool = False
+    ingest_id: Optional[str] = None
+
+
+class LedgerResponse(BaseModel):
+    rows: List[LedgerRow] = Field(default_factory=list)
+    options: List[LedgerOption] = Field(default_factory=list)
+
+
+class LedgerLinksUpdateRequest(BaseModel):
+    targets: List[int] = Field(default_factory=list)
+
+
+class LedgerAssignRequest(BaseModel):
+    assigned: bool
+
+
+class ProjectMeta(BaseModel):
+    version: int = 1
+    name: str
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+    # Phase 09: local reviewer identities + graph view persistence.
+    reviewers: List[str] = Field(default_factory=list)
+    active_reviewer_uid: Optional[str] = None
+    compare_reviewer_a: Optional[str] = None
+    compare_reviewer_b: Optional[str] = None
+    graph_settings: Dict[str, Any] = Field(default_factory=dict)
+
+    @staticmethod
+    def _normalize_reviewer_name(value: str) -> str:
+        # Trim + collapse internal whitespace.
+        text = str(value or "").strip()
+        text = " ".join(text.split())
+        return text
+
+    @field_validator(
+        "active_reviewer_uid", "compare_reviewer_a", "compare_reviewer_b", mode="before"
+    )
+    def normalize_reviewer_uid_fields(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        text = ProjectMeta._normalize_reviewer_name(value)
+        return text or None
+
+    @field_validator("reviewers", mode="before")
+    def normalize_reviewers(cls, value: Any) -> List[str]:
+        if value is None:
+            return []
+        if not isinstance(value, (list, tuple)):
+            raise ValueError("reviewers must be a list")
+
+        normalized: List[str] = []
+        seen: set[str] = set()
+        for raw in value:
+            text = ProjectMeta._normalize_reviewer_name(str(raw or ""))
+            if not text:
+                continue
+            key = text.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            normalized.append(text)
+        return normalized
+
+    @field_validator("graph_settings", mode="before")
+    def normalize_graph_settings(cls, value: Any) -> Dict[str, Any]:
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise ValueError("graph_settings must be an object")
+        return value
+
+
+class ProjectImportResponse(BaseModel):
+    ok: bool
+    backup_zip: str
+    project: ProjectMeta
+
+
+class AutoPlaceRequest(BaseModel):
+    doc_id: str
+    citation_index: Optional[int] = None
+    target_id: Optional[str] = None
+
+
+class AutoPlaceResponse(BaseModel):
+    attachment: AttachmentStatus
+    reused: bool = False

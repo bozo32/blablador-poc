@@ -48,6 +48,7 @@ def test_roundtrip_write_and_read(store: JudgmentStore):
     store.upsert(
         "claim-3",
         {
+            "reviewer_uid": "default",
             "status": "final",
             "verdict": "support",
             "notes": {"rationale": "Looks good"},
@@ -73,6 +74,62 @@ def test_roundtrip_write_and_read(store: JudgmentStore):
     assert loaded.notes.rationale == "Looks good"
     assert loaded.doc_id == "doc-1"
     assert loaded.citation_index == 2
+
+
+def test_two_reviewers_can_upsert_same_claim_without_overwriting(store: JudgmentStore):
+    store.upsert(
+        "claim-9",
+        {
+            "reviewer_uid": "Alice",
+            "status": "final",
+            "verdict": "support",
+            "doc_id": "doc-1",
+        },
+    )
+    store.upsert(
+        "claim-9",
+        {
+            "reviewer_uid": "Bob",
+            "status": "final",
+            "verdict": "contradict",
+            "doc_id": "doc-1",
+        },
+    )
+
+    alice = store.read("claim-9", reviewer_uid="Alice")
+    bob = store.read("claim-9", reviewer_uid="Bob")
+    assert alice is not None
+    assert bob is not None
+    assert alice.verdict == "support"
+    assert bob.verdict == "contradict"
+    assert alice.reviewer_uid == "Alice"
+    assert bob.reviewer_uid == "Bob"
+
+    all_for_claim = store.list_for_claim("claim-9")
+    assert {j.reviewer_uid for j in all_for_claim} == {"Alice", "Bob"}
+
+
+def test_legacy_single_judgment_file_is_still_readable(store: JudgmentStore):
+    legacy_path = store._path_for_claim("claim-legacy")
+    legacy_path.parent.mkdir(parents=True, exist_ok=True)
+    legacy_path.write_text(
+        json.dumps(
+            {
+                "claim_id": "claim-legacy",
+                "status": "draft",
+                "verdict": None,
+                "notes": None,
+            },
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = store.read("claim-legacy", reviewer_uid="default")
+    assert loaded is not None
+    assert loaded.claim_id == "claim-legacy"
+    assert loaded.reviewer_uid == "default"
 
 
 def test_upsert_updates_timestamp(store: JudgmentStore):
@@ -198,7 +255,13 @@ def test_export_csv_headers_and_row_counts(store: JudgmentStore):
     claims_csv = store.export_claims(include_drafts=False, mode="core", format="csv")
     reader = csv.DictReader(StringIO(claims_csv.decode("utf-8")))
     rows = list(reader)
-    assert reader.fieldnames == ["claim_id", "status", "verdict", "claim_text"]
+    assert reader.fieldnames == [
+        "claim_id",
+        "reviewer_uid",
+        "status",
+        "verdict",
+        "claim_text",
+    ]
     assert len(rows) == 2
 
     callouts_csv = store.export_callouts(
@@ -212,6 +275,7 @@ def test_export_csv_headers_and_row_counts(store: JudgmentStore):
         "target_id",
         "callout",
         "claim_id",
+        "reviewer_uid",
         "status",
         "verdict",
         "claim_text",
@@ -238,6 +302,7 @@ def test_export_claims_verbose_json_includes_notes_object(store: JudgmentStore):
     rows = json.loads(exported.decode("utf-8"))
     assert len(rows) == 1
     assert rows[0]["claim_id"] == "c1"
+    assert rows[0]["reviewer_uid"] == "default"
     assert rows[0]["status"] == "final"
     assert rows[0]["verdict"] == "support"
     assert rows[0]["notes"] == {

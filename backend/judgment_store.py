@@ -28,8 +28,17 @@ def _safe_claim_id(claim_id: str) -> str:
     return _SAFE_ID_RE.sub("_", value)
 
 
+def _safe_reviewer_uid(reviewer_uid: str) -> str:
+    value = (reviewer_uid or "").strip() or "default"
+    return _SAFE_ID_RE.sub("_", value)
+
+
 def _claim_hash_suffix(claim_id: str) -> str:
     return sha1((claim_id or "").encode("utf-8")).hexdigest()[:8]
+
+
+def _reviewer_hash_suffix(reviewer_uid: str) -> str:
+    return sha1((reviewer_uid or "").encode("utf-8")).hexdigest()[:8]
 
 
 class JudgmentStore:
@@ -45,12 +54,30 @@ class JudgmentStore:
         return Path(base).parent / "judgments"
 
     def _path_for_claim(self, claim_id: str) -> Path:
+        """Legacy single-judgment storage path (Phase 07)."""
         safe = _safe_claim_id(claim_id)
         suffix = _claim_hash_suffix(claim_id)
         return self.root_dir / f"{safe}__{suffix}.json"
 
-    def read(self, claim_id: str) -> Optional[JudgmentPayload]:
-        path = self._path_for_claim(claim_id)
+    def _path_for_claim_reviewer(self, claim_id: str, reviewer_uid: str) -> Path:
+        safe_claim = _safe_claim_id(claim_id)
+        claim_suffix = _claim_hash_suffix(claim_id)
+        safe_reviewer = _safe_reviewer_uid(reviewer_uid)
+        reviewer_suffix = _reviewer_hash_suffix(reviewer_uid)
+        return (
+            self.root_dir
+            / f"{safe_claim}__{claim_suffix}__{safe_reviewer}__{reviewer_suffix}.json"
+        )
+
+    def read(
+        self, claim_id: str, reviewer_uid: str = "default"
+    ) -> Optional[JudgmentPayload]:
+        reviewer = (reviewer_uid or "").strip() or "default"
+        path = self._path_for_claim_reviewer(claim_id, reviewer)
+        if not path.exists() and reviewer == "default":
+            legacy = self._path_for_claim(claim_id)
+            if legacy.exists():
+                path = legacy
         if not path.exists():
             return None
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -65,12 +92,17 @@ class JudgmentStore:
             else JudgmentUpsertRequest.model_validate(judgment)
         )
 
+        reviewer = (
+            str(getattr(request, "reviewer_uid", "default") or "").strip() or "default"
+        )
         stored = JudgmentPayload(
             claim_id=claim_id,
+            reviewer_uid=reviewer,
             updated_at=_now(),
             status=request.status,
             verdict=request.verdict,
             notes=request.notes,
+            validation=getattr(request, "validation", None),
             doc_id=request.doc_id,
             citation_index=request.citation_index,
             target_id=request.target_id,
@@ -83,7 +115,7 @@ class JudgmentStore:
             claim_text=request.claim_text,
         )
 
-        path = self._path_for_claim(claim_id)
+        path = self._path_for_claim_reviewer(claim_id, reviewer)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
             json.dumps(stored.model_dump(mode="json"), indent=2, sort_keys=True),
@@ -99,15 +131,60 @@ class JudgmentStore:
             raise
 
     def list_all(self) -> list[JudgmentPayload]:
-        """List all stored judgments."""
+        """List all stored judgments (including legacy default-only files)."""
         root = self.root_dir
         if not root.exists():
             return []
-        items: list[JudgmentPayload] = []
+
+        reviewer_items: list[JudgmentPayload] = []
+        reviewer_keys: set[tuple[str, str]] = set()
+        legacy_paths: list[Path] = []
+
         for path in sorted(root.glob("*.json")):
+            parts = path.stem.split("__")
+            if len(parts) == 2:
+                legacy_paths.append(path)
+                continue
             payload = json.loads(path.read_text(encoding="utf-8"))
+            item = JudgmentPayload.model_validate(payload)
+            reviewer_items.append(item)
+            reviewer_keys.add((item.claim_id, item.reviewer_uid))
+
+        items = list(reviewer_items)
+        for path in legacy_paths:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            item = JudgmentPayload.model_validate(payload)
+            key = (item.claim_id, item.reviewer_uid)
+            if key in reviewer_keys:
+                continue
+            items.append(item)
+
+        items.sort(key=lambda item: (item.claim_id, item.reviewer_uid))
+        return items
+
+    def list_for_claim(self, claim_id: str) -> list[JudgmentPayload]:
+        """List all reviewer judgments for a claim (legacy default included)."""
+        root = self.root_dir
+        if not root.exists():
+            return []
+
+        safe = _safe_claim_id(claim_id)
+        suffix = _claim_hash_suffix(claim_id)
+        reviewer_paths = sorted(root.glob(f"{safe}__{suffix}__*.json"))
+        items: list[JudgmentPayload] = []
+        keys: set[tuple[str, str]] = set()
+        for path in reviewer_paths:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            item = JudgmentPayload.model_validate(payload)
+            items.append(item)
+            keys.add((item.claim_id, item.reviewer_uid))
+
+        legacy = self._path_for_claim(claim_id)
+        if legacy.exists() and (claim_id, "default") not in keys:
+            payload = json.loads(legacy.read_text(encoding="utf-8"))
             items.append(JudgmentPayload.model_validate(payload))
-        items.sort(key=lambda item: item.claim_id)
+
+        items.sort(key=lambda item: item.reviewer_uid)
         return items
 
     def list_filtered(
@@ -140,6 +217,7 @@ class JudgmentStore:
         def core_row(j: JudgmentPayload) -> dict[str, Any]:
             return {
                 "claim_id": j.claim_id,
+                "reviewer_uid": j.reviewer_uid,
                 "status": j.status,
                 "verdict": j.verdict,
                 "claim_text": j.claim_text,
@@ -147,10 +225,16 @@ class JudgmentStore:
 
         def verbose_row(j: JudgmentPayload) -> dict[str, Any]:
             notes = j.notes
+            validation = getattr(j, "validation", None)
+            notes_payload = None if notes is None else notes.model_dump(mode="json")
+            validation_payload = (
+                None if validation is None else validation.model_dump(mode="json")
+            )
             return {
                 **core_row(j),
                 "updated_at": j.updated_at,
-                "notes": None if notes is None else notes.model_dump(mode="json"),
+                "notes": notes_payload,
+                "validation": validation_payload,
                 "sentence_id": j.sentence_id,
                 "reference_id": j.reference_id,
                 "doi": j.doi,
@@ -170,12 +254,21 @@ class JudgmentStore:
 
             def verbose_csv_row(j: JudgmentPayload) -> dict[str, Any]:
                 notes = j.notes
+                validation = getattr(j, "validation", None)
                 return {
                     **core_row(j),
                     "updated_at": j.updated_at,
                     "rationale": getattr(notes, "rationale", None),
                     "caveats": getattr(notes, "caveats", None),
                     "followups": getattr(notes, "followups", None),
+                    "source_valid": getattr(validation, "source_valid", None),
+                    "source_valid_comment": getattr(
+                        validation, "source_valid_comment", None
+                    ),
+                    "source_relevant": getattr(validation, "source_relevant", None),
+                    "source_relevant_comment": getattr(
+                        validation, "source_relevant_comment", None
+                    ),
                     "sentence_id": j.sentence_id,
                     "reference_id": j.reference_id,
                     "doi": j.doi,
@@ -199,6 +292,7 @@ class JudgmentStore:
             if mode == "verbose":
                 headers = [
                     "claim_id",
+                    "reviewer_uid",
                     "status",
                     "verdict",
                     "claim_text",
@@ -206,6 +300,10 @@ class JudgmentStore:
                     "rationale",
                     "caveats",
                     "followups",
+                    "source_valid",
+                    "source_valid_comment",
+                    "source_relevant",
+                    "source_relevant_comment",
                     "sentence_id",
                     "reference_id",
                     "doi",
@@ -254,6 +352,7 @@ class JudgmentStore:
         def _claim_core(j: JudgmentPayload) -> dict[str, Any]:
             return {
                 "claim_id": j.claim_id,
+                "reviewer_uid": j.reviewer_uid,
                 "status": j.status,
                 "verdict": j.verdict,
                 "claim_text": j.claim_text,
@@ -261,9 +360,10 @@ class JudgmentStore:
 
         def _claim_verbose(j: JudgmentPayload) -> dict[str, Any]:
             notes = j.notes
+            notes_payload = None if notes is None else notes.model_dump(mode="json")
             return {
                 **_claim_core(j),
-                "notes": None if notes is None else notes.model_dump(mode="json"),
+                "notes": notes_payload,
                 "sentence_id": j.sentence_id,
                 "reference_id": j.reference_id,
                 "doi": j.doi,
@@ -277,7 +377,7 @@ class JudgmentStore:
             groups.setdefault(_group_key(j), []).append(j)
 
         def _sorted_claims(values: Iterable[JudgmentPayload]) -> list[JudgmentPayload]:
-            return sorted(values, key=lambda item: item.claim_id)
+            return sorted(values, key=lambda item: (item.claim_id, item.reviewer_uid))
 
         group_items: list[dict[str, Any]] = []
         for key in sorted(groups.keys()):
@@ -334,6 +434,7 @@ class JudgmentStore:
             "target_id",
             "callout",
             "claim_id",
+            "reviewer_uid",
             "status",
             "verdict",
             "claim_text",

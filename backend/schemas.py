@@ -613,6 +613,12 @@ class JudgmentValidation(BaseModel):
 
 
 class JudgmentUpsertRequest(BaseModel):
+    reviewer_uid: str = Field(
+        "default",
+        description=(
+            "Local reviewer identity. Defaults to 'default' " "for legacy clients."
+        ),
+    )
     status: JudgmentStatus = "draft"
     verdict: Optional[JudgmentVerdict] = None
     notes: Optional[JudgmentNotes] = None
@@ -629,6 +635,11 @@ class JudgmentUpsertRequest(BaseModel):
     year: Optional[str] = None
     claim_text: Optional[str] = None
 
+    @field_validator("reviewer_uid", mode="before")
+    def normalize_reviewer_uid(cls, value: Any) -> str:
+        text = str(value or "").strip()
+        return text or "default"
+
     @model_validator(mode="after")
     def validate_rules(self) -> "JudgmentUpsertRequest":
         if self.status == "final" and self.verdict is None:
@@ -638,6 +649,7 @@ class JudgmentUpsertRequest(BaseModel):
 
 class JudgmentPayload(BaseModel):
     claim_id: str
+    reviewer_uid: str = "default"
     updated_at: Optional[str] = None
     status: JudgmentStatus = "draft"
     verdict: Optional[JudgmentVerdict] = None
@@ -655,6 +667,11 @@ class JudgmentPayload(BaseModel):
     year: Optional[str] = None
     claim_text: Optional[str] = None
 
+    @field_validator("reviewer_uid", mode="before")
+    def normalize_reviewer_uid(cls, value: Any) -> str:
+        text = str(value or "").strip()
+        return text or "default"
+
     @field_validator("claim_id")
     def validate_claim_id(cls, value: str) -> str:
         text = str(value or "").strip()
@@ -670,6 +687,10 @@ class JudgmentPayload(BaseModel):
 
 
 class JudgmentListResponse(BaseModel):
+    judgments: List[JudgmentPayload] = Field(default_factory=list)
+
+
+class JudgmentByReviewerResponse(BaseModel):
     judgments: List[JudgmentPayload] = Field(default_factory=list)
 
 

@@ -939,11 +939,12 @@ def put_evidence_selection(
     "/claims/{claim_id}/judgment",
     response_model=schemas.JudgmentPayload,
 )
-def get_claim_judgment(claim_id: str):
-    stored = judgment_store.judgment_store.read(claim_id)
+def get_claim_judgment(claim_id: str, reviewer_uid: str = "default"):
+    stored = judgment_store.judgment_store.read(claim_id, reviewer_uid=reviewer_uid)
     if stored is None:
         return schemas.JudgmentPayload(
             claim_id=claim_id,
+            reviewer_uid=reviewer_uid,
             status="draft",
             verdict=None,
             notes=None,
@@ -955,12 +956,27 @@ def get_claim_judgment(claim_id: str):
     "/claims/{claim_id}/judgment",
     response_model=schemas.JudgmentPayload,
 )
-def put_claim_judgment(claim_id: str, payload: schemas.JudgmentUpsertRequest):
+def put_claim_judgment(
+    claim_id: str,
+    payload: schemas.JudgmentUpsertRequest,
+    reviewer_uid: str = "default",
+):
     try:
-        stored = judgment_store.judgment_store.upsert(claim_id, payload)
+        data = payload.model_dump(mode="json")
+        data["reviewer_uid"] = reviewer_uid
+        stored = judgment_store.judgment_store.upsert(claim_id, data)
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return stored
+
+
+@app.get(
+    "/claims/{claim_id}/judgments",
+    response_model=schemas.JudgmentByReviewerResponse,
+)
+def list_claim_judgments(claim_id: str):
+    judgments = judgment_store.judgment_store.list_for_claim(claim_id)
+    return {"judgments": judgments}
 
 
 @app.get(

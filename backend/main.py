@@ -1,8 +1,10 @@
 # backend/main.py
 
 import os
+import shutil
 
-os.environ["TRANSFORMERS_CACHE"] = str(os.path.expanduser("~/.cache/huggingface"))
+# Transformers v5 removes TRANSFORMERS_CACHE; use HF_HOME.
+os.environ.setdefault("HF_HOME", str(os.path.expanduser("~/.cache/huggingface")))
 
 # Set threading env vars *before* numpy/torch
 from backend import utils
@@ -11,7 +13,7 @@ utils.set_sane_threads()
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -60,6 +62,8 @@ from backend.ingestion_store import (
 )
 from backend.claim_store import claim_store
 from backend.reference_retrieval import build_retrieval_dossier
+from backend.graph_store import GraphStore
+from backend import project_io
 
 # Configure logging.
 # Default to INFO to avoid extremely noisy dependency logs (urllib3/HF).
@@ -77,6 +81,9 @@ for _logger_name in (
 ):
     logging.getLogger(_logger_name).setLevel(max(logging.WARNING, _log_level))
 logger = logging.getLogger(__name__)
+
+
+graph_store = GraphStore(app_settings.GRAPH_DB_PATH)
 
 # Setup pipeline via registry and settings
 build_all = get_pipeline(app_settings)
@@ -147,6 +154,10 @@ async def ingest_document(file: UploadFile = File(...)):
 
     file_bytes = await file.read()
     metadata = create_ingested_document(file_bytes, file.filename or "document.pdf")
+    try:
+        graph_store.index_ingest_upload(metadata)
+    except Exception:
+        logger.exception("Graph index failed for ingest upload")
     return {"document": metadata}
 
 
@@ -164,6 +175,186 @@ def get_ingest_document(doc_id: str):
     return document
 
 
+@app.get("/ledger", response_model=schemas.LedgerResponse)
+def get_document_ledger():
+    rows = graph_store.ledger_rows()
+    options = graph_store.ledger_options()
+    return {"rows": rows, "options": options}
+
+
+@app.get("/project", response_model=schemas.ProjectMeta)
+def get_project_meta():
+    return project_io.read_project_meta()
+
+
+class ProjectMetaUpdate(BaseModel):
+    name: Optional[str] = None
+    reviewers: Optional[list[str]] = None
+    active_reviewer_uid: Optional[str] = None
+    compare_reviewer_a: Optional[str] = None
+    compare_reviewer_b: Optional[str] = None
+    graph_settings: Optional[dict[str, Any]] = None
+
+
+@app.put("/project", response_model=schemas.ProjectMeta)
+def put_project_meta(payload: ProjectMetaUpdate):
+    patch = payload.model_dump(exclude_unset=True)
+    try:
+        return project_io.write_project_meta_update(patch)
+    except (ValidationError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/project/export")
+def export_project():
+    payload = project_io.export_project_zip()
+    meta = project_io.read_project_meta()
+    name = (meta.get("name") or "project").strip() or "project"
+    safe = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in name)
+    filename = f"{safe}.zip"
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    return Response(content=payload, media_type="application/zip", headers=headers)
+
+
+@app.post("/project/import", response_model=schemas.ProjectImportResponse)
+async def import_project(file: UploadFile = File(...), overwrite: bool = False):
+    blob = await file.read()
+    try:
+        result = project_io.import_project_zip(blob, overwrite=bool(overwrite))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return result
+
+
+@app.post(
+    "/claims/{claim_id}/auto-place",
+    response_model=schemas.AutoPlaceResponse,
+)
+def auto_place_claim_source(
+    claim_id: str,
+    payload: schemas.AutoPlaceRequest,
+    background_tasks: BackgroundTasks,
+):
+    doc_id = str(payload.doc_id or "").strip()
+    target_id = (payload.target_id or "").strip() or None
+    citation_index = payload.citation_index
+    if not doc_id or not target_id:
+        raise HTTPException(status_code=422, detail="doc_id and target_id are required")
+
+    # If we already have an attachment for this claim+target, reuse it.
+    for rec in attachment_store.list_attachments(
+        claim_id=claim_id, archived=None, public=False
+    ):
+        if str(rec.get("doc_id") or "") != doc_id:
+            continue
+        if str(rec.get("target_id") or "") != str(target_id):
+            continue
+        public_record = attachment_store.public_status(rec["id"]) or {}
+        return {"attachment": _serialize_attachment(public_record), "reused": True}
+
+    cited_ingest_id = graph_store.resolve_reference_to_ingest_id(
+        citing_doc_id=doc_id,
+        reference_id=str(target_id),
+    )
+    if not cited_ingest_id:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "No uploaded cited PDF found for this reference yet. "
+                "Upload the cited PDF and run extraction/resolution "
+                "to merge it into the tree."
+            ),
+        )
+
+    try:
+        source_path = get_document_source_path(cited_ingest_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    cited_meta = get_ingested_document(cited_ingest_id) or {}
+    filename = cited_meta.get("filename") or source_path.name
+
+    # Attempt to reuse parsed artifacts from any prior attachment for this cited doc.
+    donor = None
+    for rec in attachment_store.list_attachments(archived=None, public=False):
+        if str(rec.get("source_ingest_id") or "") != str(cited_ingest_id):
+            continue
+        if attachment_store.is_ready(rec):
+            donor = rec
+            break
+
+    try:
+        record = attachment_store.create_attachment(
+            claim_id=claim_id,
+            doc_id=doc_id,
+            local_path=source_path,
+            filename=filename,
+            reference_hint={"reference_id": target_id},
+            citation_index=citation_index,
+            target_id=target_id,
+            source_ingest_id=cited_ingest_id,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    # If a donor exists, clone artifacts and mark ready (skip reprocessing).
+    if donor and donor.get("artifacts"):
+        donor_artifacts = donor.get("artifacts") or {}
+        dest_dir = Path(app_settings.ATTACHMENT_DIR) / str(record["id"])
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        copied = {}
+        for key in ("tei_xml", "tei_json", "sentences"):
+            src = donor_artifacts.get(key)
+            if not src:
+                continue
+            src_path = Path(str(src))
+            if not src_path.exists():
+                continue
+            dst_path = dest_dir / src_path.name
+            shutil.copy2(src_path, dst_path)
+            copied[key] = str(dst_path)
+        if copied:
+            attachment_store.mark_matched(str(record["id"]), artifacts=copied)
+    else:
+        if not background_state.get_state().get("paused"):
+            if background_tasks is not None:
+                background_tasks.add_task(
+                    attachment_pipeline.process_attachment, record["id"]
+                )
+            else:
+                attachment_pipeline.enqueue_processing(record["id"])
+
+    public_record = attachment_store.public_status(record["id"]) or {}
+    return {"attachment": _serialize_attachment(public_record), "reused": False}
+
+
+@app.patch("/ledger/{doc_num}/outgoing", response_model=schemas.LedgerResponse)
+def update_ledger_outgoing(doc_num: int, payload: schemas.LedgerLinksUpdateRequest):
+    try:
+        graph_store.set_outgoing(source_num=int(doc_num), target_nums=payload.targets)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return get_document_ledger()
+
+
+@app.patch("/ledger/{doc_num}/incoming", response_model=schemas.LedgerResponse)
+def update_ledger_incoming(doc_num: int, payload: schemas.LedgerLinksUpdateRequest):
+    try:
+        graph_store.set_incoming(target_num=int(doc_num), source_nums=payload.targets)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return get_document_ledger()
+
+
+@app.patch("/ledger/{doc_num}/assign", response_model=schemas.LedgerResponse)
+def update_ledger_assigned(doc_num: int, payload: schemas.LedgerAssignRequest):
+    try:
+        graph_store.set_assigned(doc_num=int(doc_num), assigned=bool(payload.assigned))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return get_document_ledger()
+
+
 @app.post("/ingest/{doc_id}/extract", response_model=schemas.ExtractionResponse)
 def extract_ingested_document(doc_id: str):
     document = get_ingested_document(doc_id)
@@ -175,6 +366,12 @@ def extract_ingested_document(doc_id: str):
         tei_xml = grobid_client.extract_tei(pdf_path)
         extraction_payload = extraction.parse_tei(tei_xml)
         stored = store_extraction(doc_id, tei_xml, extraction_payload)
+        try:
+            graph_store.index_extraction(
+                ingest_meta=document, extraction_data=extraction_payload
+            )
+        except Exception:
+            logger.exception("Graph index failed for extraction")
     except Exception as exc:
         logger.exception("Extraction failed for document %s", doc_id)
         raise HTTPException(status_code=500, detail=f"Extraction failed: {exc}")
@@ -220,6 +417,10 @@ def resolve_ingested_references(doc_id: str):
     try:
         resolved = resolve_references(references)
         stored = store_resolution(doc_id, resolved)
+        try:
+            graph_store.index_resolution(ingest_meta=document, resolution_data=resolved)
+        except Exception:
+            logger.exception("Graph index failed for resolution")
     except Exception as exc:
         logger.exception("Reference resolution failed for document %s", doc_id)
         raise HTTPException(
@@ -400,6 +601,13 @@ def patch_attachment_status(
                 citation_index=next_citation_index,
                 target_id=next_target_id,
             )
+            try:
+                graph_store.mark_doc_assigned_for_attachment(
+                    doc_id=next_doc_id,
+                    claim_id=next_claim_id,
+                )
+            except Exception:
+                logger.exception("Graph index failed for attachment placement")
 
     public_record = attachment_store.public_status(attachment_id)
     return {"attachment": _serialize_attachment(public_record)}
@@ -611,6 +819,10 @@ def get_citation_graph(
 @app.post("/claims/confirm", response_model=schemas.ClaimConfirmationResponse)
 def confirm_claims(payload: schemas.ClaimConfirmationRequest):
     inserted = claim_store.persist_confirmed_claims(payload)
+    try:
+        graph_store.index_confirmed_claims(payload.model_dump())
+    except Exception:
+        logger.exception("Graph index failed for confirmed claims")
     return {"inserted": inserted}
 
 

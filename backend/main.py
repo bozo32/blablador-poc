@@ -1,6 +1,7 @@
 # backend/main.py
 
 import os
+import re
 import shutil
 
 # Transformers v5 removes TRANSFORMERS_CACHE; use HF_HOME.
@@ -12,10 +13,11 @@ from backend import utils
 utils.set_sane_threads()
 import logging
 from datetime import datetime, timezone
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Literal, Optional
 
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
@@ -353,6 +355,318 @@ def update_ledger_assigned(doc_num: int, payload: schemas.LedgerAssignRequest):
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return get_document_ledger()
+
+
+# --- Claim graph (Phase 09) -------------------------------------------------
+
+_WORD_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
+
+
+def _claim_text(node: dict) -> str:
+    props = node.get("properties") or {}
+    raw = props.get("parsed_text") or props.get("claim_text") or ""
+    return str(raw or "").strip()
+
+
+def _node_label(node: dict) -> str:
+    label = node.get("label") or _claim_text(node) or node.get("node_id") or ""
+    text = str(label or "").strip()
+    if len(text) > 140:
+        return text[:137] + "..."
+    return text
+
+
+def _node_payload(node: dict) -> schemas.ClaimGraphNode:
+    return schemas.ClaimGraphNode(
+        id=str(node.get("node_id") or ""),
+        kind=str(node.get("kind") or ""),
+        label=_node_label(node),
+        properties=dict(node.get("properties") or {}),
+    )
+
+
+def _edge_payload(
+    edge: dict, *, aggregates: Optional[dict] = None
+) -> schemas.ClaimGraphEdge:
+    aggs = aggregates or graph_store.edge_vote_aggregates(int(edge.get("edge_id") or 0))
+    return schemas.ClaimGraphEdge(
+        edge_id=int(edge.get("edge_id") or 0),
+        source_id=str(edge.get("source_id") or ""),
+        target_id=str(edge.get("target_id") or ""),
+        kind=str(edge.get("kind") or ""),
+        properties=dict(edge.get("properties") or {}),
+        aggregates=schemas.ClaimGraphEdgeAggregates(**aggs),
+    )
+
+
+def _token_set(text: str) -> set[str]:
+    return {t.lower() for t in _WORD_RE.findall(text or "") if t.strip()}
+
+
+def _candidate_score(a: str, b: str) -> float:
+    a_norm = " ".join(_WORD_RE.findall(str(a or "").lower()))
+    b_norm = " ".join(_WORD_RE.findall(str(b or "").lower()))
+    if not a_norm or not b_norm:
+        return 0.0
+    a_tokens = _token_set(a_norm)
+    b_tokens = _token_set(b_norm)
+    inter = len(a_tokens & b_tokens)
+    union = len(a_tokens | b_tokens) or 1
+    jaccard = inter / union
+    seq = SequenceMatcher(None, a_norm, b_norm).ratio()
+    return 0.6 * jaccard + 0.4 * seq
+
+
+@app.get("/graph/claim/{claim_id}", response_model=schemas.ClaimNodeResponse)
+def get_claim_graph_node(claim_id: str):
+    node = graph_store.get_claim_node(claim_id)
+    if node is None:
+        raise HTTPException(status_code=404, detail="Claim not found")
+    return {"node": _node_payload(node)}
+
+
+@app.get(
+    "/graph/edge/{edge_id}/votes", response_model=schemas.ClaimGraphVoteListResponse
+)
+def get_claim_graph_edge_votes(edge_id: int):
+    votes = graph_store.list_edge_votes(int(edge_id))
+    return {
+        "edge_id": int(edge_id),
+        "votes": [
+            schemas.ClaimGraphVote(
+                reviewer_uid=str(v.get("reviewer_uid") or "default"),
+                verdict=str(v.get("verdict") or "neutral"),
+                confidence=v.get("confidence"),
+                comment=v.get("comment"),
+                updated_at=v.get("updated_at"),
+            )
+            for v in votes
+        ],
+    }
+
+
+@app.put(
+    "/graph/edge/{edge_id}/vote",
+    response_model=schemas.ClaimGraphVoteUpsertResponse,
+)
+def put_claim_graph_edge_vote(
+    edge_id: int,
+    payload: schemas.ClaimGraphVoteUpsertRequest,
+    reviewer_uid: str = "default",
+):
+    try:
+        stored = graph_store.upsert_edge_vote(
+            edge_id=int(edge_id),
+            reviewer_uid=reviewer_uid,
+            verdict=payload.verdict,
+            confidence=payload.confidence,
+            comment=payload.comment,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    aggregates = graph_store.edge_vote_aggregates(int(edge_id))
+    return {
+        "edge_id": int(edge_id),
+        "vote": schemas.ClaimGraphVote(
+            reviewer_uid=str(stored.get("reviewer_uid") or "default"),
+            verdict=str(stored.get("verdict") or "neutral"),
+            confidence=stored.get("confidence"),
+            comment=stored.get("comment"),
+            updated_at=stored.get("updated_at"),
+        ),
+        "aggregates": aggregates,
+    }
+
+
+@app.post("/graph/claim-link", response_model=schemas.ClaimLinkCreateResponse)
+def post_claim_link(
+    payload: schemas.ClaimLinkCreateRequest, reviewer_uid: str = "default"
+):
+    reviewer = str(reviewer_uid or "").strip() or "default"
+    try:
+        edge_id = graph_store.upsert_claim_link(
+            source_claim_id=payload.source_claim_id,
+            target_claim_id=payload.target_claim_id,
+            source="manual",
+            creator_uid=reviewer,
+            explored_by=[reviewer],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    edge = None
+    for cand in graph_store.list_claim_links_for_claim(
+        claim_id=payload.source_claim_id, enabled_only=False
+    ):
+        if int(cand.get("edge_id") or 0) == int(edge_id):
+            edge = cand
+            break
+    if edge is None:
+        for cand in graph_store.list_claim_links_for_claim(
+            claim_id=payload.target_claim_id, enabled_only=False
+        ):
+            if int(cand.get("edge_id") or 0) == int(edge_id):
+                edge = cand
+                break
+    if edge is None:
+        raise HTTPException(status_code=500, detail="Created edge not readable")
+
+    return {
+        "edge": _edge_payload(
+            edge, aggregates=graph_store.edge_vote_aggregates(int(edge_id))
+        )
+    }
+
+
+@app.delete(
+    "/graph/claim-link/{edge_id}",
+    response_model=schemas.ClaimLinkDeleteResponse,
+)
+def delete_claim_link(edge_id: int, reviewer_uid: str = "default"):
+    try:
+        graph_store.delete_claim_link(edge_id=int(edge_id), reviewer_uid=reviewer_uid)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return {"ok": True}
+
+
+@app.get("/graph/claim-subgraph", response_model=schemas.ClaimSubgraphResponse)
+def get_claim_subgraph(
+    center_claim_id: str,
+    hops: int = Query(1, ge=1, le=3),
+    edge_cap: int = Query(25, ge=1, le=250),
+    min_votes: int = Query(0, ge=0, le=1000),
+    sources: str = "auto,manual,external_search",
+):
+    allowed_sources = {"auto", "manual", "external_search"}
+    want_sources = {
+        s.strip()
+        for s in (sources or "").split(",")
+        if s is not None and str(s).strip()
+    }
+    if not want_sources:
+        want_sources = set(allowed_sources)
+    unknown = sorted(want_sources - allowed_sources)
+    if unknown:
+        raise HTTPException(
+            status_code=422, detail=f"Unknown sources: {', '.join(unknown)}"
+        )
+
+    center = str(center_claim_id or "").strip()
+    if not center:
+        raise HTTPException(status_code=422, detail="center_claim_id is required")
+    if graph_store.get_claim_node(center) is None:
+        raise HTTPException(status_code=404, detail="Claim not found")
+
+    visited: set[str] = {center}
+    frontier: list[str] = [center]
+    edges_by_id: dict[int, tuple[dict, dict]] = {}
+
+    for _depth in range(int(hops)):
+        next_frontier: list[str] = []
+        for claim_id in frontier:
+            edges = graph_store.list_claim_links_for_claim(
+                claim_id=claim_id,
+                sources=sorted(want_sources),
+                enabled_only=True,
+            )
+            if edge_cap and len(edges) > int(edge_cap):
+                edges = edges[: int(edge_cap)]
+
+            for edge in edges:
+                edge_id = int(edge.get("edge_id") or 0)
+                if edge_id <= 0:
+                    continue
+                if edge_id in edges_by_id:
+                    continue
+                aggs = graph_store.edge_vote_aggregates(edge_id)
+                if int(aggs.get("n_total") or 0) < int(min_votes):
+                    continue
+                edges_by_id[edge_id] = (edge, aggs)
+
+                src = str(edge.get("source_id") or "")
+                tgt = str(edge.get("target_id") or "")
+                neighbor = tgt if src == claim_id else src
+                if neighbor and neighbor not in visited:
+                    visited.add(neighbor)
+                    next_frontier.append(neighbor)
+
+        if not next_frontier:
+            break
+        frontier = next_frontier
+
+    nodes: list[schemas.ClaimGraphNode] = []
+    if center in visited:
+        visited.remove(center)
+        visited_order = [center] + sorted(visited)
+    else:
+        visited_order = sorted(visited)
+    for node_id in visited_order:
+        node = graph_store.get_claim_node(node_id)
+        if node is None:
+            continue
+        nodes.append(_node_payload(node))
+
+    edges: list[schemas.ClaimGraphEdge] = []
+    for edge_id in sorted(edges_by_id.keys()):
+        edge, aggs = edges_by_id[edge_id]
+        edges.append(_edge_payload(edge, aggregates=aggs))
+
+    return {"center_claim_id": center, "nodes": nodes, "edges": edges}
+
+
+@app.get(
+    "/graph/claim/{claim_id}/candidates",
+    response_model=schemas.ClaimCandidatesResponse,
+)
+def get_claim_candidates(claim_id: str, limit: int = Query(10, ge=1, le=100)):
+    node = graph_store.get_claim_node(claim_id)
+    if node is None:
+        raise HTTPException(status_code=404, detail="Claim not found")
+    base_text = _claim_text(node)
+
+    existing_neighbors: set[str] = set()
+    for edge in graph_store.list_claim_links_for_claim(
+        claim_id=claim_id, enabled_only=True
+    ):
+        src = str(edge.get("source_id") or "")
+        tgt = str(edge.get("target_id") or "")
+        if src and src != claim_id:
+            existing_neighbors.add(src)
+        if tgt and tgt != claim_id:
+            existing_neighbors.add(tgt)
+
+    scored: list[tuple[float, str, dict]] = []
+    for cand in graph_store.list_claim_nodes():
+        cand_id = str(cand.get("node_id") or "")
+        if not cand_id or cand_id == claim_id:
+            continue
+        if cand_id in existing_neighbors:
+            continue
+        score = _candidate_score(base_text, _claim_text(cand))
+        if score <= 0:
+            continue
+        scored.append((score, cand_id, cand))
+
+    scored.sort(key=lambda t: (-t[0], t[1]))
+    top = scored[: int(limit)]
+
+    return {
+        "claim_id": str(claim_id),
+        "candidates": [
+            {
+                "target_claim_id": cand_id,
+                "score": float(score),
+                "node": _node_payload(cand),
+            }
+            for score, cand_id, cand in top
+        ],
+    }
 
 
 @app.post("/ingest/{doc_id}/extract", response_model=schemas.ExtractionResponse)

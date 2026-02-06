@@ -808,3 +808,93 @@ class AutoPlaceRequest(BaseModel):
 class AutoPlaceResponse(BaseModel):
     attachment: AttachmentStatus
     reused: bool = False
+
+
+# --- Claim graph (Phase 09) -------------------------------------------------
+
+ClaimGraphVoteVerdict = Literal["support", "contradict", "neutral", "uncertain"]
+
+
+class ClaimGraphNode(BaseModel):
+    id: str
+    kind: str
+    label: Optional[str] = None
+    properties: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ClaimGraphEdgeAggregates(BaseModel):
+    n_support: int = 0
+    n_contradict: int = 0
+    n_neutral: int = 0
+    n_uncertain: int = 0
+    n_total: int = 0
+
+
+class ClaimGraphEdge(BaseModel):
+    edge_id: int
+    source_id: str
+    target_id: str
+    kind: str
+    properties: Dict[str, Any] = Field(default_factory=dict)
+    aggregates: ClaimGraphEdgeAggregates = Field(
+        default_factory=ClaimGraphEdgeAggregates
+    )
+
+
+class ClaimSubgraphResponse(BaseModel):
+    center_claim_id: str
+    nodes: List[ClaimGraphNode] = Field(default_factory=list)
+    edges: List[ClaimGraphEdge] = Field(default_factory=list)
+
+
+class ClaimGraphVote(BaseModel):
+    reviewer_uid: str
+    verdict: ClaimGraphVoteVerdict
+    confidence: Optional[float] = None
+    comment: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class ClaimGraphVoteUpsertRequest(BaseModel):
+    verdict: ClaimGraphVoteVerdict
+    confidence: Optional[float] = None
+    comment: Optional[str] = None
+
+
+class ClaimGraphVoteListResponse(BaseModel):
+    edge_id: int
+    votes: List[ClaimGraphVote] = Field(default_factory=list)
+
+
+class ClaimGraphVoteUpsertResponse(BaseModel):
+    edge_id: int
+    vote: ClaimGraphVote
+    aggregates: ClaimGraphEdgeAggregates
+
+
+class ClaimNodeResponse(BaseModel):
+    node: ClaimGraphNode
+
+
+class ClaimLinkCreateRequest(BaseModel):
+    source_claim_id: str
+    target_claim_id: str
+
+
+class ClaimLinkCreateResponse(BaseModel):
+    edge: ClaimGraphEdge
+
+
+class ClaimLinkDeleteResponse(BaseModel):
+    ok: bool = True
+
+
+class ClaimCandidate(BaseModel):
+    target_claim_id: str
+    score: float
+    node: ClaimGraphNode
+
+
+class ClaimCandidatesResponse(BaseModel):
+    claim_id: str
+    candidates: List[ClaimCandidate] = Field(default_factory=list)

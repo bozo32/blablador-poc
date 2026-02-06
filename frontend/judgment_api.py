@@ -43,6 +43,12 @@ def _auth_headers() -> Dict[str, str]:
     return {"Authorization": f"Bearer {api_key}"}
 
 
+def _normalize_reviewer_uid(value: Optional[str]) -> str:
+    text = str(value or "").strip()
+    text = " ".join(text.split())
+    return text or "default"
+
+
 def _extract_response_detail(response: Optional[requests.Response]) -> Optional[str]:
     if not response:
         return None
@@ -94,12 +100,34 @@ def _request(
         return {"content": response.text}
 
 
-def get_judgment(claim_id: str) -> Dict[str, Any]:
-    return _request("get", f"/claims/{claim_id}/judgment")
+def get_judgment(
+    claim_id: str, *, reviewer_uid: Optional[str] = None
+) -> Dict[str, Any]:
+    reviewer = _normalize_reviewer_uid(reviewer_uid)
+    return _request(
+        "get",
+        f"/claims/{claim_id}/judgment",
+        params={"reviewer_uid": reviewer},
+    )
 
 
-def put_judgment(claim_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    return _request("put", f"/claims/{claim_id}/judgment", json=payload)
+def put_judgment(
+    claim_id: str,
+    payload: Dict[str, Any],
+    *,
+    reviewer_uid: Optional[str] = None,
+) -> Dict[str, Any]:
+    reviewer = _normalize_reviewer_uid(reviewer_uid)
+    return _request(
+        "put",
+        f"/claims/{claim_id}/judgment",
+        json=payload,
+        params={"reviewer_uid": reviewer},
+    )
+
+
+def get_all_judgments(claim_id: str) -> Dict[str, Any]:
+    return _request("get", f"/claims/{claim_id}/judgments")
 
 
 def list_judgments(
@@ -163,6 +191,7 @@ def download_export(
 
 __all__ = [
     "JudgmentApiError",
+    "get_all_judgments",
     "get_judgment",
     "put_judgment",
     "list_judgments",

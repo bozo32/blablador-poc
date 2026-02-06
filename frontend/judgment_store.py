@@ -26,6 +26,12 @@ def _toast(ui: Any, message: str, *, icon: str = "ℹ️") -> None:
 CalloutKey = Tuple[str, int, Optional[str]]
 
 
+def _normalize_reviewer_uid(value: Optional[str]) -> str:
+    text = str(value or "").strip()
+    text = " ".join(text.split())
+    return text or "default"
+
+
 @dataclass
 class JudgmentStore:
     session_state: Any = None
@@ -41,19 +47,32 @@ class JudgmentStore:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-    def ensure_claim_state(self, claim_id: str) -> Dict[str, Any]:
+    def ensure_claim_state(
+        self, claim_id: str, *, reviewer_uid: Optional[str] = None
+    ) -> Dict[str, Any]:
+        reviewer = _normalize_reviewer_uid(reviewer_uid)
         root = self._root()
         claims = root.setdefault("claims", {})
-        return claims.setdefault(claim_id, self._default_claim_state(claim_id))
+        cache_key = self._claim_cache_key(claim_id, reviewer)
+        return claims.setdefault(
+            cache_key, self._default_claim_state(claim_id, reviewer_uid=reviewer)
+        )
 
-    def sync_judgment(self, claim_id: str, *, force: bool = False) -> Dict[str, Any]:
-        claim_state = self.ensure_claim_state(claim_id)
+    def sync_judgment(
+        self,
+        claim_id: str,
+        *,
+        reviewer_uid: Optional[str] = None,
+        force: bool = False,
+    ) -> Dict[str, Any]:
+        reviewer = _normalize_reviewer_uid(reviewer_uid)
+        claim_state = self.ensure_claim_state(claim_id, reviewer_uid=reviewer)
         if not force and not claim_state.get("stale") and claim_state.get("fetched"):
             return claim_state
 
         claim_state["error"] = None
         try:
-            judgment = self.api.get_judgment(claim_id)
+            judgment = self.api.get_judgment(claim_id, reviewer_uid=reviewer)
         except judgment_api.JudgmentApiError as exc:
             claim_state["error"] = str(exc)
             claim_state["stale"] = True
@@ -62,25 +81,29 @@ class JudgmentStore:
         claim_state["judgment"] = judgment or None
         claim_state["fetched"] = True
         claim_state["stale"] = False
-        self._index_judgment(judgment or {})
+        self._index_judgment(judgment or {}, reviewer_uid=reviewer)
         return claim_state
 
     def save_judgment(
         self,
         claim_id: str,
         *,
+        reviewer_uid: Optional[str] = None,
         status: str,
         verdict: Optional[str] = None,
         notes: Optional[Dict[str, Any]] = None,
+        validation: Optional[Dict[str, Any]] = None,
         provenance: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
-        claim_state = self.ensure_claim_state(claim_id)
+        reviewer = _normalize_reviewer_uid(reviewer_uid)
+        claim_state = self.ensure_claim_state(claim_id, reviewer_uid=reviewer)
         claim_state["error"] = None
 
         payload: Dict[str, Any] = {
             "status": status,
             "verdict": verdict,
             "notes": notes,
+            "validation": validation,
         }
         if provenance:
             # Backend expects provenance fields at the top level:
@@ -88,7 +111,7 @@ class JudgmentStore:
             # doi, author, year, claim_text.
             payload.update(dict(provenance))
         try:
-            stored = self.api.put_judgment(claim_id, payload)
+            stored = self.api.put_judgment(claim_id, payload, reviewer_uid=reviewer)
         except judgment_api.JudgmentApiError as exc:
             claim_state["error"] = str(exc)
             _toast(self.ui, f"Unable to save judgment: {exc}", icon="⚠️")
@@ -98,7 +121,7 @@ class JudgmentStore:
         claim_state["fetched"] = True
         claim_state["stale"] = False
         claim_state["error"] = None
-        self._index_judgment(claim_state["judgment"] or {})
+        self._index_judgment(claim_state["judgment"] or {}, reviewer_uid=reviewer)
         _toast(self.ui, "Judgment saved.", icon="✅")
         return claim_state["judgment"]
 
@@ -106,12 +129,17 @@ class JudgmentStore:
         self,
         doc_id: str,
         *,
+        reviewer_uid: Optional[str] = None,
         include_drafts: bool = False,
         force: bool = False,
     ) -> Dict[str, Any]:
+        reviewer = _normalize_reviewer_uid(reviewer_uid)
         root = self._root()
         doc_index = root.setdefault("doc_index", {})
-        doc_state = doc_index.setdefault(doc_id, self._default_doc_state(doc_id))
+        doc_key = self._doc_cache_key(doc_id, reviewer)
+        doc_state = doc_index.setdefault(
+            doc_key, self._default_doc_state(doc_id, reviewer_uid=reviewer)
+        )
 
         if (
             not force
@@ -132,14 +160,20 @@ class JudgmentStore:
             doc_state["stale"] = True
             return doc_state
 
-        judgments = self._coerce_judgments(payload)
+        judgments = [
+            entry
+            for entry in self._coerce_judgments(payload)
+            if _normalize_reviewer_uid((entry or {}).get("reviewer_uid")) == reviewer
+        ]
         doc_state["judgments_by_claim_id"] = {}
         doc_state["judgments_by_callout_key"] = {}
         for judgment in judgments:
             claim_id = (judgment or {}).get("claim_id")
             if claim_id:
                 doc_state["judgments_by_claim_id"][str(claim_id)] = judgment
-                claim_state = self.ensure_claim_state(str(claim_id))
+                claim_state = self.ensure_claim_state(
+                    str(claim_id), reviewer_uid=reviewer
+                )
                 claim_state["judgment"] = judgment
                 claim_state["fetched"] = True
                 claim_state["stale"] = False
@@ -150,10 +184,17 @@ class JudgmentStore:
         return doc_state
 
     def callout_status(
-        self, doc_id: str, citation_index: int, target_id: Optional[str]
+        self,
+        doc_id: str,
+        citation_index: int,
+        target_id: Optional[str],
+        *,
+        reviewer_uid: Optional[str] = None,
     ) -> Dict[str, Any]:
+        reviewer = _normalize_reviewer_uid(reviewer_uid)
         root = self._root()
-        doc_state = (root.get("doc_index") or {}).get(doc_id)
+        doc_key = self._doc_cache_key(doc_id, reviewer)
+        doc_state = (root.get("doc_index") or {}).get(doc_key)
         if not doc_state:
             return {
                 "validated": False,
@@ -213,9 +254,20 @@ class JudgmentStore:
         )
 
     @staticmethod
-    def _default_claim_state(claim_id: str) -> Dict[str, Any]:
+    def _claim_cache_key(claim_id: str, reviewer_uid: str) -> str:
+        return f"{claim_id}::{reviewer_uid}"
+
+    @staticmethod
+    def _doc_cache_key(doc_id: str, reviewer_uid: str) -> str:
+        return f"{doc_id}::{reviewer_uid}"
+
+    @staticmethod
+    def _default_claim_state(
+        claim_id: str, *, reviewer_uid: str = "default"
+    ) -> Dict[str, Any]:
         return {
             "claim_id": claim_id,
+            "reviewer_uid": reviewer_uid,
             "judgment": None,
             "stale": True,
             "fetched": False,
@@ -223,9 +275,12 @@ class JudgmentStore:
         }
 
     @staticmethod
-    def _default_doc_state(doc_id: str) -> Dict[str, Any]:
+    def _default_doc_state(
+        doc_id: str, *, reviewer_uid: str = "default"
+    ) -> Dict[str, Any]:
         return {
             "doc_id": doc_id,
+            "reviewer_uid": reviewer_uid,
             "judgments_by_claim_id": {},
             "judgments_by_callout_key": {},
             "include_drafts": False,
@@ -249,7 +304,7 @@ class JudgmentStore:
                 return [entry for entry in items if isinstance(entry, dict)]
         return []
 
-    def _index_judgment(self, judgment: Dict[str, Any]) -> None:
+    def _index_judgment(self, judgment: Dict[str, Any], *, reviewer_uid: str) -> None:
         claim_id = (judgment or {}).get("claim_id")
         if not claim_id:
             return
@@ -262,8 +317,9 @@ class JudgmentStore:
             return
         root = self._root()
         doc_index = root.setdefault("doc_index", {})
+        doc_key = self._doc_cache_key(str(doc_id), reviewer_uid)
         doc_state = doc_index.setdefault(
-            str(doc_id), self._default_doc_state(str(doc_id))
+            doc_key, self._default_doc_state(str(doc_id), reviewer_uid=reviewer_uid)
         )
         self._index_doc_judgment(doc_state, str(doc_id), judgment)
 
@@ -296,37 +352,55 @@ def _get_store() -> JudgmentStore:
     return store
 
 
-def sync_judgment(claim_id: str, *, force: bool = False) -> Dict[str, Any]:
-    return _get_store().sync_judgment(claim_id, force=force)
+def sync_judgment(
+    claim_id: str, *, reviewer_uid: Optional[str] = None, force: bool = False
+) -> Dict[str, Any]:
+    return _get_store().sync_judgment(claim_id, reviewer_uid=reviewer_uid, force=force)
 
 
 def save_judgment(
     claim_id: str,
     *,
+    reviewer_uid: Optional[str] = None,
     status: str,
     verdict: Optional[str] = None,
     notes: Optional[Dict[str, Any]] = None,
+    validation: Optional[Dict[str, Any]] = None,
     provenance: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     return _get_store().save_judgment(
         claim_id,
+        reviewer_uid=reviewer_uid,
         status=status,
         verdict=verdict,
         notes=notes,
+        validation=validation,
         provenance=provenance,
     )
 
 
 def sync_doc(
-    doc_id: str, *, include_drafts: bool = False, force: bool = False
+    doc_id: str,
+    *,
+    reviewer_uid: Optional[str] = None,
+    include_drafts: bool = False,
+    force: bool = False,
 ) -> Dict[str, Any]:
-    return _get_store().sync_doc(doc_id, include_drafts=include_drafts, force=force)
+    return _get_store().sync_doc(
+        doc_id, reviewer_uid=reviewer_uid, include_drafts=include_drafts, force=force
+    )
 
 
 def callout_status(
-    doc_id: str, citation_index: int, target_id: Optional[str]
+    doc_id: str,
+    citation_index: int,
+    target_id: Optional[str],
+    *,
+    reviewer_uid: Optional[str] = None,
 ) -> Dict[str, Any]:
-    return _get_store().callout_status(doc_id, citation_index, target_id)
+    return _get_store().callout_status(
+        doc_id, citation_index, target_id, reviewer_uid=reviewer_uid
+    )
 
 
 __all__ = [

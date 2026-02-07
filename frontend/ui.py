@@ -32,11 +32,13 @@ from frontend import (
     claim_queue,
     clipboard,
     evidence_store,
+    graph_api,
     judgment_api,
     judgment_store,
 )
 from frontend.components import chase_queue as chase_queue_component
 from frontend.components import chasing_panel
+from frontend.components import claim_graph_panel
 from frontend.state_keys import (
     WORKSPACE_ACTIVE_TAB,
     WORKSPACE_DENSE_MODE,
@@ -4808,81 +4810,598 @@ def draw_ingestion_panel(*, center, right) -> None:
             render_evidence_panel()
 
         else:
-            st.markdown("### Citation graph")
-            if selected_target is None:
-                st.info("Select a citation callout to view the graph.")
-            else:
-                context_snapshot = st.session_state.get("citation_context") or {}
-                resolution_entry = context_snapshot.get("resolution") or {}
-                reference_entry = context_snapshot.get("reference") or {}
-                resolved_identifier = (
-                    resolution_entry.get("openalex_id")
-                    or resolution_entry.get("openalex_work_id")
-                    or resolution_entry.get("doi")
-                    or reference_entry.get("doi")
-                )
-                if resolved_identifier:
-                    st.caption(f"Resolved identifier: {resolved_identifier}")
-                else:
-                    st.caption("No DOI resolved for this citation yet.")
-                st.caption(f"Target ID: {selected_target}")
-                st.slider(
-                    "Depth",
-                    min_value=1,
-                    max_value=3,
-                    key="citation_graph_depth",
-                )
-                st.number_input(
-                    "Node cap",
-                    min_value=5,
-                    max_value=50,
-                    key="citation_graph_max_nodes",
-                )
-                graph_request = {
-                    "api_url": api_url,
-                    "doc_id": doc_id,
-                    "target_id": selected_target,
-                    "doi": resolved_identifier,
-                    "depth": int(st.session_state.get("citation_graph_depth", 1)),
-                    "max_nodes": int(
-                        st.session_state.get("citation_graph_max_nodes", 10)
+            st.markdown("### Claim graph")
+
+            active_reviewer_uid = _active_reviewer_uid()
+
+            meta = st.session_state.get("project_meta")
+            settings_blob = (
+                (meta or {}).get("graph_settings") if isinstance(meta, dict) else {}
+            )
+            if not isinstance(settings_blob, dict):
+                settings_blob = {}
+
+            st.session_state.setdefault(
+                "claim_graph_hops", int(settings_blob.get("hops") or 1)
+            )
+            st.session_state.setdefault(
+                "claim_graph_edge_cap", int(settings_blob.get("edge_cap") or 25)
+            )
+            st.session_state.setdefault(
+                "claim_graph_min_votes", int(settings_blob.get("min_votes") or 0)
+            )
+            st.session_state.setdefault(
+                "claim_graph_source_auto", bool(settings_blob.get("source_auto", True))
+            )
+            st.session_state.setdefault(
+                "claim_graph_source_manual",
+                bool(settings_blob.get("source_manual", True)),
+            )
+            st.session_state.setdefault(
+                "claim_graph_source_external",
+                bool(settings_blob.get("source_external_search", True)),
+            )
+
+            def _persist_graph_settings() -> None:
+                payload = {
+                    "hops": int(st.session_state.get("claim_graph_hops") or 1),
+                    "edge_cap": int(st.session_state.get("claim_graph_edge_cap") or 25),
+                    "min_votes": int(
+                        st.session_state.get("claim_graph_min_votes") or 0
+                    ),
+                    "source_auto": bool(
+                        st.session_state.get("claim_graph_source_auto")
+                    ),
+                    "source_manual": bool(
+                        st.session_state.get("claim_graph_source_manual")
+                    ),
+                    "source_external_search": bool(
+                        st.session_state.get("claim_graph_source_external")
                     ),
                 }
-                if st.button("Load", key="citation-graph-load"):
-                    load_citation_graph(graph_request)
-                graph_key = (
-                    graph_request["doc_id"],
-                    graph_request["target_id"],
-                    graph_request.get("doi"),
-                    graph_request["depth"],
-                    graph_request["max_nodes"],
+                try:
+                    st.session_state["project_meta"] = project_api.put_meta(
+                        {"graph_settings": payload}
+                    )
+                except project_api.ProjectApiError:
+                    return
+
+            controls = st.columns([1, 1, 1, 1], gap="small")
+            with controls[0]:
+                st.slider(
+                    "Hops",
+                    min_value=1,
+                    max_value=3,
+                    key="claim_graph_hops",
+                    on_change=_persist_graph_settings,
                 )
-                graph_data = None
-                if st.session_state.get("citation_graph_key") == graph_key:
-                    graph_data = st.session_state.get("citation_graph")
-                if graph_data:
-                    nodes = graph_data.get("nodes") or []
-                    if not nodes:
-                        st.info("No data available for this citation graph.")
-                    else:
-                        graph = build_citation_graphviz(graph_data)
-                        st.graphviz_chart(graph)
+            with controls[1]:
+                st.number_input(
+                    "Edge cap",
+                    min_value=1,
+                    max_value=250,
+                    key="claim_graph_edge_cap",
+                    on_change=_persist_graph_settings,
+                )
+            with controls[2]:
+                st.number_input(
+                    "Min votes",
+                    min_value=0,
+                    max_value=1000,
+                    key="claim_graph_min_votes",
+                    on_change=_persist_graph_settings,
+                )
+            with controls[3]:
+                st.caption("Provenance")
+                provenance_cols = st.columns(3, gap="small")
+                with provenance_cols[0]:
+                    st.checkbox(
+                        "Auto",
+                        key="claim_graph_source_auto",
+                        on_change=_persist_graph_settings,
+                    )
+                with provenance_cols[1]:
+                    st.checkbox(
+                        "Manual",
+                        key="claim_graph_source_manual",
+                        on_change=_persist_graph_settings,
+                    )
+                with provenance_cols[2]:
+                    st.checkbox(
+                        "External",
+                        key="claim_graph_source_external",
+                        on_change=_persist_graph_settings,
+                    )
+
+            def _segment_to_claim_index(segment_id: str) -> Optional[int]:
+                text = str(segment_id or "").strip()
+                m = re.match(r"^\d+([a-z])$", text, flags=re.IGNORECASE)
+                if not m:
+                    return None
+                letter = m.group(1).lower()
+                return 1 + (ord(letter) - ord("a"))
+
+            def _guess_center_claim_id() -> Optional[str]:
+                active_claim = evidence_store.get_active_claim_id()
+                if not active_claim:
+                    return None
+                active_claim = str(active_claim).strip()
+                if active_claim.startswith("claim:"):
+                    return active_claim
+                if active_claim.startswith("cite:"):
+                    parts = active_claim.split(":", 3)
+                    if len(parts) != 4:
+                        return None
+                    _prefix, doc, cite_idx, seg_id = parts
+                    context = st.session_state.get("citation_context") or {}
+                    sentence_id = (context or {}).get("sentence_id")
+                    claim_index = _segment_to_claim_index(seg_id)
+                    if not sentence_id or not claim_index:
+                        return None
+                    return f"claim:{doc}:{sentence_id}:{int(claim_index)}"
+                return None
+
+            st.session_state.setdefault(
+                "claim_graph_center", _guess_center_claim_id() or ""
+            )
+
+            center_row = st.columns([3, 1], gap="small")
+            with center_row[0]:
+                st.text_input(
+                    "Center claim id",
+                    key="claim_graph_center",
+                    placeholder="claim:{doc_id}:{sentence_id}:{claim_index}",
+                    label_visibility="collapsed",
+                )
+            with center_row[1]:
+                if st.button("Use active", key="claim-graph-use-active"):
+                    st.session_state["claim_graph_center"] = (
+                        _guess_center_claim_id() or ""
+                    )
+                    st.session_state.pop("claim_graph_key", None)
+                    st.session_state.pop("claim_graph_data", None)
+                    st.session_state.pop("claim_graph_error", None)
+                    _rerun()
+
+            sources: list[str] = []
+            if bool(st.session_state.get("claim_graph_source_auto")):
+                sources.append("auto")
+            if bool(st.session_state.get("claim_graph_source_manual")):
+                sources.append("manual")
+            if bool(st.session_state.get("claim_graph_source_external")):
+                sources.append("external_search")
+            sources_param = (
+                ",".join(sources) if sources else "auto,manual,external_search"
+            )
+
+            def _fetch_claim_graph(*, force: bool = False) -> Optional[dict]:
+                center_id = str(
+                    st.session_state.get("claim_graph_center") or ""
+                ).strip()
+                if not center_id:
+                    return None
+                key = (
+                    center_id,
+                    int(st.session_state.get("claim_graph_hops") or 1),
+                    int(st.session_state.get("claim_graph_edge_cap") or 25),
+                    int(st.session_state.get("claim_graph_min_votes") or 0),
+                    sources_param,
+                )
+                if not force and st.session_state.get("claim_graph_key") == key:
+                    return st.session_state.get("claim_graph_data")
+
+                st.session_state["claim_graph_error"] = None
+                placeholder = st.empty()
+                with placeholder:
+                    render_skeleton(2)
+                try:
+                    data = graph_api.get_claim_subgraph(
+                        center_id,
+                        hops=int(st.session_state.get("claim_graph_hops") or 1),
+                        edge_cap=int(
+                            st.session_state.get("claim_graph_edge_cap") or 25
+                        ),
+                        min_votes=int(
+                            st.session_state.get("claim_graph_min_votes") or 0
+                        ),
+                        sources=sources_param,
+                    )
+                except graph_api.GraphApiError as exc:
+                    st.session_state["claim_graph_error"] = str(exc)
+                    placeholder.empty()
+                    return None
+                placeholder.empty()
+                st.session_state["claim_graph_key"] = key
+                st.session_state["claim_graph_data"] = data
+                return data
+
+            load_row = st.columns([1, 1, 3], gap="small")
+            with load_row[0]:
+                if st.button("Load", key="claim-graph-load"):
+                    _fetch_claim_graph(force=True)
+            with load_row[1]:
+                if st.button("Reload", key="claim-graph-reload"):
+                    _fetch_claim_graph(force=True)
+            with load_row[2]:
+                if st.session_state.get("claim_graph_error"):
+                    st.caption(
+                        f"Graph error: {st.session_state.get('claim_graph_error')}"
+                    )
                 else:
-                    st.caption("Load the citation graph to explore references.")
-                if st.session_state.get("citation_graph_error"):
-                    error_message = st.session_state.get("citation_graph_error", "")
-                    if "OpenAlex request failed (404)" in error_message:
+                    st.caption("Click a node or edge to inspect it.")
+
+            graph_data = st.session_state.get("claim_graph_data")
+            if graph_data is None:
+                # Auto-load once when a center is available.
+                graph_data = _fetch_claim_graph(force=False)
+
+            if not graph_data:
+                st.info(
+                    "Select a center claim (or click 'Use active'), "
+                    "then load the graph."
+                )
+            else:
+                node_by_id = {
+                    str(n.get("id")): n for n in (graph_data.get("nodes") or [])
+                }
+                edge_by_id = {
+                    int(e.get("edge_id") or 0): e
+                    for e in (graph_data.get("edges") or [])
+                    if int(e.get("edge_id") or 0) > 0
+                }
+
+                selected = st.session_state.get("claim_graph_selected")
+                if not isinstance(selected, dict):
+                    selected = {}
+
+                graph_col, inspect_col = st.columns([3, 2], gap="large")
+                with graph_col:
+                    selection = claim_graph_panel.render(
+                        graph_data,
+                        center_claim_id=str(
+                            st.session_state.get("claim_graph_center") or ""
+                        ).strip()
+                        or None,
+                        height=580,
+                        key="claim-graph",
+                    )
+                    if selection:
+                        st.session_state["claim_graph_selected"] = selection
+                        selected = selection
+
+                with inspect_col:
+                    st.markdown(
+                        "<div class='claim-graph-inspector'>",
+                        unsafe_allow_html=True,
+                    )
+
+                    if st.button("Clear selection", key="claim-graph-clear"):
+                        st.session_state["claim_graph_selected"] = {}
+                        selected = {}
+                        _rerun()
+
+                    sel_type = (selected or {}).get("type")
+                    sel_id = str((selected or {}).get("id") or "").strip()
+                    if not sel_type or not sel_id:
+                        st.caption("No selection yet.")
+                    elif sel_type == "node":
+                        node = node_by_id.get(sel_id) or {}
+                        props = node.get("properties") or {}
+                        claim_text = (
+                            props.get("parsed_text")
+                            or node.get("label")
+                            or node.get("id")
+                            or ""
+                        )
+                        st.markdown("**Claim**")
+                        st.write(str(claim_text))
                         st.caption(
-                            "OpenAlex could not find this work. "
-                            "Check that reference resolution populated a DOI "
-                            "or OpenAlex ID."
+                            " • ".join(
+                                part
+                                for part in [
+                                    f"doc_id: {props.get('document_id')}"
+                                    if props.get("document_id")
+                                    else "",
+                                    f"citation_index: {props.get('citation_index')}"
+                                    if props.get("citation_index") is not None
+                                    else "",
+                                    f"sentence_id: {props.get('sentence_id')}"
+                                    if props.get("sentence_id")
+                                    else "",
+                                ]
+                                if part
+                            )
                         )
-                    if st.button("Retry", key="citation-graph-retry"):
-                        last_request = st.session_state.get(
-                            "citation_last_graph_request"
-                        )
-                        if last_request:
-                            load_citation_graph(last_request)
+
+                        connected = [
+                            e
+                            for e in edge_by_id.values()
+                            if str(e.get("source_id")) == sel_id
+                            or str(e.get("target_id")) == sel_id
+                        ]
+                        if connected:
+                            with st.expander("Connected edges", expanded=False):
+                                for e in connected:
+                                    edge_id = int(e.get("edge_id") or 0)
+                                    aggs = e.get("aggregates") or {}
+                                    n_support = int(aggs.get("n_support") or 0)
+                                    n_contra = int(aggs.get("n_contradict") or 0)
+                                    badge = f"{n_support}/{n_contra}"
+                                    if st.button(
+                                        f"Edge {edge_id} • {badge}",
+                                        key=f"claim-graph-edge-pick-{edge_id}",
+                                        use_container_width=True,
+                                    ):
+                                        st.session_state["claim_graph_selected"] = {
+                                            "type": "edge",
+                                            "id": str(edge_id),
+                                        }
+                                        _rerun()
+
+                        st.markdown("**Candidate links**")
+                        if not active_reviewer_uid:
+                            st.info("Select a reviewer to add manual links.")
+                        else:
+                            try:
+                                candidates_payload = graph_api.get_claim_candidates(
+                                    sel_id, limit=10
+                                )
+                            except graph_api.GraphApiError as exc:
+                                st.caption(f"Candidates unavailable: {exc}")
+                                candidates_payload = {}
+                            candidates = candidates_payload.get("candidates") or []
+                            if not candidates:
+                                st.caption("No candidates found.")
+                            else:
+                                for idx, cand in enumerate(candidates):
+                                    target_id = (cand or {}).get("target_claim_id")
+                                    score = (cand or {}).get("score")
+                                    target_node = (cand or {}).get("node") or {}
+                                    target_props = target_node.get("properties") or {}
+                                    label = (
+                                        target_props.get("parsed_text")
+                                        or target_node.get("label")
+                                        or target_id
+                                        or "candidate"
+                                    )
+                                    if len(str(label)) > 64:
+                                        label = str(label)[:61].rstrip() + "..."
+                                    cols = st.columns([4, 1], gap="small")
+                                    with cols[0]:
+                                        st.caption(
+                                            f"{label}"
+                                            + (f" (score {score:.3f})" if score else "")
+                                        )
+                                    with cols[1]:
+                                        if st.button(
+                                            "Add",
+                                            key=f"claim-graph-add-{sel_id}-{idx}",
+                                            use_container_width=True,
+                                        ):
+                                            try:
+                                                created = graph_api.create_claim_link(
+                                                    sel_id,
+                                                    str(target_id),
+                                                    reviewer_uid=active_reviewer_uid,
+                                                )
+                                            except graph_api.GraphApiError as exc:
+                                                st.error(str(exc))
+                                            else:
+                                                edge = (created or {}).get("edge") or {}
+                                                new_edge_id = edge.get("edge_id")
+                                                st.session_state.pop(
+                                                    "claim_graph_key", None
+                                                )
+                                                _fetch_claim_graph(force=True)
+                                                if new_edge_id:
+                                                    st.session_state[
+                                                        "claim_graph_selected"
+                                                    ] = {
+                                                        "type": "edge",
+                                                        "id": str(new_edge_id),
+                                                    }
+                                                _rerun()
+
+                    else:
+                        try:
+                            edge_id_int = int(sel_id)
+                        except Exception:
+                            edge_id_int = 0
+                        edge = edge_by_id.get(edge_id_int) or {}
+                        if not edge:
+                            st.caption("Edge not found in current subgraph.")
+                            edge = {}
+
+                        if edge:
+                            props = edge.get("properties") or {}
+                            aggs = edge.get("aggregates") or {}
+                            st.markdown(f"**Edge {edge_id_int}**")
+                            st.caption(
+                                f"{edge.get('source_id')} -> {edge.get('target_id')}"
+                            )
+                            st.caption(
+                                " • ".join(
+                                    part
+                                    for part in [
+                                        f"source: {props.get('source')}"
+                                        if props.get("source")
+                                        else "",
+                                        "support/contra: "
+                                        f"{int(aggs.get('n_support') or 0)}/"
+                                        f"{int(aggs.get('n_contradict') or 0)}",
+                                        f"total: {int(aggs.get('n_total') or 0)}",
+                                    ]
+                                    if part
+                                )
+                            )
+
+                            votes_payload: dict = {}
+                            try:
+                                votes_payload = graph_api.get_edge_votes(edge_id_int)
+                            except graph_api.GraphApiError as exc:
+                                st.caption(f"Votes unavailable: {exc}")
+
+                            votes = votes_payload.get("votes") or []
+                            supporters = [
+                                v for v in votes if v.get("verdict") == "support"
+                            ]
+                            contradictors = [
+                                v for v in votes if v.get("verdict") == "contradict"
+                            ]
+                            others = [
+                                v
+                                for v in votes
+                                if v.get("verdict") not in {"support", "contradict"}
+                            ]
+
+                            col_support, col_contra = st.columns(2, gap="small")
+                            with col_support:
+                                st.markdown(
+                                    (
+                                        "<div class='claim-graph-votes "
+                                        "claim-graph-votes--support'>"
+                                    ),
+                                    unsafe_allow_html=True,
+                                )
+                                st.markdown("**Supporters**")
+                                if not supporters:
+                                    st.caption("None")
+                                else:
+                                    for vote in supporters:
+                                        who = vote.get("reviewer_uid") or "default"
+                                        comment = (vote.get("comment") or "").strip()
+                                        entry_html = (
+                                            "<div class='claim-vote-entry'>"
+                                            "<span class='claim-vote-who'>"
+                                            f"{html.escape(str(who))}"
+                                            "</span>"
+                                        )
+                                        if comment:
+                                            entry_html += (
+                                                "<div class='claim-vote-comment'>"
+                                                f"{html.escape(comment)}"
+                                                "</div>"
+                                            )
+                                        entry_html += "</div>"
+                                        st.markdown(entry_html, unsafe_allow_html=True)
+                                st.markdown("</div>", unsafe_allow_html=True)
+                            with col_contra:
+                                st.markdown(
+                                    (
+                                        "<div class='claim-graph-votes "
+                                        "claim-graph-votes--contra'>"
+                                    ),
+                                    unsafe_allow_html=True,
+                                )
+                                st.markdown("**Contradictors**")
+                                if not contradictors:
+                                    st.caption("None")
+                                else:
+                                    for vote in contradictors:
+                                        who = vote.get("reviewer_uid") or "default"
+                                        comment = (vote.get("comment") or "").strip()
+                                        entry_html = (
+                                            "<div class='claim-vote-entry'>"
+                                            "<span class='claim-vote-who'>"
+                                            f"{html.escape(str(who))}"
+                                            "</span>"
+                                        )
+                                        if comment:
+                                            entry_html += (
+                                                "<div class='claim-vote-comment'>"
+                                                f"{html.escape(comment)}"
+                                                "</div>"
+                                            )
+                                        entry_html += "</div>"
+                                        st.markdown(entry_html, unsafe_allow_html=True)
+                                st.markdown("</div>", unsafe_allow_html=True)
+
+                            if others:
+                                with st.expander("Neutral / uncertain", expanded=False):
+                                    for vote in others:
+                                        who = vote.get("reviewer_uid") or "default"
+                                        verdict = vote.get("verdict") or "neutral"
+                                        comment = (vote.get("comment") or "").strip()
+                                        st.markdown(
+                                            f"- **{who}**: {verdict}"
+                                            + (f" — {comment}" if comment else "")
+                                        )
+
+                            st.divider()
+                            st.markdown("**Vote**")
+                            if not active_reviewer_uid:
+                                st.info("Select a reviewer to submit votes.")
+                            else:
+                                verdict_key = f"claim-graph-vote-verdict::{edge_id_int}"
+                                comment_key = f"claim-graph-vote-comment::{edge_id_int}"
+                                st.session_state.setdefault(verdict_key, "support")
+                                st.selectbox(
+                                    "Verdict",
+                                    [
+                                        "support",
+                                        "contradict",
+                                        "neutral",
+                                        "uncertain",
+                                    ],
+                                    key=verdict_key,
+                                    label_visibility="collapsed",
+                                )
+                                st.text_area(
+                                    "Comment",
+                                    key=comment_key,
+                                    height=90,
+                                    placeholder="Optional comment...",
+                                    label_visibility="collapsed",
+                                )
+                                if st.button(
+                                    "Save vote",
+                                    key=f"claim-graph-vote-save::{edge_id_int}",
+                                    type="primary",
+                                    use_container_width=True,
+                                ):
+                                    try:
+                                        graph_api.put_edge_vote(
+                                            edge_id_int,
+                                            reviewer_uid=active_reviewer_uid,
+                                            verdict=str(
+                                                st.session_state.get(verdict_key)
+                                                or "neutral"
+                                            ),
+                                            comment=str(
+                                                st.session_state.get(comment_key) or ""
+                                            ).strip()
+                                            or None,
+                                        )
+                                    except graph_api.GraphApiError as exc:
+                                        st.error(str(exc))
+                                    else:
+                                        st.session_state.pop("claim_graph_key", None)
+                                        _fetch_claim_graph(force=True)
+                                        _rerun()
+
+                            if (
+                                active_reviewer_uid
+                                and str(props.get("source") or "") == "manual"
+                            ):
+                                if st.button(
+                                    "Delete manual edge",
+                                    key=f"claim-graph-edge-delete::{edge_id_int}",
+                                    use_container_width=True,
+                                ):
+                                    try:
+                                        graph_api.delete_claim_link(
+                                            edge_id_int,
+                                            reviewer_uid=active_reviewer_uid,
+                                        )
+                                    except graph_api.GraphApiError as exc:
+                                        st.error(str(exc))
+                                    else:
+                                        st.session_state.pop("claim_graph_key", None)
+                                        st.session_state["claim_graph_selected"] = {}
+                                        _fetch_claim_graph(force=True)
+                                        _rerun()
+
+                    st.markdown("</div>", unsafe_allow_html=True)
 
         # Document details at bottom.
         with st.expander("Document details", expanded=False):

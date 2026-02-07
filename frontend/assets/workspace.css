@@ -141,6 +141,30 @@ div[data-testid="stFileUploader"] button:hover {
   white-space: nowrap;
 }
 
+/* Center header: project + document */
+.ws-contextbar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  margin: 0.2rem 0 0.85rem;
+}
+
+.ws-contextbar__project {
+  font-size: calc(0.82rem * var(--ws-font-scale));
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ws-muted);
+}
+
+.ws-contextbar__doc {
+  font-size: calc(1.05rem * var(--ws-font-scale));
+  font-weight: 750;
+  color: var(--ws-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .ws-pane-body {
   margin-top: calc(var(--ws-space-2) * var(--ws-font-scale));
 }
@@ -246,6 +270,10 @@ div[data-testid="stToggle"] p {
   color: var(--ws-ink) !important;
 }
 
+div[data-testid="stToggle"] span {
+  color: var(--ws-ink) !important;
+}
+
 div[data-testid="stToggle"] div[role="switch"] {
   border: 1px solid rgba(17, 24, 39, 0.22) !important;
   background: rgba(17, 24, 39, 0.06) !important;
@@ -254,6 +282,85 @@ div[data-testid="stToggle"] div[role="switch"] {
 div[data-testid="stToggle"] div[role="switch"][aria-checked="true"] {
   border-color: rgba(39, 128, 227, 0.55) !important;
   background: rgba(39, 128, 227, 0.22) !important;
+}
+
+/* File uploader: reduce drag-drop visual noise; keep the browse button */
+div[data-testid="stFileUploaderDropzone"] {
+  border: 1px solid rgba(17, 24, 39, 0.14) !important;
+  background: rgba(17, 24, 39, 0.02) !important;
+}
+
+div[data-testid="stFileUploaderDropzone"] small {
+  display: none !important;
+}
+
+div[data-testid="stFileUploaderDropzone"] p {
+  display: none !important;
+}
+
+/* Selectbox + dropdown menus */
+div[data-testid="stSelectbox"] div[data-baseweb="select"] > div {
+  background: var(--ws-surface) !important;
+  border: 1px solid rgba(17, 24, 39, 0.18) !important;
+  border-radius: 12px !important;
+  box-shadow: none !important;
+}
+
+/* Force selectbox text to theme ink (Streamlit/BaseWeb uses nested spans) */
+div[data-testid="stSelectbox"] div[data-baseweb="select"] * {
+  color: var(--ws-ink) !important;
+}
+
+div[data-testid="stSelectbox"] svg {
+  fill: rgba(17, 24, 39, 0.7) !important;
+}
+
+div[data-baseweb="popover"] ul {
+  background: var(--ws-surface) !important;
+}
+
+div[data-baseweb="popover"] li {
+  color: var(--ws-ink) !important;
+}
+
+div[data-baseweb="popover"] li:hover {
+  background: rgba(17, 24, 39, 0.06) !important;
+}
+
+/* MultiSelect uses a different testid */
+div[data-testid="stMultiSelect"] div[data-baseweb="select"] > div {
+  background: var(--ws-surface) !important;
+  border: 1px solid rgba(17, 24, 39, 0.18) !important;
+  border-radius: 12px !important;
+  box-shadow: none !important;
+}
+
+div[data-testid="stMultiSelect"] div[data-baseweb="select"] * {
+  color: var(--ws-ink) !important;
+}
+
+/* Primary buttons should match workspace accent */
+div[data-testid="stButton"] button[kind="primary"] {
+  background: var(--ws-accent) !important;
+  border-color: rgba(39, 128, 227, 0.65) !important;
+}
+
+/* Tighter evidence action rows */
+.evidence-review__candidate div[data-testid="stButton"] button {
+  padding: 0.25rem 0.55rem;
+  min-height: 2.0rem;
+  font-size: calc(0.86rem * var(--ws-font-scale));
+}
+
+/* Higher-contrast toggle chrome */
+div[data-testid="stToggle"] div[role="switch"] {
+  border: 1px solid rgba(17, 24, 39, 0.36) !important;
+  background: rgba(17, 24, 39, 0.10) !important;
+}
+
+div[data-testid="stToggle"] div[role="switch"][aria-checked="true"] {
+  border-color: rgba(39, 128, 227, 0.75) !important;
+  background: rgba(39, 128, 227, 0.30) !important;
 }
 
 /* Compact control row (used in center header) */
@@ -268,6 +375,121 @@ div[data-testid="stToggle"] div[role="switch"][aria-checked="true"] {
 .ws-gear-button button {
   padding: 0.25rem 0.55rem;
   border-radius: 999px;
+}
+
+/* Workspace tabs (Document/Review/Graph) */
+.ws-tabs div[role="radiogroup"] {
+  display: inline-flex !important;
+  gap: 0.35rem !important;
+  padding: 0.25rem;
+  border-radius: 999px;
+  background: rgba(17, 24, 39, 0.06);
+  border: 1px solid rgba(17, 24, 39, 0.12);
+}
+
+.ws-tabs div[role="radiogroup"] > label {
+  margin: 0 !important;
+  padding: 0.25rem 0.75rem !important;
+  border-radius: 999px !important;
+}
+
+.ws-tabs div[role="radiogroup"] > label[data-checked="true"] {
+  background: var(--ws-surface) !important;
+  border: 1px solid rgba(17, 24, 39, 0.12) !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+/* Document ledger (left pane) */
+.ledger-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  margin-top: 0.55rem;
+  box-shadow: 0 0 0 1px rgba(17, 24, 39, 0.12) inset;
+}
+
+.ledger-dot--green {
+  background: #10b981;
+}
+
+.ledger-dot--orange {
+  background: #f59e0b;
+}
+
+.ledger-label {
+  font-size: calc(0.88rem * var(--ws-font-scale));
+  line-height: 1.2;
+  color: var(--ws-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-top: 0.25rem;
+}
+
+.doc-chips {
+  color: rgba(17, 24, 39, 0.55);
+  font-weight: 650;
+  margin-left: 0.25rem;
+}
+
+.doc-degree {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  color: rgba(17, 24, 39, 0.72);
+  font-weight: 650;
+  line-height: 1;
+}
+
+.doc-degree sup,
+.doc-degree sub {
+  font-size: 0.72rem;
+}
+
+/* Claim graph (Phase 09) */
+.claim-graph-inspector {
+  border: var(--ws-pane-border);
+  border-radius: 12px;
+  background: var(--ws-pane-bg);
+  box-shadow: var(--ws-shadow);
+  padding: calc(var(--ws-space-2) * var(--ws-font-scale));
+}
+
+.claim-graph-votes {
+  border: 1px solid rgba(17, 24, 39, 0.12);
+  border-radius: 12px;
+  padding: calc(var(--ws-space-1) * var(--ws-font-scale))
+    calc(var(--ws-space-2) * var(--ws-font-scale));
+  background: rgba(17, 24, 39, 0.02);
+}
+
+.claim-graph-votes--support {
+  border-color: rgba(22, 163, 74, 0.25);
+  background: rgba(22, 163, 74, 0.06);
+}
+
+.claim-graph-votes--contra {
+  border-color: rgba(220, 38, 38, 0.22);
+  background: rgba(220, 38, 38, 0.05);
+}
+
+.claim-vote-entry {
+  margin: 0.35rem 0;
+}
+
+.claim-vote-who {
+  display: inline-block;
+  font-weight: 750;
+  color: var(--ws-ink);
+}
+
+.claim-vote-comment {
+  margin-top: 0.15rem;
+  color: rgba(17, 24, 39, 0.78);
+  font-size: calc(0.88rem * var(--ws-font-scale));
+  line-height: 1.35;
 }
 
 /* === Dense Mode === */

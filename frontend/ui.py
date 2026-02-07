@@ -5080,6 +5080,485 @@ def draw_ingestion_panel(*, center, right) -> None:
                         selected = {}
                         _rerun()
 
+                    meta_for_compare = st.session_state.get("project_meta")
+                    if not isinstance(meta_for_compare, dict):
+                        meta_for_compare = {}
+                    reviewers_for_compare = _project_reviewers(meta_for_compare)
+                    compare_a_current = _normalize_reviewer_name(
+                        meta_for_compare.get("compare_reviewer_a")
+                    )
+                    compare_b_current = _normalize_reviewer_name(
+                        meta_for_compare.get("compare_reviewer_b")
+                    )
+                    compare_a_default: Optional[str] = (
+                        compare_a_current
+                        if compare_a_current in reviewers_for_compare
+                        else None
+                    )
+                    compare_b_default: Optional[str] = (
+                        compare_b_current
+                        if compare_b_current in reviewers_for_compare
+                        else None
+                    )
+                    if reviewers_for_compare and compare_a_default is None:
+                        compare_a_default = reviewers_for_compare[0]
+                    if reviewers_for_compare and compare_b_default is None:
+                        compare_b_default = (
+                            reviewers_for_compare[1]
+                            if len(reviewers_for_compare) > 1
+                            else reviewers_for_compare[0]
+                        )
+
+                    compare_enabled_key = "claim-graph-compare-enabled"
+                    st.session_state.setdefault(
+                        compare_enabled_key,
+                        bool(
+                            compare_a_current
+                            and compare_b_current
+                            and compare_a_current != compare_b_current
+                        ),
+                    )
+                    compare_a_key = "claim-graph-compare-a"
+                    compare_b_key = "claim-graph-compare-b"
+                    if compare_a_key not in st.session_state:
+                        st.session_state[compare_a_key] = compare_a_default
+                    if compare_b_key not in st.session_state:
+                        st.session_state[compare_b_key] = compare_b_default
+
+                    with st.expander("Compare mode", expanded=False):
+                        if len(reviewers_for_compare) < 2:
+                            st.info(
+                                "Add at least two reviewers in the Project panel "
+                                "to enable compare mode."
+                            )
+                        else:
+                            cols = st.columns([1, 1], gap="small")
+                            with cols[0]:
+                                st.selectbox(
+                                    "Reviewer A",
+                                    reviewers_for_compare,
+                                    key=compare_a_key,
+                                    label_visibility="collapsed",
+                                )
+                            with cols[1]:
+                                st.selectbox(
+                                    "Reviewer B",
+                                    reviewers_for_compare,
+                                    key=compare_b_key,
+                                    label_visibility="collapsed",
+                                )
+
+                            if st.toggle(
+                                "Enable compare",
+                                key=compare_enabled_key,
+                                help=(
+                                    "Loads judgments + edge votes for the "
+                                    "visible subgraph and highlights disagreements."
+                                ),
+                            ):
+                                chosen_a = _normalize_reviewer_name(
+                                    st.session_state.get(compare_a_key)
+                                )
+                                chosen_b = _normalize_reviewer_name(
+                                    st.session_state.get(compare_b_key)
+                                )
+                                if not chosen_a or not chosen_b:
+                                    st.caption("Pick both reviewers to compare.")
+                                elif chosen_a.casefold() == chosen_b.casefold():
+                                    st.warning(
+                                        "Pick two different reviewers "
+                                        "to see disagreements."
+                                    )
+                                else:
+
+                                    def _persist_compare_pair() -> None:
+                                        meta_live = st.session_state.get("project_meta")
+                                        if not isinstance(meta_live, dict):
+                                            meta_live = {}
+                                        current_a = _normalize_reviewer_name(
+                                            meta_live.get("compare_reviewer_a")
+                                        )
+                                        current_b = _normalize_reviewer_name(
+                                            meta_live.get("compare_reviewer_b")
+                                        )
+                                        if (
+                                            current_a.casefold() == chosen_a.casefold()
+                                            and current_b.casefold()
+                                            == chosen_b.casefold()
+                                        ):
+                                            return
+                                        try:
+                                            st.session_state[
+                                                "project_meta"
+                                            ] = project_api.put_meta(
+                                                {
+                                                    "compare_reviewer_a": chosen_a,
+                                                    "compare_reviewer_b": chosen_b,
+                                                }
+                                            )
+                                        except project_api.ProjectApiError as exc:
+                                            st.error(str(exc))
+
+                                    _persist_compare_pair()
+
+                                    st.caption(f"Comparing: {chosen_a} vs {chosen_b}")
+
+                                    st.session_state.setdefault(
+                                        "compare_claim_judgments_cache", {}
+                                    )
+                                    st.session_state.setdefault(
+                                        "compare_edge_votes_cache", {}
+                                    )
+
+                                    def _coerce_items(
+                                        payload: Any, keys: list[str]
+                                    ) -> list[dict]:
+                                        if isinstance(payload, list):
+                                            return [
+                                                entry
+                                                for entry in payload
+                                                if isinstance(entry, dict)
+                                            ]
+                                        if isinstance(payload, dict):
+                                            for key in keys:
+                                                items = payload.get(key)
+                                                if isinstance(items, list):
+                                                    return [
+                                                        entry
+                                                        for entry in items
+                                                        if isinstance(entry, dict)
+                                                    ]
+                                        return []
+
+                                    def _claim_judgments(claim_id: str) -> list[dict]:
+                                        cache: dict = st.session_state.get(
+                                            "compare_claim_judgments_cache"
+                                        )
+                                        if (
+                                            isinstance(cache, dict)
+                                            and claim_id in cache
+                                        ):
+                                            payload = cache.get(claim_id)
+                                        else:
+                                            try:
+                                                payload = (
+                                                    judgment_api.get_all_judgments(
+                                                        str(claim_id).strip()
+                                                    )
+                                                )
+                                            except judgment_api.JudgmentApiError:
+                                                payload = {}
+                                            if isinstance(cache, dict):
+                                                cache[claim_id] = payload
+                                        return _coerce_items(
+                                            payload, ["judgments", "items", "results"]
+                                        )
+
+                                    def _edge_votes(edge_id: int) -> list[dict]:
+                                        cache: dict = st.session_state.get(
+                                            "compare_edge_votes_cache"
+                                        )
+                                        cache_key = str(int(edge_id))
+                                        if (
+                                            isinstance(cache, dict)
+                                            and cache_key in cache
+                                        ):
+                                            payload = cache.get(cache_key)
+                                        else:
+                                            try:
+                                                payload = graph_api.get_edge_votes(
+                                                    int(edge_id)
+                                                )
+                                            except graph_api.GraphApiError:
+                                                payload = {}
+                                            if isinstance(cache, dict):
+                                                cache[cache_key] = payload
+                                        return _coerce_items(
+                                            payload, ["votes", "items", "results"]
+                                        )
+
+                                    def _note_sig(notes: Any) -> tuple[str, str, str]:
+                                        if not isinstance(notes, dict):
+                                            return ("", "", "")
+                                        return (
+                                            _normalize_reviewer_name(
+                                                notes.get("rationale")
+                                            ),
+                                            _normalize_reviewer_name(
+                                                notes.get("caveats")
+                                            ),
+                                            _normalize_reviewer_name(
+                                                notes.get("followups")
+                                            ),
+                                        )
+
+                                    def _judgment_sig(
+                                        judgment: Optional[dict],
+                                    ) -> tuple[str, tuple[str, str, str]]:
+                                        if not isinstance(judgment, dict):
+                                            return ("", ("", "", ""))
+                                        verdict = str(
+                                            judgment.get("verdict") or ""
+                                        ).strip()
+                                        return (
+                                            verdict,
+                                            _note_sig(judgment.get("notes")),
+                                        )
+
+                                    def _pick_by_reviewer(
+                                        items: list[dict], reviewer_uid: str
+                                    ) -> Optional[dict]:
+                                        key = str(reviewer_uid or "").strip().casefold()
+                                        for entry in items:
+                                            who = (
+                                                str(entry.get("reviewer_uid") or "")
+                                                .strip()
+                                                .casefold()
+                                            )
+                                            if who and who == key:
+                                                return entry
+                                        return None
+
+                                    def _vote_sig(
+                                        vote: Optional[dict],
+                                    ) -> tuple[str, str]:
+                                        if not isinstance(vote, dict):
+                                            return ("", "")
+                                        verdict = str(vote.get("verdict") or "").strip()
+                                        comment = _normalize_reviewer_name(
+                                            vote.get("comment")
+                                        )
+                                        return (verdict, comment)
+
+                                    def _conflict_rank(
+                                        verdict_a: str, verdict_b: str, *, missing: bool
+                                    ) -> int:
+                                        if missing:
+                                            return 2
+                                        pair = {
+                                            str(verdict_a or "").strip(),
+                                            str(verdict_b or "").strip(),
+                                        }
+                                        if pair == {"support", "contradict"}:
+                                            return 0
+                                        return 1
+
+                                    def _focus_claim(claim_id: str) -> None:
+                                        st.session_state["claim_graph_center"] = str(
+                                            claim_id or ""
+                                        ).strip()
+                                        st.session_state.pop("claim_graph_key", None)
+                                        st.session_state.pop("claim_graph_data", None)
+                                        st.session_state.pop("claim_graph_error", None)
+                                        st.session_state["claim_graph_selected"] = {
+                                            "type": "node",
+                                            "id": str(claim_id),
+                                        }
+                                        _rerun()
+
+                                    def _focus_edge(edge_id: int) -> None:
+                                        edge = edge_by_id.get(int(edge_id) or 0) or {}
+                                        source_id = str(
+                                            edge.get("source_id") or ""
+                                        ).strip()
+                                        if source_id:
+                                            st.session_state[
+                                                "claim_graph_center"
+                                            ] = source_id
+                                            st.session_state.pop(
+                                                "claim_graph_key", None
+                                            )
+                                            st.session_state.pop(
+                                                "claim_graph_data", None
+                                            )
+                                            st.session_state.pop(
+                                                "claim_graph_error", None
+                                            )
+                                        st.session_state["claim_graph_selected"] = {
+                                            "type": "edge",
+                                            "id": str(int(edge_id)),
+                                        }
+                                        _rerun()
+
+                                    disagreements: list[dict] = []
+                                    for claim_id, node in node_by_id.items():
+                                        judgments = _claim_judgments(str(claim_id))
+                                        j_a = _pick_by_reviewer(judgments, chosen_a)
+                                        j_b = _pick_by_reviewer(judgments, chosen_b)
+                                        if not j_a and not j_b:
+                                            continue
+
+                                        verdict_a, notes_a = _judgment_sig(j_a)
+                                        verdict_b, notes_b = _judgment_sig(j_b)
+                                        missing = (not verdict_a) != (not verdict_b)
+                                        verdict_diff = verdict_a != verdict_b
+                                        notes_diff = notes_a != notes_b
+
+                                        if not (missing or verdict_diff or notes_diff):
+                                            continue
+
+                                        props = (node or {}).get("properties") or {}
+                                        label = (
+                                            props.get("parsed_text")
+                                            or (node or {}).get("label")
+                                            or claim_id
+                                            or "claim"
+                                        )
+                                        label = str(label)
+                                        if len(label) > 84:
+                                            label = label[:81].rstrip() + "..."
+
+                                        if missing:
+                                            reason = "missing vs present"
+                                            rank = 2
+                                        elif verdict_diff:
+                                            side_a = verdict_a or "missing"
+                                            side_b = verdict_b or "missing"
+                                            reason = f"{side_a} vs {side_b}"
+                                            rank = _conflict_rank(
+                                                verdict_a, verdict_b, missing=False
+                                            )
+                                        else:
+                                            reason = "notes differ"
+                                            rank = 3
+                                        disagreements.append(
+                                            {
+                                                "kind": "claim",
+                                                "id": str(claim_id),
+                                                "label": label,
+                                                "reason": reason,
+                                                "rank": int(rank),
+                                            }
+                                        )
+
+                                    for edge_id, edge in edge_by_id.items():
+                                        votes = _edge_votes(int(edge_id))
+                                        v_a = _pick_by_reviewer(votes, chosen_a)
+                                        v_b = _pick_by_reviewer(votes, chosen_b)
+                                        verdict_a, _comment_a = _vote_sig(v_a)
+                                        verdict_b, _comment_b = _vote_sig(v_b)
+                                        if not verdict_a and not verdict_b:
+                                            continue
+                                        missing = (not verdict_a) != (not verdict_b)
+                                        if missing:
+                                            reason = "missing vs present"
+                                            rank = 2
+                                        elif verdict_a != verdict_b:
+                                            reason = f"{verdict_a} vs {verdict_b}"
+                                            rank = _conflict_rank(
+                                                verdict_a, verdict_b, missing=False
+                                            )
+                                        else:
+                                            continue
+                                        disagreements.append(
+                                            {
+                                                "kind": "edge",
+                                                "id": int(edge_id),
+                                                "label": f"Edge {int(edge_id)}",
+                                                "reason": reason,
+                                                "rank": int(rank),
+                                            }
+                                        )
+
+                                    disagreements.sort(
+                                        key=lambda item: (
+                                            int(item.get("rank") or 9),
+                                            str(item.get("kind") or ""),
+                                            str(item.get("label") or ""),
+                                        )
+                                    )
+
+                                    st.markdown("**Disagreements in view**")
+                                    if not disagreements:
+                                        st.caption(
+                                            "No differences between these reviewers "
+                                            "in the visible subgraph."
+                                        )
+                                    else:
+                                        st.caption(f"{len(disagreements)} item(s).")
+                                        st.caption("Click to focus.")
+                                        for idx, item in enumerate(disagreements[:60]):
+                                            kind = str(item.get("kind"))
+                                            item_id = item.get("id")
+                                            label = str(item.get("label") or kind)
+                                            reason = str(item.get("reason") or "")
+                                            btn_key = (
+                                                f"cmp-dis::{kind}::{item_id}::{idx}"
+                                            )
+                                            button_label = (
+                                                f"{label} | {reason}"
+                                                if reason
+                                                else label
+                                            )
+                                            if st.button(
+                                                button_label,
+                                                key=btn_key,
+                                                use_container_width=True,
+                                            ):
+                                                if kind == "claim":
+                                                    _focus_claim(str(item_id))
+                                                else:
+                                                    _focus_edge(int(item_id) or 0)
+
+                                    sel_type_preview = (selected or {}).get("type")
+                                    sel_id_preview = str(
+                                        (selected or {}).get("id") or ""
+                                    ).strip()
+                                    if sel_type_preview == "node" and sel_id_preview:
+                                        st.divider()
+                                        st.markdown("**Selected claim judgments**")
+                                        judgments = _claim_judgments(sel_id_preview)
+                                        j_a = _pick_by_reviewer(judgments, chosen_a)
+                                        j_b = _pick_by_reviewer(judgments, chosen_b)
+                                        col_a, col_b = st.columns(2, gap="small")
+                                        with col_a:
+                                            st.caption(chosen_a)
+                                            verdict, notes = _judgment_sig(j_a)
+                                            st.markdown(f"**{verdict or '(missing)'}**")
+                                            if any(notes):
+                                                st.caption(
+                                                    " | ".join(
+                                                        part for part in notes if part
+                                                    )
+                                                )
+                                        with col_b:
+                                            st.caption(chosen_b)
+                                            verdict, notes = _judgment_sig(j_b)
+                                            st.markdown(f"**{verdict or '(missing)'}**")
+                                            if any(notes):
+                                                st.caption(
+                                                    " | ".join(
+                                                        part for part in notes if part
+                                                    )
+                                                )
+                                    elif sel_type_preview == "edge" and sel_id_preview:
+                                        st.divider()
+                                        st.markdown("**Selected edge votes**")
+                                        try:
+                                            edge_id_int = int(sel_id_preview)
+                                        except Exception:
+                                            edge_id_int = 0
+                                        votes = (
+                                            _edge_votes(edge_id_int)
+                                            if edge_id_int
+                                            else []
+                                        )
+                                        v_a = _pick_by_reviewer(votes, chosen_a)
+                                        v_b = _pick_by_reviewer(votes, chosen_b)
+                                        col_a, col_b = st.columns(2, gap="small")
+                                        with col_a:
+                                            st.caption(chosen_a)
+                                            verdict, comment = _vote_sig(v_a)
+                                            st.markdown(f"**{verdict or '(missing)'}**")
+                                            if comment:
+                                                st.caption(comment)
+                                        with col_b:
+                                            st.caption(chosen_b)
+                                            verdict, comment = _vote_sig(v_b)
+                                            st.markdown(f"**{verdict or '(missing)'}**")
+                                            if comment:
+                                                st.caption(comment)
+
                     sel_type = (selected or {}).get("type")
                     sel_id = str((selected or {}).get("id") or "").strip()
                     if not sel_type or not sel_id:

@@ -1840,44 +1840,15 @@ def _reviewer_state_suffix(reviewer_uid: Optional[str]) -> str:
 
 
 def _normalize_cited_work_id(value: Optional[str]) -> Optional[str]:
-    """Normalize a cited-work identifier to a stable string.
+    from frontend.citation_anchors import normalize_cited_work_id
 
-    We prefer DOI URLs when available, since bib-entry local IDs (e.g. b0/b1)
-    can drift across PDF reprocessing.
-    """
-    text = str(value or "").strip()
-    if not text:
-        return None
-    lower = text.lower()
-    if lower.startswith("https://doi.org/"):
-        return text
-    if lower.startswith("doi:"):
-        tail = text[4:].strip()
-        return f"https://doi.org/{tail}" if tail else None
-    if lower.startswith("10."):
-        return f"https://doi.org/{text}"
-    if "openalex.org/" in lower:
-        return text.rsplit("/", 1)[-1]
-    return text
+    return normalize_cited_work_id(value)
 
 
 def _build_anchor_quote(window_text: str) -> dict:
-    """Create a compact quote selector for the end of a citation window.
+    from frontend.citation_anchors import build_anchor_quote
 
-    Citations are typically justified by the text immediately *preceding* the
-    in-text marker, so we anchor near the end of the window.
-    """
-    norm = " ".join(str(window_text or "").split()).strip()
-    tokens = [t for t in norm.split(" ") if t]
-    if not tokens:
-        return {"exact": None, "prefix": None, "suffix": None}
-    exact_tokens = tokens[-14:]
-    prefix_tokens = tokens[-28:-14]
-    return {
-        "exact": " ".join(exact_tokens).strip() or None,
-        "prefix": " ".join(prefix_tokens).strip() or None,
-        "suffix": None,
-    }
+    return build_anchor_quote(window_text)
 
 
 def _maybe_attach_citation_anchor(provenance: dict) -> dict:
@@ -1887,63 +1858,12 @@ def _maybe_attach_citation_anchor(provenance: dict) -> dict:
     - the PDF is reprocessed (citation indices / target IDs may drift)
     - reviewers segment the citing sentence differently
     """
-    context = st.session_state.get("citation_context")
-    if not isinstance(context, dict):
-        return provenance
+    from frontend.citation_anchors import maybe_attach_citation_anchor
 
-    resolution = (
-        context.get("resolution") if isinstance(context.get("resolution"), dict) else {}
+    return maybe_attach_citation_anchor(
+        provenance=provenance,
+        context=st.session_state.get("citation_context"),
     )
-    reference = (
-        context.get("reference") if isinstance(context.get("reference"), dict) else {}
-    )
-
-    cited_work_id = _normalize_cited_work_id(
-        (resolution or {}).get("doi")
-        or (resolution or {}).get("openalex_id")
-        or (resolution or {}).get("openalex_work_id")
-        or (reference or {}).get("doi")
-    )
-
-    prev_sentence = str(context.get("previous_sentence") or "").strip()
-    citing_prefix = str(context.get("citing_prefix") or "").strip()
-    window_text = " ".join(
-        part for part in [prev_sentence, citing_prefix] if part
-    ).strip()
-    window_norm = " ".join(window_text.split()).strip()
-
-    if not cited_work_id and not window_norm:
-        return provenance
-
-    window_fingerprint = (
-        hashlib.sha256(window_norm.encode("utf-8")).hexdigest() if window_norm else None
-    )
-    anchor_quote = (
-        _build_anchor_quote(window_norm)
-        if window_norm
-        else {"exact": None, "prefix": None, "suffix": None}
-    )
-
-    # Keep the stored payload compact: we persist identifiers + selectors, not the
-    # full window text.
-    anchor = {
-        "version": 1,
-        "citing_doc_id": provenance.get("doc_id"),
-        "cited_work_id": cited_work_id,
-        "citation_index": provenance.get("citation_index"),
-        "target_id": provenance.get("target_id"),
-        "window_policy": {
-            "kind": "preceding_text",
-            "parts": ["previous_sentence", "citing_prefix"],
-        },
-        "window_fingerprint": window_fingerprint,
-        "anchor_quote": anchor_quote,
-    }
-
-    merged = dict(provenance)
-    merged["cited_work_id"] = cited_work_id
-    merged["citation_anchor"] = anchor
-    return merged
 
 
 def render_project_panel() -> None:
@@ -4857,6 +4777,12 @@ def draw_ingestion_panel(*, center, right) -> None:
                         }
                     )
                 if confirmed_claims:
+                    prov = {
+                        "doc_id": str(doc_id),
+                        "citation_index": int(cite_idx),
+                        "target_id": normalize_target_id(target_id),
+                    }
+                    prov = _maybe_attach_citation_anchor(prov)
                     confirm_claims(
                         api_url,
                         document_id=str(doc_id),
@@ -4869,6 +4795,8 @@ def draw_ingestion_panel(*, center, right) -> None:
                         segmentation_model=str(
                             st.session_state.get("selected_model") or "local"
                         ),
+                        cited_work_id=prov.get("cited_work_id"),
+                        citation_anchor=prov.get("citation_anchor"),
                     )
             except Exception:
                 pass

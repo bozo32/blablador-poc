@@ -16,6 +16,7 @@ from frontend.state_keys import (
     scoped,
 )
 from frontend.ingestion_api import auto_place_claim_source, confirm_claims
+from frontend.citation_anchors import maybe_attach_citation_anchor
 
 
 def _segment_locally(text: str, base_index: int) -> list[str]:
@@ -129,6 +130,12 @@ def render(
             return
 
         try:
+            prov = {
+                "doc_id": str(doc_id),
+                "citation_index": int(citation_index),
+                "target_id": str(target_id) if target_id else None,
+            }
+            prov = maybe_attach_citation_anchor(provenance=prov, context=context)
             confirm_claims(
                 api_url,
                 document_id=str(doc_id),
@@ -139,6 +146,8 @@ def render(
                 reviewer_uid=reviewer_label,
                 confirmed_claims=confirmed,
                 segmentation_model=(selected_model or "local"),
+                cited_work_id=prov.get("cited_work_id"),
+                citation_anchor=prov.get("citation_anchor"),
             )
         except RuntimeError:
             # Non-blocking: evidence can still run without graph indexing.

@@ -153,6 +153,8 @@ def confirm_claims(
     reviewer_uid: str,
     confirmed_claims: List[Dict[str, Any]],
     segmentation_model: Optional[str] = None,
+    cited_work_id: Optional[str] = None,
+    citation_anchor: Optional[Dict[str, Any]] = None,
 ) -> dict:
     """Persist confirmed claims for a citing sentence.
 
@@ -169,6 +171,8 @@ def confirm_claims(
         if segmentation_model
         else None,
         "reviewer_uid": str(reviewer_uid or "default").strip() or "default",
+        "cited_work_id": str(cited_work_id).strip() if cited_work_id else None,
+        "citation_anchor": citation_anchor,
         "confirmed_claims": list(confirmed_claims or []),
     }
     payload = {k: v for k, v in payload.items() if v is not None}

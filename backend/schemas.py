@@ -297,6 +297,8 @@ class ClaimConfirmationRequest(BaseModel):
     target_id: Optional[str] = None
     segmentation_model: Optional[str] = None
     reviewer_uid: str
+    cited_work_id: Optional[str] = None
+    citation_anchor: Optional[Dict[str, Any]] = None
     confirmed_claims: List[ConfirmedClaim] = Field(
         ..., min_length=1, description="Confirmed claim segments for this sentence"
     )

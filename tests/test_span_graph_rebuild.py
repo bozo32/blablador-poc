@@ -115,6 +115,17 @@ def test_claim_confirm_indexes_span_graph(tmp_path, monkeypatch):
             "target_id": "b4",
             "segmentation_model": "local",
             "reviewer_uid": "alice",
+            "cited_work_id": "https://doi.org/10.1234/example",
+            "citation_anchor": {
+                "version": 1,
+                "window_fingerprint": "fp-123",
+                "anchor_quote": {
+                    "exact": "see also",
+                    "prefix": "only since",
+                    "suffix": None,
+                },
+                "cited_work_id": "https://doi.org/10.1234/example",
+            },
             "confirmed_claims": [
                 {"claim_index": 1, "parsed_text": "Claim one."},
                 {"claim_index": 2, "parsed_text": "Claim two."},
@@ -127,6 +138,7 @@ def test_claim_confirm_indexes_span_graph(tmp_path, monkeypatch):
         ingest_id="doc-1", citation_index=9, target_id="b4"
     )
     assert span is not None
+    assert span.get("window_fingerprint") == "fp-123"
     cs1 = span_store.get_claim_span(span_id=span["span_id"], order_index=1)
     cs2 = span_store.get_claim_span(span_id=span["span_id"], order_index=2)
     assert cs1 is not None
@@ -218,6 +230,11 @@ def test_evidence_selection_mirrors_to_assertion(tmp_path, monkeypatch):
             "target_id": "b4",
             "segmentation_model": "local",
             "reviewer_uid": "alice",
+            "citation_anchor": {
+                "version": 1,
+                "window_fingerprint": "fp-1",
+                "anchor_quote": {"exact": "x", "prefix": None, "suffix": None},
+            },
             "confirmed_claims": [
                 {"claim_index": 1, "parsed_text": "Claim one."},
             ],

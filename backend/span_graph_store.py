@@ -461,14 +461,31 @@ class SpanGraphStore:
         if not sentence_text:
             return None
 
-        # Build a quote selector anchored near the end of the citing sentence.
-        selector = text_selectors.build_anchor_quote(sentence_text)
-        sentence_fp = text_selectors.fingerprint(sentence_text)
-        # Composite fingerprint supports later lookups by cite index / target.
-        fp_parts = [f"v1:{sentence_fp}", f"ci:{cite_idx}"]
-        if target_id:
-            fp_parts.append(f"t:{target_id}")
-        window_fingerprint = "|".join(fp_parts)
+        citation_anchor = payload.get("citation_anchor")
+        cited_work_id = str(payload.get("cited_work_id") or "").strip() or None
+        anchor_quote = None
+        anchor_fp = None
+        if isinstance(citation_anchor, dict):
+            anchor_quote = citation_anchor.get("anchor_quote")
+            anchor_fp = citation_anchor.get("window_fingerprint")
+            cited_work_id = (
+                cited_work_id
+                or str(citation_anchor.get("cited_work_id") or "").strip()
+                or None
+            )
+
+        # Prefer citation anchor selectors/fingerprint when available.
+        selector = (
+            anchor_quote
+            if isinstance(anchor_quote, dict)
+            else text_selectors.build_anchor_quote(sentence_text)
+        )
+        # Stable window fingerprint (do not bake citation_index/target_id).
+        window_fingerprint = (
+            str(anchor_fp).strip()
+            if isinstance(anchor_fp, str) and str(anchor_fp).strip()
+            else text_selectors.fingerprint(sentence_text)
+        )
 
         span = self.upsert_span(
             kind="citation_window",
@@ -485,9 +502,9 @@ class SpanGraphStore:
                 span_id=str(span.get("span_id")),
             )
 
-        cited_work_id = f"ref:{doc_id}:{target_id}" if target_id else None
+        if not cited_work_id and target_id:
+            cited_work_id = f"ref:{doc_id}:{target_id}"
         if cited_work_id:
-            # Create a placeholder work row; it can be merged later.
             self.upsert_work(work_id=cited_work_id)
             self.add_span_cites(
                 span_id=str(span.get("span_id")),

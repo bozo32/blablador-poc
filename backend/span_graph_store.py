@@ -122,6 +122,20 @@ SCHEMA: List[str] = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_span_cites_cited ON span_cites(cited_work_id)",
     """
+    CREATE TABLE IF NOT EXISTS citation_span_index (
+        ingest_id TEXT NOT NULL,
+        citation_index INTEGER NOT NULL,
+        target_id TEXT NOT NULL,
+        span_id TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(ingest_id, citation_index, target_id)
+    )
+    """,
+    (
+        "CREATE INDEX IF NOT EXISTS idx_citation_span_index_span "
+        "ON citation_span_index(span_id)"
+    ),
+    """
     CREATE TABLE IF NOT EXISTS span_cite_roles (
         span_id TEXT NOT NULL,
         cited_work_id TEXT NOT NULL,
@@ -298,6 +312,14 @@ class SpanGraphStore:
             ingest_id=doc_id,
         )
 
+        if target_id:
+            self.upsert_citation_span_index(
+                ingest_id=doc_id,
+                citation_index=cite_idx,
+                target_id=target_id,
+                span_id=str(span.get("span_id")),
+            )
+
         cited_work_id = f"ref:{doc_id}:{target_id}" if target_id else None
         if cited_work_id:
             # Create a placeholder work row; it can be merged later.
@@ -346,6 +368,16 @@ class SpanGraphStore:
         if not ingest_id:
             return None
         ci = int(citation_index)
+
+        if target_id:
+            mapped = self.get_citation_span_id(
+                ingest_id=ingest_id,
+                citation_index=ci,
+                target_id=str(target_id).strip(),
+            )
+            if mapped:
+                return self.get_span(mapped)
+
         like = f"%ci:{ci}%"
         args: list[str] = [ingest_id, like]
         sql = (
@@ -367,6 +399,50 @@ class SpanGraphStore:
         except Exception:
             data["selector"] = {}
         return data
+
+    # --- Citation span index ------------------------------------------------
+
+    def upsert_citation_span_index(
+        self,
+        *,
+        ingest_id: str,
+        citation_index: int,
+        target_id: str,
+        span_id: str,
+    ) -> None:
+        now = _now()
+        with self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO citation_span_index(
+                    ingest_id, citation_index, target_id, span_id, updated_at
+                ) VALUES(?, ?, ?, ?, ?)
+                ON CONFLICT(ingest_id, citation_index, target_id)
+                DO UPDATE SET span_id=excluded.span_id, updated_at=excluded.updated_at
+                """,
+                (
+                    str(ingest_id),
+                    int(citation_index),
+                    str(target_id),
+                    str(span_id),
+                    now,
+                ),
+            )
+
+    def get_citation_span_id(
+        self, *, ingest_id: str, citation_index: int, target_id: str
+    ) -> Optional[str]:
+        row = self._conn.execute(
+            """
+            SELECT span_id FROM citation_span_index
+            WHERE ingest_id=? AND citation_index=? AND target_id=?
+            LIMIT 1
+            """,
+            (str(ingest_id), int(citation_index), str(target_id)),
+        ).fetchone()
+        if not row:
+            return None
+        return str(row["span_id"] or "").strip() or None
 
     def get_claim_span(self, *, span_id: str, order_index: int) -> Optional[dict]:
         row = self._conn.execute(

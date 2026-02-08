@@ -132,6 +132,13 @@ def test_claim_confirm_indexes_span_graph(tmp_path, monkeypatch):
     assert cs1 is not None
     assert cs2 is not None
 
+    mapped = span_store.get_citation_span_id(
+        ingest_id="doc-1",
+        citation_index=9,
+        target_id="b4",
+    )
+    assert mapped == span["span_id"]
+
 
 def test_claim_confirm_normalizes_0_based_indexes(tmp_path, monkeypatch):
     span_store = SpanGraphStore(tmp_path / "graph.db")

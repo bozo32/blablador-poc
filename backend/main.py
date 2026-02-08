@@ -1560,18 +1560,16 @@ def put_evidence_selection(
                                 evidence_work_id = f"ingest:{source_ingest_id}"
                             elif target_id:
                                 evidence_work_id = f"ref:{ingest_id}:{target_id}"
-                            if evidence_work_id:
-                                span_graph_store.upsert_work(work_id=evidence_work_id)
-                            span_graph_store.create_assertion(
-                                payload={
-                                    "reviewer_uid": reviewer_uid,
-                                    "verdict": stored.verdict,
-                                    "confidence": None,
-                                    "comment": stored.note,
-                                    "claim_span_id": claim_span_id,
-                                    "evidence_span_id": evidence_span_id,
-                                    "evidence_work_id": evidence_work_id,
-                                }
+                        if evidence_work_id:
+                            span_graph_store.upsert_work(work_id=evidence_work_id)
+                            span_graph_store.upsert_selection_assertion(
+                                claim_id=str(claim_id),
+                                reviewer_uid=reviewer_uid,
+                                verdict=str(stored.verdict),
+                                claim_span_id=claim_span_id,
+                                evidence_span_id=evidence_span_id,
+                                evidence_work_id=evidence_work_id,
+                                comment=stored.note,
                             )
     except Exception:
         logger.exception("Span graph mirror failed for evidence selection")

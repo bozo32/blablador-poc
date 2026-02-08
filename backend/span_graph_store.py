@@ -194,6 +194,8 @@ SCHEMA: List[str] = [
         claim_span_id TEXT,
         evidence_span_id TEXT,
         evidence_work_id TEXT,
+        source TEXT,
+        source_key TEXT,
         created_at TEXT NOT NULL
     )
     """,
@@ -561,8 +563,21 @@ class SpanGraphStore:
             claim_span_id=str(claim_span_id),
             reviewer_uid=reviewer_uid,
         )
-        n_support = sum(1 for r in rows if (r.get("verdict") == "support"))
-        n_contra = sum(1 for r in rows if (r.get("verdict") == "contradict"))
+        support_pairs = {
+            (str(r.get("evidence_span_id") or ""), str(r.get("evidence_work_id") or ""))
+            for r in rows
+            if (r.get("verdict") == "support")
+        }
+        contra_pairs = {
+            (str(r.get("evidence_span_id") or ""), str(r.get("evidence_work_id") or ""))
+            for r in rows
+            if (r.get("verdict") == "contradict")
+        }
+        support_pairs.discard(("", ""))
+        contra_pairs.discard(("", ""))
+
+        n_support = len(support_pairs)
+        n_contra = len(contra_pairs)
         checked = self.has_checked(
             claim_span_id=str(claim_span_id), reviewer_uid=reviewer_uid
         )
@@ -1000,6 +1015,8 @@ class SpanGraphStore:
             confidence_val = None
 
         comment = payload.get("comment")
+        source = payload.get("source")
+        source_key = payload.get("source_key")
         now = _now()
         with self._conn:
             self._conn.execute(
@@ -1008,8 +1025,9 @@ class SpanGraphStore:
                     assertion_id, reviewer_uid, verdict, confidence, comment,
                     claim_atom_id, claim_span_id,
                     evidence_span_id, evidence_work_id,
+                    source, source_key,
                     created_at
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     str(assertion_id),
@@ -1021,16 +1039,74 @@ class SpanGraphStore:
                     claim_span_id,
                     evidence_span_id,
                     evidence_work_id,
+                    str(source) if source is not None else None,
+                    str(source_key) if source_key is not None else None,
                     now,
                 ),
             )
         return self.get_assertion(str(assertion_id)) or {"assertion_id": assertion_id}
+
+    def upsert_selection_assertion(
+        self,
+        *,
+        claim_id: str,
+        reviewer_uid: str,
+        verdict: str,
+        claim_span_id: str,
+        evidence_span_id: Optional[str],
+        evidence_work_id: Optional[str],
+        comment: Optional[str],
+    ) -> dict:
+        """Idempotently persist the current selection verdict as an assertion.
+
+        Evidence selections are "current state" (one per claim). We write them
+        as a single upserted assertion keyed by (claim_id, reviewer_uid, claim_span_id)
+        to avoid unbounded duplicate rows.
+        """
+        key = "|".join(
+            [
+                "selection",
+                str(claim_id),
+                str(reviewer_uid),
+                str(claim_span_id),
+            ]
+        )
+        assertion_id = f"sel:{_sha256(key)}"
+        now = _now()
+        with self._conn:
+            self._conn.execute(
+                """
+                INSERT OR REPLACE INTO assertions(
+                    assertion_id, reviewer_uid, verdict, confidence, comment,
+                    claim_atom_id, claim_span_id,
+                    evidence_span_id, evidence_work_id,
+                    source, source_key,
+                    created_at
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    assertion_id,
+                    str(reviewer_uid),
+                    str(verdict),
+                    None,
+                    comment,
+                    None,
+                    str(claim_span_id),
+                    str(evidence_span_id) if evidence_span_id else None,
+                    str(evidence_work_id) if evidence_work_id else None,
+                    "selection",
+                    str(claim_id),
+                    now,
+                ),
+            )
+        return self.get_assertion(assertion_id) or {"assertion_id": assertion_id}
 
     def get_assertion(self, assertion_id: str) -> Optional[dict]:
         row = self._conn.execute(
             """
             SELECT assertion_id, reviewer_uid, verdict, confidence, comment,
                    claim_atom_id, claim_span_id, evidence_span_id, evidence_work_id,
+                   source, source_key,
                    created_at
             FROM assertions WHERE assertion_id=?
             """,
@@ -1046,6 +1122,7 @@ class SpanGraphStore:
                 """
                 SELECT assertion_id, reviewer_uid, verdict, confidence, comment,
                        claim_atom_id, claim_span_id, evidence_span_id, evidence_work_id,
+                       source, source_key,
                        created_at
                 FROM assertions
                 WHERE claim_span_id=? AND reviewer_uid=?
@@ -1058,6 +1135,7 @@ class SpanGraphStore:
                 """
                 SELECT assertion_id, reviewer_uid, verdict, confidence, comment,
                        claim_atom_id, claim_span_id, evidence_span_id, evidence_work_id,
+                       source, source_key,
                        created_at
                 FROM assertions
                 WHERE claim_span_id=?

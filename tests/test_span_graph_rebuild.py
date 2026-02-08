@@ -253,6 +253,22 @@ def test_evidence_selection_mirrors_to_assertion(tmp_path, monkeypatch):
     )
     assert sel.status_code == 200
 
+    # Second save should replace (not append) the mirrored selection assertion.
+    sel2 = client.put(
+        f"/claims/{claim_id}/evidence/selection",
+        json={
+            "verdict": "support",
+            "primary": {
+                "candidate_id": "cand-1",
+                "attachment_id": "att-1",
+                "span_id": "evspan-1",
+            },
+            "secondary": [],
+            "note": "ok",
+        },
+    )
+    assert sel2.status_code == 200
+
     span = span_store.find_citation_span(
         ingest_id="doc-1", citation_index=9, target_id="b4"
     )

@@ -1285,6 +1285,10 @@ def confirm_claims(payload: schemas.ClaimConfirmationRequest):
         graph_store.index_confirmed_claims(payload.model_dump())
     except Exception:
         logger.exception("Graph index failed for confirmed claims")
+    try:
+        span_graph_store.index_claim_confirmation(payload.model_dump())
+    except Exception:
+        logger.exception("Span graph index failed for confirmed claims")
     return {"inserted": inserted}
 
 

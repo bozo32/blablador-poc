@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, List, Optional, Sequence
 
+from backend import text_selectors
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -226,6 +228,141 @@ class SpanGraphStore:
         self._conn = sqlite3.connect(str(self._path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._init_schema()
+
+    # --- Indexing adapters ------------------------------------------------
+
+    def index_claim_confirmation(self, payload: dict) -> Optional[dict]:
+        """Index a ClaimConfirmationRequest payload into spans + claim spans.
+
+        This is a migration bridge: the current app already produces confirmed
+        claim segments keyed by (document_id, sentence_id, citation_index,
+        target_id). We create:
+
+        - one `Span(kind=citation_window)` anchored to the ingest (document_id)
+        - `ClaimSpan`s for each confirmed claim index
+        - a placeholder cited `Work` id derived from (document_id, target_id)
+
+        Anchoring note:
+        v1 stores a composite `window_fingerprint` that embeds citation_index and
+        target_id so we can resolve spans later even when the raw sentence text
+        isn't available at the call site.
+        """
+        doc_id = str(payload.get("document_id") or "").strip()
+        if not doc_id:
+            return None
+        citation_index = payload.get("citation_index")
+        try:
+            cite_idx = int(citation_index)
+        except Exception:
+            return None
+
+        target_id = str(payload.get("target_id") or "").strip() or None
+        sentence_text = str(payload.get("sentence_text") or "").strip()
+        if not sentence_text:
+            return None
+
+        # Build a quote selector anchored near the end of the citing sentence.
+        selector = text_selectors.build_anchor_quote(sentence_text)
+        sentence_fp = text_selectors.fingerprint(sentence_text)
+        # Composite fingerprint supports later lookups by cite index / target.
+        fp_parts = [f"v1:{sentence_fp}", f"ci:{cite_idx}"]
+        if target_id:
+            fp_parts.append(f"t:{target_id}")
+        window_fingerprint = "|".join(fp_parts)
+
+        span = self.upsert_span(
+            kind="citation_window",
+            selector=selector,
+            window_fingerprint=window_fingerprint,
+            ingest_id=doc_id,
+        )
+
+        cited_work_id = f"ref:{doc_id}:{target_id}" if target_id else None
+        if cited_work_id:
+            # Create a placeholder work row; it can be merged later.
+            self.upsert_work(work_id=cited_work_id)
+            self.add_span_cites(
+                span_id=str(span.get("span_id")),
+                cites=[
+                    {
+                        "cited_work_id": cited_work_id,
+                        "reference_id": target_id,
+                        "citation_index": cite_idx,
+                    }
+                ],
+            )
+
+        confirmed = payload.get("confirmed_claims") or []
+        items = []
+        for entry in confirmed:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                order_index = int(entry.get("claim_index"))
+            except Exception:
+                continue
+            items.append({"order_index": order_index, "selector": None})
+        claim_spans = self.upsert_claim_spans(
+            span_id=str(span.get("span_id")), items=items
+        )
+        return {
+            "span_id": str(span.get("span_id")),
+            "claim_spans": claim_spans,
+            "cited_work_id": cited_work_id,
+        }
+
+    def find_citation_span(
+        self, *, ingest_id: str, citation_index: int, target_id: Optional[str]
+    ) -> Optional[dict]:
+        """Best-effort find a citation_window span for a citation context."""
+        ingest_id = str(ingest_id or "").strip()
+        if not ingest_id:
+            return None
+        ci = int(citation_index)
+        like = f"%ci:{ci}%"
+        args: list[str] = [ingest_id, like]
+        sql = (
+            "SELECT span_id, work_id, ingest_id, kind, selector_json, "
+            "window_fingerprint, created_at, updated_at "
+            "FROM spans WHERE ingest_id=? AND kind='citation_window' "
+            "AND window_fingerprint LIKE ?"
+        )
+        if target_id:
+            sql += " AND window_fingerprint LIKE ?"
+            args.append(f"%t:{str(target_id).strip()}%")
+        sql += " ORDER BY updated_at DESC LIMIT 1"
+        row = self._conn.execute(sql, tuple(args)).fetchone()
+        if not row:
+            return None
+        data = dict(row)
+        try:
+            data["selector"] = json.loads(data.pop("selector_json") or "{}")
+        except Exception:
+            data["selector"] = {}
+        return data
+
+    def get_claim_span(self, *, span_id: str, order_index: int) -> Optional[dict]:
+        row = self._conn.execute(
+            """
+            SELECT claim_span_id, span_id, order_index, selector_json,
+                   created_at, updated_at
+            FROM claim_spans
+            WHERE span_id=? AND order_index=?
+            """,
+            (str(span_id), int(order_index)),
+        ).fetchone()
+        if not row:
+            return None
+        data = dict(row)
+        raw = data.pop("selector_json", None)
+        if raw:
+            try:
+                data["selector"] = json.loads(raw)
+            except Exception:
+                data["selector"] = None
+        else:
+            data["selector"] = None
+        return data
 
     def _init_schema(self) -> None:
         with self._conn:

@@ -467,6 +467,31 @@ class SpanGraphStore:
             data["selector"] = None
         return data
 
+    def list_claim_spans_for_span(self, *, span_id: str) -> List[dict]:
+        rows = self._conn.execute(
+            """
+            SELECT claim_span_id, span_id, order_index, selector_json,
+                   created_at, updated_at
+            FROM claim_spans
+            WHERE span_id=?
+            ORDER BY order_index ASC
+            """,
+            (str(span_id),),
+        ).fetchall()
+        out: List[dict] = []
+        for row in rows:
+            data = dict(row)
+            raw = data.pop("selector_json", None)
+            if raw:
+                try:
+                    data["selector"] = json.loads(raw)
+                except Exception:
+                    data["selector"] = None
+            else:
+                data["selector"] = None
+            out.append(data)
+        return out
+
     # --- Review marks (unknown vs not_supported) --------------------------
 
     def mark_checked(self, *, claim_span_id: str, reviewer_uid: str) -> None:
@@ -559,6 +584,53 @@ class SpanGraphStore:
             "checked": bool(checked),
             "n_support": int(n_support),
             "n_contradict": int(n_contra),
+        }
+
+    def span_status(self, *, span_id: str, reviewer_uid: str) -> dict:
+        reviewer_uid = str(reviewer_uid or "").strip() or "default"
+        claim_spans = self.list_claim_spans_for_span(span_id=str(span_id))
+        child = [
+            self.claim_span_status(
+                claim_span_id=str(cs.get("claim_span_id") or ""),
+                reviewer_uid=reviewer_uid,
+            )
+            for cs in claim_spans
+            if str(cs.get("claim_span_id") or "").strip()
+        ]
+
+        statuses = [c.get("status") for c in child]
+        if "contradicted" in statuses:
+            status = "contradicted"
+        elif "not_supported" in statuses:
+            status = "not_supported"
+        elif "contested" in statuses:
+            status = "contested"
+        elif "unknown" in statuses:
+            status = "unknown"
+        else:
+            status = "supported" if statuses else "unknown"
+
+        counts = {
+            "supported": 0,
+            "contradicted": 0,
+            "contested": 0,
+            "not_supported": 0,
+            "unknown": 0,
+        }
+        for s in statuses:
+            if s in counts:
+                counts[str(s)] += 1
+
+        return {
+            "span_id": str(span_id),
+            "reviewer_uid": reviewer_uid,
+            "status": status,
+            "n_claim_spans": int(len(statuses)),
+            "n_supported": int(counts["supported"]),
+            "n_contradicted": int(counts["contradicted"]),
+            "n_contested": int(counts["contested"]),
+            "n_not_supported": int(counts["not_supported"]),
+            "n_unknown": int(counts["unknown"]),
         }
 
     def _init_schema(self) -> None:

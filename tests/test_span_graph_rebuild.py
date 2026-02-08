@@ -340,3 +340,37 @@ def test_claim_span_context_endpoint(tmp_path, monkeypatch):
     assert payload["span_id"].startswith("span:")
     assert payload["claim_span_id"].startswith("claimspan:")
     assert payload["order_index"] == 1
+
+
+def test_span_status_endpoint(tmp_path):
+    store = SpanGraphStore(tmp_path / "graph.db")
+    span = store.upsert_span(
+        kind="citation_window",
+        selector={"exact": "x", "prefix": None, "suffix": None},
+        window_fingerprint="fp",
+        ingest_id="doc-1",
+    )
+    claim_spans = store.upsert_claim_spans(
+        span_id=str(span["span_id"]),
+        items=[
+            {"order_index": 1, "selector": None},
+            {"order_index": 2, "selector": None},
+        ],
+    )
+    cs1 = claim_spans[0]["claim_span_id"]
+    cs2 = claim_spans[1]["claim_span_id"]
+    store.mark_checked(claim_span_id=cs1, reviewer_uid="alice")
+    store.create_assertion(
+        payload={
+            "reviewer_uid": "alice",
+            "verdict": "support",
+            "claim_span_id": cs2,
+            "evidence_work_id": "ref:x",
+        }
+    )
+    # One checked/no-evidence + one supported => not_supported dominates.
+    status = store.span_status(span_id=str(span["span_id"]), reviewer_uid="alice")
+    assert status["status"] == "not_supported"
+    assert status["n_claim_spans"] == 2
+    assert status["n_supported"] == 1
+    assert status["n_not_supported"] == 1

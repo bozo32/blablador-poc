@@ -986,6 +986,27 @@ class ClaimSpanContextResponse(BaseModel):
     cited_work_id: Optional[str] = None
 
 
+class SpanStatusResponse(BaseModel):
+    span_id: str
+    reviewer_uid: str
+    status: SpanStatus
+    n_claim_spans: int = 0
+    n_supported: int = 0
+    n_contradicted: int = 0
+    n_contested: int = 0
+    n_not_supported: int = 0
+    n_unknown: int = 0
+
+
+class ClaimStatusResponse(BaseModel):
+    claim_id: str
+    reviewer_uid: str
+    span_id: str
+    claim_span_id: str
+    status: SpanStatus
+    checked: bool = False
+
+
 class OkResponse(BaseModel):
     ok: bool = True
 

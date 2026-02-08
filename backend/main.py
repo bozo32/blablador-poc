@@ -829,6 +829,16 @@ def get_claim_span_status(claim_span_id: str, reviewer_uid: str = "default"):
 
 
 @app.get(
+    "/spans/{span_id}/status",
+    response_model=schemas.SpanStatusResponse,
+)
+def get_span_status(span_id: str, reviewer_uid: str = "default"):
+    return span_graph_store.span_status(
+        span_id=str(span_id), reviewer_uid=str(reviewer_uid)
+    )
+
+
+@app.get(
     "/claims/{claim_id}/span-context",
     response_model=schemas.ClaimSpanContextResponse,
 )
@@ -880,6 +890,29 @@ def get_claim_span_context(
         "claim_span_id": str(claim_span["claim_span_id"]),
         "order_index": int(order_index),
         "cited_work_id": cited_work_id,
+    }
+
+
+@app.get(
+    "/claims/{claim_id}/status",
+    response_model=schemas.ClaimStatusResponse,
+)
+def get_claim_status(
+    claim_id: str,
+    target_id: Optional[str] = None,
+):
+    context = get_claim_span_context(claim_id=claim_id, target_id=target_id)
+    status = span_graph_store.claim_span_status(
+        claim_span_id=str(context["claim_span_id"]),
+        reviewer_uid=str(context["reviewer_uid"]),
+    )
+    return {
+        "claim_id": str(claim_id),
+        "reviewer_uid": str(context["reviewer_uid"]),
+        "span_id": str(context["span_id"]),
+        "claim_span_id": str(context["claim_span_id"]),
+        "status": str(status["status"]),
+        "checked": bool(status.get("checked")),
     }
 
 

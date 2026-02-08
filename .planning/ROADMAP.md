@@ -22,6 +22,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 8: Workspace + Fast-Path Review UX** - Inline citation navigation, background processing, and a more space-efficient workspace.
 - [ ] **Phase 8.1: Recursive Retrieval + Node Graph** (INSERTED) - Multi-document citation chasing with an integrated graph view.
 - [ ] **Phase 8.2: Demo Dataset + Trace Replay** (INSERTED) - A packaged synthetic corpus + replayable review traces for a distributed-system tech demo.
+- [ ] **Phase 9: Claim Graph + Multi-User Consensus** - Local multi-user judgments and an interactive claim graph showing consensus/disagreement.
 
 ## Phase Details
 
@@ -178,10 +179,31 @@ Plans:
   5. Demo exports produce non-empty claim/callout JSON/CSV showing the captured judgments.
 **Plans**: TBD
 
+### Phase 9: Claim Graph + Multi-User Consensus
+**Goal**: Review becomes collaborative: multiple local reviewer identities can record distinct judgments and vote/annotate claim-to-claim edges in an interactive claim graph with visible consensus vs disagreement.
+**Depends on**: Phase 8
+**Requirements**: MU-01, MU-02, CG-01, CG-02, CG-03
+**Success Criteria** (what must be TRUE):
+  1. A local "Current user" dropdown scopes all saved judgments, edge votes, and manual graph edits.
+  2. Multiple users can disagree on the same claim-to-claim edge; the UI shows consensus vs disagreement with attributable votes/comments.
+  3. Claim graph can be inspected interactively (zoom/pan; click edge opens a panel showing pro vs con annotations).
+  4. Graph supports provenance layers: auto vs manual vs external_search (dotted).
+  5. Compare mode allows selecting two reviewers and seeing side-by-side differences for both judgments and edge votes.
+  6. MVP works with ~20 papers and multiple reviewer names without major usability/performance regressions.
+**Plans**: 7 plans
+Plans:
+- [x] 09-01-PLAN.md — Persist reviewer identities in project metadata
+- [x] 09-02-PLAN.md — Reviewer-scoped judgments + exports (backward compatible)
+- [x] 09-03-PLAN.md — Claim graph store + edge votes + subgraph endpoints
+- [x] 09-04-PLAN.md — Streamlit Current user dropdown + reviewer-scoped judgment UI
+- [x] 09-05-PLAN.md — Interactive claim graph tab (renderer + edge inspection/voting)
+- [ ] 09-06-PLAN.md — Compare mode + end-to-end multi-user consensus verification checkpoint
+- [ ] 09-07-PLAN.md — Cytoscape Surfing POC: graph as architecture + plural segmentation + heat
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 8.1 → 8.2
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 8.1 → 8.2 → 9
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -195,3 +217,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 8. Workspace + Fast-Path Review UX | 7/8 | In progress | - |
 | 8.1. Recursive Retrieval + Node Graph | 0/TBD | Not started | - |
 | 8.2. Demo Dataset + Trace Replay | 0/TBD | Not started | - |
+| 9. Claim Graph + Multi-User Consensus | 5/7 | In progress | - |

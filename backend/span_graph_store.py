@@ -451,6 +451,40 @@ class SpanGraphStore:
             "order_index": order_index,
         }
 
+    # --- Status computation ------------------------------------------------
+
+    def claim_span_status(self, *, claim_span_id: str, reviewer_uid: str) -> dict:
+        """Compute the v1 status lattice for a claim span and reviewer."""
+        reviewer_uid = str(reviewer_uid or "").strip() or "default"
+        rows = self.list_assertions_for_claim_span(
+            claim_span_id=str(claim_span_id),
+            reviewer_uid=reviewer_uid,
+        )
+        n_support = sum(1 for r in rows if (r.get("verdict") == "support"))
+        n_contra = sum(1 for r in rows if (r.get("verdict") == "contradict"))
+        checked = self.has_checked(
+            claim_span_id=str(claim_span_id), reviewer_uid=reviewer_uid
+        )
+        checked = checked or bool(rows)
+
+        if n_support and n_contra:
+            status = "contested"
+        elif n_support:
+            status = "supported"
+        elif n_contra:
+            status = "contradicted"
+        else:
+            status = "not_supported" if checked else "unknown"
+
+        return {
+            "claim_span_id": str(claim_span_id),
+            "reviewer_uid": reviewer_uid,
+            "status": status,
+            "checked": bool(checked),
+            "n_support": int(n_support),
+            "n_contradict": int(n_contra),
+        }
+
     def _init_schema(self) -> None:
         with self._conn:
             for ddl in SCHEMA:

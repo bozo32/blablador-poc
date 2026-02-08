@@ -79,6 +79,13 @@ def test_span_claimspan_assertion_roundtrip(tmp_path, monkeypatch):
     assert listed.json()["claim_span_id"] == claim_span_id
     assert len(listed.json()["assertions"]) == 1
 
+    status = client.get(
+        f"/claim-spans/{claim_span_id}/status",
+        params={"reviewer_uid": "alice"},
+    )
+    assert status.status_code == 200
+    assert status.json()["status"] == "supported"
+
 
 def test_claim_confirm_indexes_span_graph(tmp_path, monkeypatch):
     span_store = SpanGraphStore(tmp_path / "graph.db")
@@ -256,3 +263,27 @@ def test_evidence_selection_mirrors_to_assertion(tmp_path, monkeypatch):
     assert span_store.has_checked(
         claim_span_id=str(claim_span["claim_span_id"]), reviewer_uid="alice"
     )
+
+
+def test_claim_span_status_unknown_vs_not_supported(tmp_path):
+    store = SpanGraphStore(tmp_path / "graph.db")
+    span = store.upsert_span(
+        kind="citation_window",
+        selector={"exact": "x", "prefix": None, "suffix": None},
+        window_fingerprint="fp",
+        ingest_id="doc-1",
+    )
+    claim_spans = store.upsert_claim_spans(
+        span_id=str(span["span_id"]),
+        items=[{"order_index": 1, "selector": None}],
+    )
+    claim_span_id = claim_spans[0]["claim_span_id"]
+
+    s1 = store.claim_span_status(claim_span_id=claim_span_id, reviewer_uid="alice")
+    assert s1["status"] == "unknown"
+    assert s1["checked"] is False
+
+    store.mark_checked(claim_span_id=claim_span_id, reviewer_uid="alice")
+    s2 = store.claim_span_status(claim_span_id=claim_span_id, reviewer_uid="alice")
+    assert s2["status"] == "not_supported"
+    assert s2["checked"] is True

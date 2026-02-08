@@ -817,6 +817,17 @@ def list_claim_span_assertions(claim_span_id: str, reviewer_uid: Optional[str] =
     return {"claim_span_id": str(claim_span_id), "assertions": assertions}
 
 
+@app.get(
+    "/claim-spans/{claim_span_id}/status",
+    response_model=schemas.ClaimSpanStatusResponse,
+)
+def get_claim_span_status(claim_span_id: str, reviewer_uid: str = "default"):
+    return span_graph_store.claim_span_status(
+        claim_span_id=str(claim_span_id),
+        reviewer_uid=str(reviewer_uid),
+    )
+
+
 @app.post("/ingest/{doc_id}/extract", response_model=schemas.ExtractionResponse)
 def extract_ingested_document(doc_id: str):
     document = get_ingested_document(doc_id)

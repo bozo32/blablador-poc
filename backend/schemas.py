@@ -839,6 +839,13 @@ ClaimGraphVoteVerdict = Literal["support", "contradict", "neutral", "uncertain"]
 
 SpanKind = Literal["citation_window", "evidence_excerpt", "other"]
 SpanCiteRole = Literal["evidentiary", "background", "reputational", "unknown"]
+SpanStatus = Literal[
+    "unknown",
+    "supported",
+    "contradicted",
+    "contested",
+    "not_supported",
+]
 
 
 class QuoteSelector(BaseModel):
@@ -956,6 +963,15 @@ class AssertionCreateResponse(BaseModel):
 class ClaimSpanAssertionsResponse(BaseModel):
     claim_span_id: str
     assertions: List[AssertionPayload] = Field(default_factory=list)
+
+
+class ClaimSpanStatusResponse(BaseModel):
+    claim_span_id: str
+    reviewer_uid: str
+    status: SpanStatus
+    checked: bool = False
+    n_support: int = 0
+    n_contradict: int = 0
 
 
 class OkResponse(BaseModel):

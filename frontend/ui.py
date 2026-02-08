@@ -63,6 +63,9 @@ from backend.utils import list_local_models
 from frontend.ingestion_api import (
     auto_place_claim_source,
     confirm_claims,
+    get_claim_span_context,
+    get_claim_status,
+    get_span_status,
     get_citation_context,
     get_citation_graph,
     get_document_body,
@@ -2493,6 +2496,72 @@ def render_evidence_panel() -> None:
                 """,
                 unsafe_allow_html=True,
             )
+
+            claim_id_row = st.columns([3, 1], gap="small")
+            with claim_id_row[0]:
+                st.caption(f"Claim id: `{selected_claim}`")
+            with claim_id_row[1]:
+                clipboard.render_copy_to_clipboard(
+                    "Copy id",
+                    str(selected_claim),
+                    key=f"copy-claim-id::{selected_claim}",
+                    toast="Claim id copied.",
+                    help_text="Copy claim id for API/debug.",
+                )
+
+            with st.expander("Span graph debug", expanded=False):
+                claim_rec = claim_queue.get_claim_record(selected_claim) or {}
+                tgt = normalize_target_id(
+                    claim_rec.get("reference_id")
+                    or (claim_rec.get("reference_hint") or {}).get("reference_id")
+                )
+                st.code(str(selected_claim), language="text")
+                st.caption(
+                    "This uses the new span-first endpoints (span-context/status)."
+                )
+                if st.button(
+                    "Fetch span context",
+                    key=f"fetch-span-context::{selected_claim}",
+                ):
+                    try:
+                        ctx = get_claim_span_context(
+                            get_api_url(),
+                            str(selected_claim),
+                            target_id=tgt,
+                        )
+                    except RuntimeError as exc:
+                        st.error(str(exc))
+                    else:
+                        st.json(ctx)
+
+                if st.button(
+                    "Fetch claim/span status",
+                    key=f"fetch-span-status::{selected_claim}",
+                ):
+                    try:
+                        claim_status = get_claim_status(
+                            get_api_url(),
+                            str(selected_claim),
+                            target_id=tgt,
+                        )
+                    except RuntimeError as exc:
+                        st.error(str(exc))
+                        claim_status = None
+                    if claim_status:
+                        st.json({"claim_status": claim_status})
+                        span_id = (claim_status or {}).get("span_id")
+                        reviewer_uid = (claim_status or {}).get("reviewer_uid")
+                        if span_id and reviewer_uid:
+                            try:
+                                span_status = get_span_status(
+                                    get_api_url(),
+                                    str(span_id),
+                                    reviewer_uid=str(reviewer_uid),
+                                )
+                            except RuntimeError as exc:
+                                st.error(str(exc))
+                            else:
+                                st.json({"span_status": span_status})
 
         def _render_judgment_controls() -> None:
             judgment = j_payload if isinstance(j_payload, dict) else {}

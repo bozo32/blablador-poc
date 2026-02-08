@@ -3644,6 +3644,60 @@ def render_evidence_panel() -> None:
             judgment_verdict = None if stored_verdict == "none" else stored_verdict
             status_to_save = "final" if judgment_verdict is not None else "draft"
             disabled = bool(selection_locked)
+
+            primary_candidate_id: Optional[str] = None
+            needs_primary = stored_verdict in {"support", "contradict"}
+            if needs_primary:
+                desired = "entail" if stored_verdict == "support" else "contradict"
+                reviewed = [
+                    cid
+                    for cid, lbl in (review_labels or {}).items()
+                    if str(lbl) == desired
+                ]
+                if not reviewed:
+                    fallback_candidates = (
+                        top_entail if desired == "entail" else top_contradict
+                    )
+                    reviewed = [c.get("id") for c in fallback_candidates if c.get("id")]
+
+                id_to_candidate = {
+                    c.get("id"): c
+                    for c in candidates
+                    if c.get("id") and isinstance(c, dict)
+                }
+                reviewed = [cid for cid in reviewed if cid in id_to_candidate]
+                if reviewed:
+
+                    def _format_primary(cid: str) -> str:
+                        cand = id_to_candidate.get(cid) or {}
+                        label = _bucket(cand.get("label"))
+                        conf = _confidence(cand)
+                        conf_text = f"{conf:.2f}" if conf is not None else "—"
+                        text = str(cand.get("text") or "").strip()
+                        text = re.sub(r"\s+", " ", text).strip()
+                        if len(text) > 80:
+                            text = text[:79].rstrip() + "..."
+                        return f"[{label} {conf_text}] {text}".strip()
+
+                    primary_candidate_id = st.selectbox(
+                        "Primary evidence",
+                        reviewed,
+                        index=0,
+                        format_func=_format_primary,
+                        key=f"overall-primary-{selected_claim}::{reviewer_state}",
+                        help=(
+                            "Pick the single primary evidence candidate used to "
+                            "justify support/contradict."
+                        ),
+                    )
+                else:
+                    st.warning(
+                        "Pick at least one evidence candidate (Support/Contradict) "
+                        "before saving a non-silent verdict.",
+                        icon="⚠️",
+                    )
+                    disabled = True
+
             if st.button(
                 "Save",
                 key=f"final-save-{selected_claim}",
@@ -3658,6 +3712,7 @@ def render_evidence_panel() -> None:
                 store.save_selection(
                     selected_claim,
                     verdict=stored_verdict,
+                    primary_candidate_id=primary_candidate_id,
                     note=str(note or "").strip() or None,
                 )
                 notes = {

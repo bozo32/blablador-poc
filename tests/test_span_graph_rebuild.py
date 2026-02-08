@@ -441,3 +441,39 @@ def test_span_bundle_endpoint(tmp_path, monkeypatch):
     assert len(payload["cites"]) == 1
     assert payload["cites"][0]["role"] == "evidentiary"
     assert len(payload["claim_spans"]) == 1
+
+
+def test_compact_assertions_removes_duplicates(tmp_path):
+    store = SpanGraphStore(tmp_path / "graph.db")
+    span = store.upsert_span(
+        kind="citation_window",
+        selector={"exact": "x", "prefix": None, "suffix": None},
+        window_fingerprint="fp",
+        ingest_id="doc-1",
+    )
+    cs = store.upsert_claim_spans(
+        span_id=str(span["span_id"]),
+        items=[{"order_index": 1, "selector": None}],
+    )[0]["claim_span_id"]
+
+    store.create_assertion(
+        payload={
+            "reviewer_uid": "alice",
+            "verdict": "support",
+            "claim_span_id": cs,
+            "evidence_work_id": "ref:x",
+        }
+    )
+    store.create_assertion(
+        payload={
+            "reviewer_uid": "alice",
+            "verdict": "support",
+            "claim_span_id": cs,
+            "evidence_work_id": "ref:x",
+        }
+    )
+    assert len(store.list_assertions_for_claim_span(claim_span_id=cs)) == 2
+
+    result = store.compact_assertions(dry_run=False, aggressive=False)
+    assert result["after"] == result["before"] - 1
+    assert len(store.list_assertions_for_claim_span(claim_span_id=cs)) == 1

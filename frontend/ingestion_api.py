@@ -271,6 +271,24 @@ def get_span_bundle(
     return _parse_response(response) or {}
 
 
+def compact_span_graph(
+    api_url: str,
+    *,
+    dry_run: bool = False,
+    aggressive: bool = False,
+) -> dict:
+    url = f"{api_url.rstrip('/')}/maintenance/span-graph/compact"
+    payload: Dict[str, Any] = {
+        "dry_run": bool(dry_run),
+        "aggressive": bool(aggressive),
+    }
+    try:
+        response = requests.post(url, json=payload, timeout=DEFAULT_TIMEOUT)
+    except requests.RequestException as exc:
+        raise RuntimeError(_request_error_message(url, exc)) from exc
+    return _parse_response(response) or {}
+
+
 def _request_error_message(url: str, exc: requests.RequestException) -> str:
     if isinstance(exc, requests.Timeout):
         return (

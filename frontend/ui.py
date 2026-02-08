@@ -66,6 +66,7 @@ from frontend.ingestion_api import (
     get_claim_span_context,
     get_claim_status,
     get_span_bundle,
+    compact_span_graph,
     get_citation_context,
     get_citation_graph,
     get_document_body,
@@ -2067,7 +2068,8 @@ def render_project_panel() -> None:
     st.markdown("**Reset local drafts**")
     st.caption(
         "Clears local (browser-session) segmentation drafts and claim drafts. "
-        "Does not delete saved judgments or backend data."
+        "Does not delete saved judgments. Also compacts span-graph assertion history "
+        "(backend) to reduce duplicate noise."
     )
 
     def _clear_segmentation_state(*, reviewer: Optional[str]) -> None:
@@ -2127,6 +2129,10 @@ def render_project_panel() -> None:
             disabled=not bool(active_uid),
         ):
             _clear_segmentation_state(reviewer=active_uid)
+            try:
+                compact_span_graph(get_api_url(), dry_run=False, aggressive=True)
+            except Exception:
+                pass
             _rerun()
     with reset_cols[1]:
         if st.button(
@@ -2135,7 +2141,29 @@ def render_project_panel() -> None:
             use_container_width=True,
         ):
             _clear_segmentation_state(reviewer=None)
+            try:
+                compact_span_graph(get_api_url(), dry_run=False, aggressive=True)
+            except Exception:
+                pass
             _rerun()
+
+    with st.expander("Maintenance", expanded=False):
+        st.caption("Backend maintenance helpers (safe to rerun).")
+        if st.button(
+            "Compact span graph now",
+            key="project-compact-span-graph",
+            use_container_width=True,
+        ):
+            try:
+                result = compact_span_graph(
+                    get_api_url(),
+                    dry_run=False,
+                    aggressive=True,
+                )
+            except Exception as exc:
+                st.error(str(exc))
+            else:
+                st.json(result)
 
     export_cols = st.columns([1, 1], gap="small")
     with export_cols[0]:

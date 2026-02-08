@@ -265,6 +265,169 @@ class SpanGraphStore:
         self._conn = sqlite3.connect(str(self._path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._init_schema()
+        self._ensure_schema_migrations()
+
+    def _ensure_schema_migrations(self) -> None:
+        """Apply additive migrations for existing DB files."""
+
+        def _table_exists(name: str) -> bool:
+            row = self._conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                (str(name),),
+            ).fetchone()
+            return bool(row)
+
+        def _columns(name: str) -> set[str]:
+            try:
+                rows = self._conn.execute(f"PRAGMA table_info({name})").fetchall()
+            except Exception:
+                return set()
+            return {str(r[1]) for r in rows}
+
+        # citation_span_index may be missing in older DBs.
+        if not _table_exists("citation_span_index"):
+            with self._conn:
+                self._conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS citation_span_index (
+                        ingest_id TEXT NOT NULL,
+                        citation_index INTEGER NOT NULL,
+                        target_id TEXT NOT NULL,
+                        span_id TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        PRIMARY KEY(ingest_id, citation_index, target_id)
+                    )
+                    """
+                )
+                self._conn.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_citation_span_index_span
+                    ON citation_span_index(span_id)
+                    """
+                )
+
+        # Ensure selection assertion provenance columns exist.
+        cols = _columns("assertions")
+        for col in ("source", "source_key"):
+            if col not in cols:
+                with self._conn:
+                    self._conn.execute(f"ALTER TABLE assertions ADD COLUMN {col} TEXT")
+
+    def compact_assertions(
+        self, *, dry_run: bool = False, aggressive: bool = False
+    ) -> dict:
+        """Compact the assertions table to reduce duplicate noise.
+
+        - De-duplicates identical assertions.
+        - Optionally removes legacy mirrored selection assertions when a
+          deterministic `sel:` assertion exists for the same claim_span+reviewer.
+        """
+        self._ensure_schema_migrations()
+        before = int(
+            (
+                self._conn.execute("SELECT COUNT(1) AS n FROM assertions").fetchone()
+                or {}
+            )["n"]
+        )
+
+        dedupe_count = int(
+            (
+                self._conn.execute(
+                    """
+                    SELECT COUNT(1) AS n
+                    FROM assertions
+                    WHERE rowid NOT IN (
+                        SELECT MAX(rowid)
+                        FROM assertions
+                        GROUP BY reviewer_uid,
+                                 claim_span_id,
+                                 verdict,
+                                 COALESCE(evidence_span_id,''),
+                                 COALESCE(evidence_work_id,''),
+                                 COALESCE(source,''),
+                                 COALESCE(source_key,'')
+                    )
+                    """
+                ).fetchone()
+                or {}
+            )["n"]
+        )
+
+        legacy_count = 0
+        if aggressive:
+            legacy_count = int(
+                (
+                    self._conn.execute(
+                        """
+                        SELECT COUNT(1) AS n
+                        FROM assertions a
+                        WHERE a.assertion_id NOT LIKE 'sel:%'
+                          AND (a.source IS NULL OR a.source='' OR a.source='selection')
+                          AND a.claim_span_id IS NOT NULL
+                          AND EXISTS (
+                            SELECT 1 FROM assertions s
+                            WHERE s.assertion_id LIKE 'sel:%'
+                              AND s.reviewer_uid = a.reviewer_uid
+                              AND s.claim_span_id = a.claim_span_id
+                          )
+                        """
+                    ).fetchone()
+                    or {}
+                )["n"]
+            )
+
+        if not dry_run:
+            with self._conn:
+                self._conn.execute(
+                    """
+                    DELETE FROM assertions
+                    WHERE rowid NOT IN (
+                        SELECT MAX(rowid)
+                        FROM assertions
+                        GROUP BY reviewer_uid,
+                                 claim_span_id,
+                                 verdict,
+                                 COALESCE(evidence_span_id,''),
+                                 COALESCE(evidence_work_id,''),
+                                 COALESCE(source,''),
+                                 COALESCE(source_key,'')
+                    )
+                    """
+                )
+                if aggressive:
+                    self._conn.execute(
+                        """
+                        DELETE FROM assertions
+                        WHERE assertion_id NOT LIKE 'sel:%'
+                          AND (source IS NULL OR source='' OR source='selection')
+                          AND claim_span_id IS NOT NULL
+                          AND EXISTS (
+                            SELECT 1 FROM assertions s
+                            WHERE s.assertion_id LIKE 'sel:%'
+                              AND s.reviewer_uid = assertions.reviewer_uid
+                              AND s.claim_span_id = assertions.claim_span_id
+                          )
+                        """
+                    )
+
+        after = int(
+            (
+                self._conn.execute("SELECT COUNT(1) AS n FROM assertions").fetchone()
+                or {}
+            )["n"]
+        )
+
+        return {
+            "dry_run": bool(dry_run),
+            "aggressive": bool(aggressive),
+            "before": before,
+            "after": after,
+            "dedupe_candidates": dedupe_count,
+            "legacy_candidates": legacy_count,
+            "deleted": max(0, before - after)
+            if not dry_run
+            else (dedupe_count + legacy_count),
+        }
 
     # --- Indexing adapters ------------------------------------------------
 

@@ -1036,6 +1036,21 @@ class OkResponse(BaseModel):
     ok: bool = True
 
 
+class SpanGraphCompactRequest(BaseModel):
+    dry_run: bool = False
+    aggressive: bool = False
+
+
+class SpanGraphCompactResponse(BaseModel):
+    dry_run: bool
+    aggressive: bool
+    before: int
+    after: int
+    dedupe_candidates: int
+    legacy_candidates: int
+    deleted: int
+
+
 class ClaimGraphNode(BaseModel):
     id: str
     kind: str

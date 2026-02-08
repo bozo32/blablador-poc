@@ -851,6 +851,17 @@ def get_span_bundle(span_id: str, reviewer_uid: str = "default"):
     return bundle
 
 
+@app.post(
+    "/maintenance/span-graph/compact",
+    response_model=schemas.SpanGraphCompactResponse,
+)
+def compact_span_graph(payload: schemas.SpanGraphCompactRequest):
+    return span_graph_store.compact_assertions(
+        dry_run=bool(payload.dry_run),
+        aggressive=bool(payload.aggressive),
+    )
+
+
 @app.get(
     "/claims/{claim_id}/span-context",
     response_model=schemas.ClaimSpanContextResponse,

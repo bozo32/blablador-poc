@@ -1067,7 +1067,20 @@ def get_claim_span_context(
     if not claim_span:
         raise HTTPException(status_code=404, detail="Claim span not found")
 
-    cited_work_id = f"ref:{ingest_id}:{resolved_target}" if resolved_target else None
+    cited_work_id = None
+    try:
+        for cite in span_graph_store.list_span_cites(span_id=str(span["span_id"])):
+            if resolved_target and str(cite.get("reference_id") or "").strip() != str(
+                resolved_target
+            ):
+                continue
+            cited_work_id = str(cite.get("cited_work_id") or "").strip() or None
+            if cited_work_id:
+                break
+    except Exception:
+        cited_work_id = None
+    if not cited_work_id and resolved_target:
+        cited_work_id = f"ref:{ingest_id}:{resolved_target}"
     return {
         "claim_id": str(claim_id),
         "reviewer_uid": reviewer_uid,

@@ -473,6 +473,7 @@ def test_claim_span_context_endpoint(tmp_path, monkeypatch):
     assert payload["span_id"].startswith("span:")
     assert payload["claim_span_id"].startswith("claimspan:")
     assert payload["order_index"] == 1
+    assert payload["cited_work_id"]
 
 
 def test_span_status_endpoint(tmp_path):

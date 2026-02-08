@@ -65,6 +65,7 @@ from backend.ingestion_store import (
 from backend.claim_store import claim_store
 from backend.reference_retrieval import build_retrieval_dossier
 from backend.graph_store import GraphStore
+from backend.span_graph_store import SpanGraphStore
 from backend import project_io
 
 # Configure logging.
@@ -86,6 +87,7 @@ logger = logging.getLogger(__name__)
 
 
 graph_store = GraphStore(app_settings.GRAPH_DB_PATH)
+span_graph_store = SpanGraphStore(app_settings.GRAPH_DB_PATH)
 
 # Setup pipeline via registry and settings
 build_all = get_pipeline(app_settings)
@@ -731,6 +733,88 @@ def get_claim_candidates(claim_id: str, limit: int = Query(10, ge=1, le=100)):
             for score, cand_id, cand in top
         ],
     }
+
+
+# --- Span-first graph (Rebuild) ----------------------------------------------
+
+
+@app.post("/spans/upsert", response_model=schemas.SpanUpsertResponse)
+def upsert_span(payload: schemas.SpanUpsertRequest):
+    try:
+        span = span_graph_store.upsert_span(
+            kind=str(payload.kind),
+            selector=payload.selector.model_dump(),
+            window_fingerprint=payload.window_fingerprint,
+            ingest_id=payload.ingest_id,
+            work_id=payload.work_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"span": span}
+
+
+@app.post(
+    "/spans/{span_id}/cites",
+    response_model=schemas.SpanCitesUpsertResponse,
+)
+def upsert_span_cites(span_id: str, payload: schemas.SpanCitesUpsertRequest):
+    inserted = span_graph_store.add_span_cites(
+        span_id=str(span_id),
+        cites=[c.model_dump() for c in (payload.cites or [])],
+    )
+    return {"span_id": str(span_id), "inserted": int(inserted)}
+
+
+@app.put(
+    "/spans/{span_id}/cites/{cited_work_id:path}/role",
+    response_model=schemas.OkResponse,
+)
+def set_span_cite_role(
+    span_id: str,
+    cited_work_id: str,
+    payload: schemas.SpanCiteRoleUpsertRequest,
+):
+    span_graph_store.set_span_cite_role(
+        span_id=str(span_id),
+        cited_work_id=str(cited_work_id),
+        reviewer_uid=str(payload.reviewer_uid),
+        role=str(payload.role),
+    )
+    return {"ok": True}
+
+
+@app.post(
+    "/spans/{span_id}/claim-spans",
+    response_model=schemas.ClaimSpansUpsertResponse,
+)
+def upsert_claim_spans(span_id: str, payload: schemas.ClaimSpansUpsertRequest):
+    items = []
+    for cs in payload.claim_spans or []:
+        selector = cs.selector.model_dump() if cs.selector is not None else None
+        items.append({"order_index": int(cs.order_index), "selector": selector})
+    claim_spans = span_graph_store.upsert_claim_spans(span_id=str(span_id), items=items)
+    return {"span_id": str(span_id), "claim_spans": claim_spans}
+
+
+@app.post("/assertions", response_model=schemas.AssertionCreateResponse)
+def create_assertion(payload: schemas.AssertionCreateRequest):
+    try:
+        assertion = span_graph_store.create_assertion(payload=payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"assertion": assertion}
+
+
+@app.get(
+    "/claim-spans/{claim_span_id}/assertions",
+    response_model=schemas.ClaimSpanAssertionsResponse,
+)
+def list_claim_span_assertions(claim_span_id: str, reviewer_uid: Optional[str] = None):
+    assertions = span_graph_store.list_assertions_for_claim_span(
+        claim_span_id=str(claim_span_id),
+        reviewer_uid=str(reviewer_uid) if reviewer_uid else None,
+    )
+    return {"claim_span_id": str(claim_span_id), "assertions": assertions}
 
 
 @app.post("/ingest/{doc_id}/extract", response_model=schemas.ExtractionResponse)

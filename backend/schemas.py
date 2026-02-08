@@ -835,6 +835,133 @@ class AutoPlaceResponse(BaseModel):
 ClaimGraphVoteVerdict = Literal["support", "contradict", "neutral", "uncertain"]
 
 
+# --- Span-first graph (Rebuild) ----------------------------------------------
+
+SpanKind = Literal["citation_window", "evidence_excerpt", "other"]
+SpanCiteRole = Literal["evidentiary", "background", "reputational", "unknown"]
+
+
+class QuoteSelector(BaseModel):
+    exact: Optional[str] = None
+    prefix: Optional[str] = None
+    suffix: Optional[str] = None
+
+
+class WorkPayload(BaseModel):
+    work_id: str
+    doi: Optional[str] = None
+    openalex_id: Optional[str] = None
+    title: Optional[str] = None
+    authors: List[str] = Field(default_factory=list)
+    year: Optional[str] = None
+    abstract: Optional[str] = None
+    abstract_source: Optional[str] = None
+
+
+class SpanPayload(BaseModel):
+    span_id: str
+    work_id: Optional[str] = None
+    ingest_id: Optional[str] = None
+    kind: SpanKind
+    selector: Dict[str, Any] = Field(default_factory=dict)
+    window_fingerprint: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class SpanUpsertRequest(BaseModel):
+    kind: SpanKind
+    selector: QuoteSelector
+    window_fingerprint: Optional[str] = None
+    ingest_id: Optional[str] = None
+    work_id: Optional[str] = None
+
+
+class SpanUpsertResponse(BaseModel):
+    span: SpanPayload
+
+
+class SpanCiteUpsert(BaseModel):
+    cited_work_id: str
+    reference_id: Optional[str] = None
+    citation_index: Optional[int] = None
+
+
+class SpanCitesUpsertRequest(BaseModel):
+    cites: List[SpanCiteUpsert] = Field(default_factory=list)
+
+
+class SpanCitesUpsertResponse(BaseModel):
+    span_id: str
+    inserted: int
+
+
+class SpanCiteRoleUpsertRequest(BaseModel):
+    reviewer_uid: str
+    role: SpanCiteRole
+
+
+class ClaimSpanUpsert(BaseModel):
+    order_index: int
+    selector: Optional[QuoteSelector] = None
+
+
+class ClaimSpansUpsertRequest(BaseModel):
+    claim_spans: List[ClaimSpanUpsert] = Field(default_factory=list)
+
+
+class ClaimSpanPayload(BaseModel):
+    claim_span_id: str
+    span_id: str
+    order_index: int
+    selector: Optional[Dict[str, Any]] = None
+
+
+class ClaimSpansUpsertResponse(BaseModel):
+    span_id: str
+    claim_spans: List[ClaimSpanPayload] = Field(default_factory=list)
+
+
+AssertionVerdict = ClaimGraphVoteVerdict
+
+
+class AssertionCreateRequest(BaseModel):
+    reviewer_uid: str
+    verdict: AssertionVerdict
+    confidence: Optional[float] = None
+    comment: Optional[str] = None
+    claim_atom_id: Optional[str] = None
+    claim_span_id: Optional[str] = None
+    evidence_span_id: Optional[str] = None
+    evidence_work_id: Optional[str] = None
+
+
+class AssertionPayload(BaseModel):
+    assertion_id: str
+    reviewer_uid: str
+    verdict: AssertionVerdict
+    confidence: Optional[float] = None
+    comment: Optional[str] = None
+    claim_atom_id: Optional[str] = None
+    claim_span_id: Optional[str] = None
+    evidence_span_id: Optional[str] = None
+    evidence_work_id: Optional[str] = None
+    created_at: str
+
+
+class AssertionCreateResponse(BaseModel):
+    assertion: AssertionPayload
+
+
+class ClaimSpanAssertionsResponse(BaseModel):
+    claim_span_id: str
+    assertions: List[AssertionPayload] = Field(default_factory=list)
+
+
+class OkResponse(BaseModel):
+    ok: bool = True
+
+
 class ClaimGraphNode(BaseModel):
     id: str
     kind: str

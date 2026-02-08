@@ -314,15 +314,21 @@ class SpanGraphStore:
             )
 
         confirmed = payload.get("confirmed_claims") or []
-        items = []
+        raw_indexes: list[int] = []
         for entry in confirmed:
             if not isinstance(entry, dict):
                 continue
             try:
-                order_index = int(entry.get("claim_index"))
+                raw_indexes.append(int(entry.get("claim_index")))
             except Exception:
                 continue
-            items.append({"order_index": order_index, "selector": None})
+
+        # Normalize claim indexes to a stable 1-based order_index for claim spans.
+        # The legacy system has mixed 0-based and 1-based claim_index usage.
+        shift = 1 if raw_indexes and min(raw_indexes) == 0 else 0
+        items = [
+            {"order_index": int(idx) + shift, "selector": None} for idx in raw_indexes
+        ]
         claim_spans = self.upsert_claim_spans(
             span_id=str(span.get("span_id")), items=items
         )

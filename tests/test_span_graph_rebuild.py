@@ -126,6 +126,48 @@ def test_claim_confirm_indexes_span_graph(tmp_path, monkeypatch):
     assert cs2 is not None
 
 
+def test_claim_confirm_normalizes_0_based_indexes(tmp_path, monkeypatch):
+    span_store = SpanGraphStore(tmp_path / "graph.db")
+    monkeypatch.setattr(backend_main, "span_graph_store", span_store)
+
+    class _NoopClaimStore:
+        def persist_confirmed_claims(self, payload):
+            return len(payload.confirmed_claims or [])
+
+    class _NoopGraphStore:
+        def index_confirmed_claims(self, payload):
+            return None
+
+    monkeypatch.setattr(backend_main, "claim_store", _NoopClaimStore())
+    monkeypatch.setattr(backend_main, "graph_store", _NoopGraphStore())
+
+    client = TestClient(backend_main.app)
+    resp = client.post(
+        "/claims/confirm",
+        json={
+            "document_id": "doc-1",
+            "sentence_id": "s1",
+            "sentence_text": "Seed sentence.",
+            "citation_index": 0,
+            "target_id": "t1",
+            "segmentation_model": "local",
+            "reviewer_uid": "alice",
+            "confirmed_claims": [
+                {"claim_index": 0, "parsed_text": "Zero."},
+                {"claim_index": 1, "parsed_text": "One."},
+            ],
+        },
+    )
+    assert resp.status_code == 200
+    span = span_store.find_citation_span(
+        ingest_id="doc-1", citation_index=0, target_id="t1"
+    )
+    assert span is not None
+    # Shifted to 1-based.
+    assert span_store.get_claim_span(span_id=span["span_id"], order_index=1) is not None
+    assert span_store.get_claim_span(span_id=span["span_id"], order_index=2) is not None
+
+
 def test_evidence_selection_mirrors_to_assertion(tmp_path, monkeypatch):
     span_store = SpanGraphStore(tmp_path / "graph.db")
     monkeypatch.setattr(backend_main, "span_graph_store", span_store)

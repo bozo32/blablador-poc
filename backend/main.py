@@ -828,6 +828,61 @@ def get_claim_span_status(claim_span_id: str, reviewer_uid: str = "default"):
     )
 
 
+@app.get(
+    "/claims/{claim_id}/span-context",
+    response_model=schemas.ClaimSpanContextResponse,
+)
+def get_claim_span_context(
+    claim_id: str,
+    target_id: Optional[str] = None,
+):
+    parsed = span_graph_store.parse_cite_claim_id(claim_id)
+    if not parsed:
+        raise HTTPException(status_code=422, detail="Unsupported claim id")
+
+    ingest_id = str(parsed.get("document_id") or "").strip()
+    citation_index = int(parsed.get("citation_index") or 0)
+    reviewer_uid = str(parsed.get("reviewer_uid") or "default")
+    order_index = parsed.get("order_index")
+    if order_index is None:
+        raise HTTPException(status_code=422, detail="Claim segment id not parseable")
+
+    resolved_target = str(target_id or "").strip() or None
+    if not resolved_target:
+        for rec in attachment_store.list_attachments(claim_id=claim_id):
+            tid = str(rec.get("target_id") or "").strip() or None
+            if tid:
+                resolved_target = tid
+                break
+
+    span = span_graph_store.find_citation_span(
+        ingest_id=ingest_id,
+        citation_index=citation_index,
+        target_id=resolved_target,
+    )
+    if not span:
+        raise HTTPException(status_code=404, detail="Span not found")
+    claim_span = span_graph_store.get_claim_span(
+        span_id=str(span["span_id"]),
+        order_index=int(order_index),
+    )
+    if not claim_span:
+        raise HTTPException(status_code=404, detail="Claim span not found")
+
+    cited_work_id = f"ref:{ingest_id}:{resolved_target}" if resolved_target else None
+    return {
+        "claim_id": str(claim_id),
+        "reviewer_uid": reviewer_uid,
+        "ingest_id": ingest_id,
+        "citation_index": int(citation_index),
+        "target_id": resolved_target,
+        "span_id": str(span["span_id"]),
+        "claim_span_id": str(claim_span["claim_span_id"]),
+        "order_index": int(order_index),
+        "cited_work_id": cited_work_id,
+    }
+
+
 @app.post("/ingest/{doc_id}/extract", response_model=schemas.ExtractionResponse)
 def extract_ingested_document(doc_id: str):
     document = get_ingested_document(doc_id)

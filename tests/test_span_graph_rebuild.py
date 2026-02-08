@@ -287,3 +287,49 @@ def test_claim_span_status_unknown_vs_not_supported(tmp_path):
     s2 = store.claim_span_status(claim_span_id=claim_span_id, reviewer_uid="alice")
     assert s2["status"] == "not_supported"
     assert s2["checked"] is True
+
+
+def test_claim_span_context_endpoint(tmp_path, monkeypatch):
+    span_store = SpanGraphStore(tmp_path / "graph.db")
+    monkeypatch.setattr(backend_main, "span_graph_store", span_store)
+
+    class _NoopClaimStore:
+        def persist_confirmed_claims(self, payload):
+            return len(payload.confirmed_claims or [])
+
+    class _NoopGraphStore:
+        def index_confirmed_claims(self, payload):
+            return None
+
+    monkeypatch.setattr(backend_main, "claim_store", _NoopClaimStore())
+    monkeypatch.setattr(backend_main, "graph_store", _NoopGraphStore())
+
+    client = TestClient(backend_main.app)
+    resp = client.post(
+        "/claims/confirm",
+        json={
+            "document_id": "doc-1",
+            "sentence_id": "s1",
+            "sentence_text": "Seed sentence.",
+            "citation_index": 9,
+            "target_id": "b4",
+            "segmentation_model": "local",
+            "reviewer_uid": "alice",
+            "confirmed_claims": [
+                {"claim_index": 1, "parsed_text": "Claim one."},
+            ],
+        },
+    )
+    assert resp.status_code == 200
+
+    claim_id = "cite:doc-1:9:alice:10a"
+    ctx = client.get(
+        f"/claims/{claim_id}/span-context",
+        params={"target_id": "b4"},
+    )
+    assert ctx.status_code == 200
+    payload = ctx.json()
+    assert payload["claim_id"] == claim_id
+    assert payload["span_id"].startswith("span:")
+    assert payload["claim_span_id"].startswith("claimspan:")
+    assert payload["order_index"] == 1

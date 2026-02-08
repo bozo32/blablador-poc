@@ -974,6 +974,18 @@ class ClaimSpanStatusResponse(BaseModel):
     n_contradict: int = 0
 
 
+class ClaimSpanContextResponse(BaseModel):
+    claim_id: str
+    reviewer_uid: str
+    ingest_id: str
+    citation_index: int
+    target_id: Optional[str] = None
+    span_id: str
+    claim_span_id: str
+    order_index: int
+    cited_work_id: Optional[str] = None
+
+
 class OkResponse(BaseModel):
     ok: bool = True
 

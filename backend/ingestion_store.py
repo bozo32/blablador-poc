@@ -53,6 +53,34 @@ def create_ingested_document(
     ingestion_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
     target_dir = ensure_ingestion_dir(ingestion_dir or DEFAULT_INGESTION_DIR)
+
+    sha256 = hashlib.sha256(file_bytes).hexdigest()
+    # De-dupe uploads by content hash. If a PDF with the same sha256 already
+    # exists, re-use that document id and record the new filename as an alias.
+    for doc_dir in target_dir.iterdir():
+        if not doc_dir.is_dir():
+            continue
+        meta_path = doc_dir / "metadata.json"
+        if not meta_path.exists():
+            continue
+        try:
+            existing = json.loads(meta_path.read_text())
+        except Exception:
+            continue
+        if str(existing.get("sha256") or "").strip().lower() != sha256.lower():
+            continue
+        aliases = list(existing.get("aliases") or [])
+        if (
+            filename
+            and filename not in aliases
+            and filename != existing.get("filename")
+        ):
+            aliases.append(filename)
+        if aliases:
+            existing["aliases"] = aliases
+            meta_path.write_text(json.dumps(existing, indent=2, sort_keys=True))
+        return existing
+
     doc_id = str(uuid4())
     doc_dir = _document_dir(target_dir, doc_id)
     doc_dir.mkdir(parents=True, exist_ok=False)
@@ -60,7 +88,6 @@ def create_ingested_document(
     source_path = doc_dir / "source.pdf"
     source_path.write_bytes(file_bytes)
 
-    sha256 = hashlib.sha256(file_bytes).hexdigest()
     uploaded_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
     metadata: Dict[str, Any] = {
@@ -70,6 +97,7 @@ def create_ingested_document(
         "sha256": sha256,
         "uploaded_at": uploaded_at,
         "status": "uploaded",
+        "aliases": [],
         "extraction": _default_stage("extracted_at"),
         "resolution": _default_stage("resolved_at"),
     }

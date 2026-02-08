@@ -3,7 +3,8 @@ import os
 from dotenv import load_dotenv
 
 load_dotenv()
-os.environ["TRANSFORMERS_CACHE"] = str(os.path.expanduser("~/.cache/huggingface"))
+# Transformers v5 removes TRANSFORMERS_CACHE; use HF_HOME.
+os.environ.setdefault("HF_HOME", str(os.path.expanduser("~/.cache/huggingface")))
 
 import subprocess
 import sys

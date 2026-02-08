@@ -93,6 +93,7 @@ def _public_view(record: dict) -> dict:
     data.setdefault("doc_id", None)
     data.setdefault("citation_index", None)
     data.setdefault("target_id", None)
+    data.setdefault("source_ingest_id", None)
     data.setdefault("archived", False)
     data.setdefault("archived_at", None)
     data["history"] = data.get("timeline", [])[:MAX_TIMELINE_EVENTS]
@@ -121,6 +122,7 @@ def create_attachment(
     claim_text: Optional[str] = None,
     citation_index: Optional[int] = None,
     target_id: Optional[str] = None,
+    source_ingest_id: Optional[str] = None,
 ) -> dict:
     source_path = Path(local_path)
     if not source_path.exists():
@@ -141,6 +143,7 @@ def create_attachment(
         "doc_id": doc_id,
         "citation_index": citation_index,
         "target_id": target_id,
+        "source_ingest_id": source_ingest_id,
         "filename": safe_name,
         "size": size,
         "status": STATUS_PENDING,

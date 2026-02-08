@@ -61,6 +61,8 @@ from backend.model_cache import add_model, get_models
 from backend.settings import AppSettings
 from backend.utils import list_local_models
 from frontend.ingestion_api import (
+    auto_place_claim_source,
+    confirm_claims,
     get_citation_context,
     get_citation_graph,
     get_document_body,
@@ -137,6 +139,9 @@ def init_session_state():
         "citation_parsing_inputs": {},
         "citation_graph_depth": 1,
         "citation_graph_max_nodes": 10,
+        # Reviewer-scoped accepted segmentations for citing spans. Structure:
+        # { reviewer_state: { "{doc}::{cite_idx}::{target_id}": ["1a. ...", ...] } }
+        "citation_segments_by_reviewer": {},
         "citation_sentence_segments": {},
         "auto_extract_on_upload": True,
         "auto_resolve_on_upload": True,
@@ -1816,6 +1821,127 @@ def _active_reviewer_uid() -> Optional[str]:
     return _project_active_reviewer_uid(meta)
 
 
+def _reviewer_state_suffix(reviewer_uid: Optional[str]) -> str:
+    """Stable, safe suffix for session_state widget keys.
+
+    Streamlit widget state is keyed only by the widget key string.
+    If we reuse the same key across reviewers, switching Current user will
+    keep the prior user's draft inputs (notes/verdict/etc) in the UI.
+
+    We *do not* want to wipe stored work when changing users; we only want
+    the UI drafts to be independent per reviewer.
+    """
+    norm = _normalize_reviewer_name(reviewer_uid)
+    return (norm or "default").casefold()
+
+
+def _normalize_cited_work_id(value: Optional[str]) -> Optional[str]:
+    """Normalize a cited-work identifier to a stable string.
+
+    We prefer DOI URLs when available, since bib-entry local IDs (e.g. b0/b1)
+    can drift across PDF reprocessing.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return None
+    lower = text.lower()
+    if lower.startswith("https://doi.org/"):
+        return text
+    if lower.startswith("doi:"):
+        tail = text[4:].strip()
+        return f"https://doi.org/{tail}" if tail else None
+    if lower.startswith("10."):
+        return f"https://doi.org/{text}"
+    if "openalex.org/" in lower:
+        return text.rsplit("/", 1)[-1]
+    return text
+
+
+def _build_anchor_quote(window_text: str) -> dict:
+    """Create a compact quote selector for the end of a citation window.
+
+    Citations are typically justified by the text immediately *preceding* the
+    in-text marker, so we anchor near the end of the window.
+    """
+    norm = " ".join(str(window_text or "").split()).strip()
+    tokens = [t for t in norm.split(" ") if t]
+    if not tokens:
+        return {"exact": None, "prefix": None, "suffix": None}
+    exact_tokens = tokens[-14:]
+    prefix_tokens = tokens[-28:-14]
+    return {
+        "exact": " ".join(exact_tokens).strip() or None,
+        "prefix": " ".join(prefix_tokens).strip() or None,
+        "suffix": None,
+    }
+
+
+def _maybe_attach_citation_anchor(provenance: dict) -> dict:
+    """Attach stable citation anchoring fields to a provenance dict.
+
+    This keeps cross-reviewer agreement meaningful even when:
+    - the PDF is reprocessed (citation indices / target IDs may drift)
+    - reviewers segment the citing sentence differently
+    """
+    context = st.session_state.get("citation_context")
+    if not isinstance(context, dict):
+        return provenance
+
+    resolution = (
+        context.get("resolution") if isinstance(context.get("resolution"), dict) else {}
+    )
+    reference = (
+        context.get("reference") if isinstance(context.get("reference"), dict) else {}
+    )
+
+    cited_work_id = _normalize_cited_work_id(
+        (resolution or {}).get("doi")
+        or (resolution or {}).get("openalex_id")
+        or (resolution or {}).get("openalex_work_id")
+        or (reference or {}).get("doi")
+    )
+
+    prev_sentence = str(context.get("previous_sentence") or "").strip()
+    citing_prefix = str(context.get("citing_prefix") or "").strip()
+    window_text = " ".join(
+        part for part in [prev_sentence, citing_prefix] if part
+    ).strip()
+    window_norm = " ".join(window_text.split()).strip()
+
+    if not cited_work_id and not window_norm:
+        return provenance
+
+    window_fingerprint = (
+        hashlib.sha256(window_norm.encode("utf-8")).hexdigest() if window_norm else None
+    )
+    anchor_quote = (
+        _build_anchor_quote(window_norm)
+        if window_norm
+        else {"exact": None, "prefix": None, "suffix": None}
+    )
+
+    # Keep the stored payload compact: we persist identifiers + selectors, not the
+    # full window text.
+    anchor = {
+        "version": 1,
+        "citing_doc_id": provenance.get("doc_id"),
+        "cited_work_id": cited_work_id,
+        "citation_index": provenance.get("citation_index"),
+        "target_id": provenance.get("target_id"),
+        "window_policy": {
+            "kind": "preceding_text",
+            "parts": ["previous_sentence", "citing_prefix"],
+        },
+        "window_fingerprint": window_fingerprint,
+        "anchor_quote": anchor_quote,
+    }
+
+    merged = dict(provenance)
+    merged["cited_work_id"] = cited_work_id
+    merged["citation_anchor"] = anchor
+    return merged
+
+
 def render_project_panel() -> None:
     """Project-level controls (export/import) shown in left pane."""
     api_url = get_api_url()
@@ -1895,32 +2021,118 @@ def render_project_panel() -> None:
             placeholder="Add reviewer name…",
             label_visibility="collapsed",
         )
+
+    def _on_add_reviewer_click() -> None:
+        raw = _normalize_reviewer_name(st.session_state.get(reviewer_add_key))
+        if not raw:
+            return
+
+        lookup = {name.casefold(): name for name in reviewers}
+        chosen = lookup.get(raw.casefold()) or raw
+        updated = list(reviewers)
+        if chosen.casefold() not in lookup:
+            updated.append(chosen)
+
+        try:
+            st.session_state["project_meta"] = project_api.put_meta(
+                {"reviewers": updated, "active_reviewer_uid": chosen}
+            )
+        except project_api.ProjectApiError as exc:
+            st.session_state["project_add_reviewer_error"] = str(exc)
+            return
+
+        st.session_state.pop("project_add_reviewer_error", None)
+        st.session_state[reviewer_select_key] = chosen
+        st.session_state[reviewer_add_key] = ""
+
     with add_row[1]:
-        if st.button("Add", key="project-add-reviewer-btn", use_container_width=True):
-            raw = _normalize_reviewer_name(st.session_state.get(reviewer_add_key))
-            if not raw:
-                return
+        st.button(
+            "Add",
+            key="project-add-reviewer-btn",
+            use_container_width=True,
+            on_click=_on_add_reviewer_click,
+        )
 
-            lookup = {name.casefold(): name for name in reviewers}
-            chosen = lookup.get(raw.casefold()) or raw
-            updated = list(reviewers)
-            if chosen.casefold() not in lookup:
-                updated.append(chosen)
-
-            try:
-                st.session_state["project_meta"] = project_api.put_meta(
-                    {"reviewers": updated, "active_reviewer_uid": chosen}
-                )
-            except project_api.ProjectApiError as exc:
-                st.error(str(exc))
-                return
-
-            st.session_state[reviewer_select_key] = chosen
-            st.session_state[reviewer_add_key] = ""
-            _rerun()
+    add_err = str(st.session_state.get("project_add_reviewer_error") or "").strip()
+    if add_err:
+        st.error(add_err)
 
     if not reviewers:
         st.info("Add a reviewer name to enable saving judgments.")
+
+    st.divider()
+    st.markdown("**Reset local drafts**")
+    st.caption(
+        "Clears local (browser-session) segmentation drafts and claim drafts. "
+        "Does not delete saved judgments or backend data."
+    )
+
+    def _clear_segmentation_state(*, reviewer: Optional[str]) -> None:
+        # Reviewer-scoped segmentation drafts live in session_state.
+        if reviewer is None:
+            st.session_state["citation_segments_by_reviewer"] = {}
+        else:
+            reviewer_state = _reviewer_state_suffix(reviewer)
+            segs = st.session_state.get("citation_segments_by_reviewer")
+            if isinstance(segs, dict):
+                segs.pop(reviewer_state, None)
+
+        # Clear any per-citation text-area caches and revision keys.
+        for key in list(st.session_state.keys()):
+            if isinstance(key, str) and key.startswith("citation-segments-"):
+                if reviewer is None:
+                    st.session_state.pop(key, None)
+                else:
+                    suffix = f"::{_reviewer_state_suffix(reviewer)}"
+                    if key.endswith(suffix):
+                        st.session_state.pop(key, None)
+            if isinstance(key, str) and key.startswith("segments-rev::"):
+                if reviewer is None:
+                    st.session_state.pop(key, None)
+                else:
+                    if f"::{_reviewer_state_suffix(reviewer)}" in key:
+                        st.session_state.pop(key, None)
+
+            # Chasing panel mode toggles (suggestions vs own) are scoped keys.
+            if isinstance(key, str) and "segments-mode::" in key:
+                if reviewer is None:
+                    st.session_state.pop(key, None)
+                else:
+                    if f"::{_reviewer_state_suffix(reviewer)}" in key:
+                        st.session_state.pop(key, None)
+
+        # Legacy storage (pre-multi-user). Keep the dict but clear contents so it
+        # doesn't seed future sessions via setdefault calls.
+        legacy = st.session_state.get("citation_sentence_segments")
+        if isinstance(legacy, dict):
+            legacy.clear()
+
+        # Claim drafts are stored in the local claim queue registry.
+        for key in (
+            claim_queue.CLAIM_REGISTRY_KEY,
+            claim_queue.CLAIM_REGISTRY_ORDER_KEY,
+            claim_queue.CLAIM_TIMELINE_KEY,
+        ):
+            st.session_state.pop(key, None)
+
+    reset_cols = st.columns([1, 1], gap="small")
+    with reset_cols[0]:
+        if st.button(
+            "Clear my drafts",
+            key="project-clear-drafts-mine",
+            use_container_width=True,
+            disabled=not bool(active_uid),
+        ):
+            _clear_segmentation_state(reviewer=active_uid)
+            _rerun()
+    with reset_cols[1]:
+        if st.button(
+            "Clear all drafts",
+            key="project-clear-drafts-all",
+            use_container_width=True,
+        ):
+            _clear_segmentation_state(reviewer=None)
+            _rerun()
 
     export_cols = st.columns([1, 1], gap="small")
     with export_cols[0]:
@@ -2284,7 +2496,8 @@ def render_evidence_panel() -> None:
 
         def _render_judgment_controls() -> None:
             judgment = j_payload if isinstance(j_payload, dict) else {}
-            flash_key = f"judgment-flash::{selected_claim}"
+            reviewer_state = _reviewer_state_suffix(active_reviewer_uid)
+            flash_key = f"judgment-flash::{selected_claim}::{reviewer_state}"
             status_default = (judgment.get("status") or "draft").strip().lower()
             if status_default not in {"draft", "final"}:
                 status_default = "draft"
@@ -2295,12 +2508,16 @@ def render_evidence_panel() -> None:
                 judgment.get("notes") if isinstance(judgment.get("notes"), dict) else {}
             )
 
-            status_key = f"judgment-status::{selected_claim}"
-            verdict_key = f"judgment-verdict::{selected_claim}"
-            notes_open_key = f"judgment-notes-open::{selected_claim}"
-            rationale_key = f"judgment-notes-rationale::{selected_claim}"
-            caveats_key = f"judgment-notes-caveats::{selected_claim}"
-            followups_key = f"judgment-notes-followups::{selected_claim}"
+            status_key = f"judgment-status::{selected_claim}::{reviewer_state}"
+            verdict_key = f"judgment-verdict::{selected_claim}::{reviewer_state}"
+            notes_open_key = f"judgment-notes-open::{selected_claim}::{reviewer_state}"
+            rationale_key = (
+                f"judgment-notes-rationale::{selected_claim}::{reviewer_state}"
+            )
+            caveats_key = f"judgment-notes-caveats::{selected_claim}::{reviewer_state}"
+            followups_key = (
+                f"judgment-notes-followups::{selected_claim}::{reviewer_state}"
+            )
 
             # Avoid Streamlit "default value + Session State" warnings by letting
             # widgets own their keys; only pass an explicit index when the key
@@ -2443,6 +2660,8 @@ def render_evidence_panel() -> None:
                         provenance["citation_index"] = tuple_cite
                         provenance["target_id"] = tuple_target
                         provenance["sentence_id"] = tuple_sentence
+
+                    provenance = _maybe_attach_citation_anchor(provenance)
 
                     stored = j_store.save_judgment(
                         selected_claim,
@@ -2628,6 +2847,47 @@ def render_evidence_panel() -> None:
                         "Assign a Source bin PDF to this specific claim and rerun.",
                         icon="⚠️",
                     )
+
+                    claim_rec = claim_queue.get_claim_record(selected_claim) or {}
+                    target_id = claim_rec.get("reference_id") or (
+                        claim_rec.get("reference_hint") or {}
+                    ).get("reference_id")
+                    doc_id_hint = claim_rec.get("doc_id")
+                    cite_idx_hint = None
+                    try:
+                        parts = str(selected_claim).split(":")
+                        if len(parts) >= 3 and parts[0] == "cite":
+                            doc_id_hint = doc_id_hint or parts[1]
+                            cite_idx_hint = int(parts[2])
+                    except Exception:
+                        cite_idx_hint = None
+
+                    can_auto_place = bool(
+                        str(doc_id_hint or "").strip()
+                        and cite_idx_hint is not None
+                        and str(target_id or "").strip()
+                    )
+                    if can_auto_place and st.button(
+                        "Auto-place cited source",
+                        key=f"auto-place-source::{selected_claim}",
+                    ):
+                        try:
+                            auto_place_claim_source(
+                                get_api_url(),
+                                claim_id=str(selected_claim),
+                                doc_id=str(doc_id_hint),
+                                citation_index=int(cite_idx_hint),
+                                target_id=str(target_id),
+                            )
+                        except RuntimeError as exc:
+                            st.error(str(exc))
+                            return
+                        store.queue_rerun(
+                            selected_claim,
+                            claim_text=active_claim_text_payload,
+                            note="auto-place",
+                        )
+                        _rerun()
                 log_url = latest.get("log_url") or latest.get("artifact_path")
                 if log_url:
                     st.caption(f"Latest rerun logs: {log_url}")
@@ -3130,7 +3390,9 @@ def render_evidence_panel() -> None:
             else:
                 computed = "inconsistent"
 
-            overall_state = state.setdefault("overall", {})
+            reviewer_state = _reviewer_state_suffix(active_reviewer_uid)
+            overall_by_reviewer = state.setdefault("overall_by_reviewer", {})
+            overall_state = overall_by_reviewer.setdefault(reviewer_state, {})
             overall_options = ["supports", "contradicts", "inconsistent", "silent"]
             selection_to_overall = {
                 "support": "supports",
@@ -3147,7 +3409,7 @@ def render_evidence_panel() -> None:
                 overall_options,
                 index=overall_options.index(current_overall),
                 horizontal=True,
-                key=f"overall-verdict-{selected_claim}",
+                key=f"overall-verdict-{selected_claim}::{reviewer_state}",
             )
             overall_state["verdict"] = overall_verdict
             st.caption(
@@ -3164,7 +3426,7 @@ def render_evidence_panel() -> None:
                 "Optional note",
                 value=note_default,
                 height=80,
-                key=f"overall-note-{selected_claim}",
+                key=f"overall-note-{selected_claim}::{reviewer_state}",
             )
             overall_state["note"] = note
 
@@ -3183,9 +3445,13 @@ def render_evidence_panel() -> None:
             notes_default = (
                 judgment.get("notes") if isinstance(judgment.get("notes"), dict) else {}
             )
-            rationale_key = f"judgment-notes-rationale::{selected_claim}"
-            caveats_key = f"judgment-notes-caveats::{selected_claim}"
-            followups_key = f"judgment-notes-followups::{selected_claim}"
+            rationale_key = (
+                f"judgment-notes-rationale::{selected_claim}::{reviewer_state}"
+            )
+            caveats_key = f"judgment-notes-caveats::{selected_claim}::{reviewer_state}"
+            followups_key = (
+                f"judgment-notes-followups::{selected_claim}::{reviewer_state}"
+            )
             st.session_state.setdefault(
                 rationale_key, (notes_default or {}).get("rationale") or ""
             )
@@ -3201,7 +3467,7 @@ def render_evidence_panel() -> None:
                 if isinstance(judgment.get("validation"), dict)
                 else {}
             )
-            advanced_key = f"judgment-advanced::{selected_claim}"
+            advanced_key = f"judgment-advanced::{selected_claim}::{reviewer_state}"
             st.session_state.setdefault(advanced_key, False)
             advanced = bool(st.session_state.get(advanced_key))
             st.toggle(
@@ -3229,10 +3495,14 @@ def render_evidence_panel() -> None:
                 "disagree": "Disagree",
                 "strongly_disagree": "Strongly disagree",
             }
-            valid_key = f"judgment-valid::{selected_claim}"
-            valid_comment_key = f"judgment-valid-comment::{selected_claim}"
-            rel_key = f"judgment-relevant::{selected_claim}"
-            rel_comment_key = f"judgment-relevant-comment::{selected_claim}"
+            valid_key = f"judgment-valid::{selected_claim}::{reviewer_state}"
+            valid_comment_key = (
+                f"judgment-valid-comment::{selected_claim}::{reviewer_state}"
+            )
+            rel_key = f"judgment-relevant::{selected_claim}::{reviewer_state}"
+            rel_comment_key = (
+                f"judgment-relevant-comment::{selected_claim}::{reviewer_state}"
+            )
             st.session_state.setdefault(
                 valid_key, (validation_default or {}).get("source_valid")
             )
@@ -3389,6 +3659,8 @@ def render_evidence_panel() -> None:
                     provenance["citation_index"] = tuple_cite
                     provenance["target_id"] = tuple_target
                     provenance["sentence_id"] = tuple_sentence
+
+                provenance = _maybe_attach_citation_anchor(provenance)
 
                 j_store.save_judgment(
                     selected_claim,
@@ -4117,6 +4389,10 @@ def draw_ingestion_panel(*, center, right) -> None:
     resolution = document.get("resolution") or {}
     resolution_data = resolution.get("data") or []
 
+    # NOTE: Citation context fetching is used to render the center-pane header.
+    # Initialize api_url before defining any closures that reference it.
+    api_url = get_api_url()
+
     selected_index = st.session_state.get("citation_selected_index")
     selected_target = normalize_target_id(
         st.session_state.get("citation_selected_target")
@@ -4156,8 +4432,6 @@ def draw_ingestion_panel(*, center, right) -> None:
             header = summary
     with center:
         st.caption(header)
-
-    api_url = get_api_url()
     extraction_stage = (
         (document.get("extraction") or {}) if isinstance(document, dict) else {}
     )
@@ -4342,11 +4616,15 @@ def draw_ingestion_panel(*, center, right) -> None:
             cite_idx = int(citation_index)
         except Exception:
             return False
-        ta_key = canonical_segments_key(citation_index=cite_idx)
+        reviewer_state = _reviewer_state_suffix(_active_reviewer_uid())
+        ta_key = f"{canonical_segments_key(citation_index=cite_idx)}::{reviewer_state}"
         current_text = str(st.session_state.get(ta_key) or "")
-        stored = st.session_state.get("citation_sentence_segments", {}).get(
-            str(cite_idx),
-            [],
+        tgt = normalize_target_id(st.session_state.get("citation_selected_target"))
+        cite_key = f"{doc_id}::{int(cite_idx)}::{tgt or ''}"
+        stored = (
+            (st.session_state.get("citation_segments_by_reviewer") or {})
+            .get(reviewer_state, {})
+            .get(cite_key, [])
         )
         stored_text = "\n".join(
             [str(line).strip() for line in (stored or []) if str(line).strip()]
@@ -4358,26 +4636,101 @@ def draw_ingestion_panel(*, center, right) -> None:
     ) -> int:
         cite_idx = int(citation_index)
         context = _get_context_cached(cite_idx, target_id)
-        ta_key = canonical_segments_key(citation_index=cite_idx)
+        reviewer_state = _reviewer_state_suffix(_active_reviewer_uid())
+        ta_key = f"{canonical_segments_key(citation_index=cite_idx)}::{reviewer_state}"
         lines = [
             ln.strip()
             for ln in str(st.session_state.get(ta_key) or "").splitlines()
             if ln.strip()
         ]
-        st.session_state.setdefault("citation_sentence_segments", {})[
-            str(cite_idx)
-        ] = lines
+        cite_key = f"{doc_id}::{int(cite_idx)}::{normalize_target_id(target_id) or ''}"
+        st.session_state.setdefault("citation_segments_by_reviewer", {}).setdefault(
+            reviewer_state, {}
+        )[cite_key] = lines
+
+        # Best-effort: persist confirmed claims so backend indexes claim nodes
+        # for the Graph tab (claim:{doc}:{sentence_id}:{claim_index}).
+        sentence_id = None
+        selected_tuple = st.session_state.get("selected_callout_tuple")
+        if isinstance(selected_tuple, dict):
+            try:
+                tuple_idx = int(selected_tuple.get("citation_index"))
+            except Exception:
+                tuple_idx = None
+            if (
+                str(selected_tuple.get("doc_id") or "").strip() == str(doc_id)
+                and tuple_idx is not None
+                and tuple_idx == int(cite_idx)
+                and normalize_target_id(selected_tuple.get("target_id"))
+                == normalize_target_id(target_id)
+            ):
+                sentence_id = selected_tuple.get("sentence_id")
+        if not sentence_id:
+            sentence_id = st.session_state.get("citation_selected_sentence_id")
+        if not sentence_id:
+            sentence_id = (context or {}).get("sentence_id")
+
+        sentence_text = (
+            context.get("citing_sentence")
+            or context.get("sentence")
+            or context.get("citing_prefix")
+            or ""
+        )
+        sentence_text = str(sentence_text or "").strip()
+
+        def _segment_to_claim_index(segment_id: str, fallback: int) -> int:
+            text = str(segment_id or "").strip()
+            m = re.match(r"^\d+([a-z])$", text, flags=re.IGNORECASE)
+            if not m:
+                return int(fallback)
+            letter = m.group(1).lower()
+            return 1 + (ord(letter) - ord("a"))
+
+        if sentence_id and sentence_text and lines:
+            try:
+                confirmed_claims: list[dict] = []
+                for idx, line in enumerate(lines):
+                    parsed = to_segment_dict(line)
+                    segment_id = parsed.get("segment_id") or ""
+                    claim_text = (parsed.get("claim") or line or "").strip()
+                    if not claim_text:
+                        continue
+                    confirmed_claims.append(
+                        {
+                            "claim_index": int(
+                                _segment_to_claim_index(segment_id, idx + 1)
+                            ),
+                            "parsed_text": claim_text,
+                        }
+                    )
+                if confirmed_claims:
+                    confirm_claims(
+                        api_url,
+                        document_id=str(doc_id),
+                        sentence_id=str(sentence_id),
+                        sentence_text=sentence_text,
+                        citation_index=int(cite_idx),
+                        target_id=normalize_target_id(target_id),
+                        reviewer_uid=str(_active_reviewer_uid() or "default"),
+                        confirmed_claims=confirmed_claims,
+                        segmentation_model=str(
+                            st.session_state.get("selected_model") or "local"
+                        ),
+                    )
+            except Exception:
+                pass
         primary_callout = context.get("callout") or "citation"
         reference_hint = {
             "callout": primary_callout,
             "reference_id": normalize_target_id(target_id),
         }
         saved = 0
+        placed = 0
         for idx, line in enumerate(lines):
             parsed = to_segment_dict(line)
             segment_id = parsed.get("segment_id") or f"seg-{idx+1}"
             claim_text = parsed.get("claim") or line
-            claim_id = f"cite:{doc_id}:{cite_idx}:{segment_id}"
+            claim_id = f"cite:{doc_id}:{cite_idx}:{reviewer_state}:{segment_id}"
             claim_queue.register_claim(
                 claim_id,
                 claim=claim_text,
@@ -4387,6 +4740,28 @@ def draw_ingestion_panel(*, center, right) -> None:
                 reference_hint=reference_hint,
             )
             saved += 1
+
+            if normalize_target_id(target_id):
+                try:
+                    resp = auto_place_claim_source(
+                        api_url,
+                        claim_id=str(claim_id),
+                        doc_id=str(doc_id),
+                        citation_index=int(cite_idx),
+                        target_id=str(normalize_target_id(target_id)),
+                    )
+                except RuntimeError:
+                    resp = None
+                if (resp or {}).get("attachment"):
+                    placed += 1
+
+            if claim_text and str(claim_text).strip():
+                evidence_store.queue_rerun(
+                    claim_id,
+                    claim_text=str(claim_text).strip(),
+                    note="auto-claim-save",
+                    quiet=True,
+                )
         return saved
 
     pending = st.session_state.get("pending_citation_selection")
@@ -4417,15 +4792,24 @@ def draw_ingestion_panel(*, center, right) -> None:
                     current_idx = st.session_state.get("citation_selected_index")
                     if current_idx is not None:
                         cite_idx = int(current_idx)
-                        stored = st.session_state.get(
-                            "citation_sentence_segments", {}
-                        ).get(
-                            str(cite_idx),
-                            [],
+                        reviewer_state = _reviewer_state_suffix(_active_reviewer_uid())
+                        current_tgt = normalize_target_id(
+                            st.session_state.get("citation_selected_target")
                         )
-                        st.session_state[
-                            canonical_segments_key(citation_index=cite_idx)
-                        ] = "\n".join(stored or [])
+                        cite_key = f"{doc_id}::{int(cite_idx)}::{current_tgt or ''}"
+                        stored = (
+                            (
+                                st.session_state.get("citation_segments_by_reviewer")
+                                or {}
+                            )
+                            .get(reviewer_state, {})
+                            .get(cite_key, [])
+                        )
+                        segments_key = (
+                            f"{canonical_segments_key(citation_index=cite_idx)}"
+                            f"::{reviewer_state}"
+                        )
+                        st.session_state[segments_key] = "\n".join(stored or [])
                     select_citation(
                         int(pending["citation_index"]), pending.get("target_id")
                     )
@@ -4505,12 +4889,21 @@ def draw_ingestion_panel(*, center, right) -> None:
             select_citation(cite_idx, tgt)
 
     def _claims_for_citation(cite_idx: int) -> list[str]:
+        reviewer_state = _reviewer_state_suffix(_active_reviewer_uid())
         out: list[str] = []
         for record in claim_queue.get_claim_records():
             rid = record.get("id")
             if not rid:
                 continue
             if str(rid).startswith(f"cite:{doc_id}:{int(cite_idx)}:"):
+                parts = str(rid).split(":")
+                # cite:{doc}:{cite_idx}:{reviewer}:{segment}
+                if len(parts) >= 5:
+                    if parts[3] != reviewer_state:
+                        continue
+                # Legacy: cite:{doc}:{cite_idx}:{segment} treated as default reviewer.
+                elif reviewer_state != "default":
+                    continue
                 out.append(str(rid))
         return out
 
@@ -4522,6 +4915,16 @@ def draw_ingestion_panel(*, center, right) -> None:
         return False
 
     def _render_chasing_panel(cite_idx: int, tgt: str | None, *, scope: str) -> None:
+        meta = st.session_state.get("project_meta")
+        reviewers = _project_reviewers(meta) if isinstance(meta, dict) else []
+
+        # Prefer the widget-controlled value if present; it updates immediately
+        # when the user switches Current user, while project_meta may lag behind
+        # a network round-trip.
+        active_from_widget = _normalize_reviewer_name(
+            st.session_state.get("project-active-reviewer")
+        )
+        active_uid = active_from_widget or (_active_reviewer_uid() or None)
         chasing_panel.render(
             doc_id=doc_id,
             citation_index=int(cite_idx),
@@ -4535,6 +4938,8 @@ def draw_ingestion_panel(*, center, right) -> None:
             render_retrieval_instructions=claim_queue.render_retrieval_instructions,
             api_url=api_url,
             selected_model=st.session_state.get("selected_model"),
+            active_reviewer_uid=active_uid,
+            reviewers=reviewers,
             rerun=_rerun,
         )
 
@@ -4581,10 +4986,13 @@ def draw_ingestion_panel(*, center, right) -> None:
             )
 
         def _queue_status(cite_idx: int, tgt: Optional[str]) -> Dict[str, bool]:
+            reviewer_state = _reviewer_state_suffix(_active_reviewer_uid())
+            cite_key = f"{doc_id}::{int(cite_idx)}::{normalize_target_id(tgt) or ''}"
             has_saved = bool(
-                st.session_state.get("citation_sentence_segments", {}).get(
-                    str(int(cite_idx)),
-                    [],
+                (
+                    (st.session_state.get("citation_segments_by_reviewer") or {})
+                    .get(reviewer_state, {})
+                    .get(cite_key)
                 )
             )
             return {
@@ -4929,17 +5337,63 @@ def draw_ingestion_panel(*, center, right) -> None:
                 if active_claim.startswith("claim:"):
                     return active_claim
                 if active_claim.startswith("cite:"):
-                    parts = active_claim.split(":", 3)
-                    if len(parts) != 4:
+                    # Reviewer-scoped cite claim ids:
+                    # cite:{doc_id}:{citation_index}:{reviewer_state}:{segment_id}
+                    parts = active_claim.split(":")
+                    if len(parts) < 5:
                         return None
-                    _prefix, doc, cite_idx, seg_id = parts
-                    context = st.session_state.get("citation_context") or {}
-                    sentence_id = (context or {}).get("sentence_id")
+                    _prefix, doc, cite_idx, _reviewer, seg_id = parts[:5]
+                    sentence_id = None
+
+                    # Prefer the lightweight provenance derived from the loaded
+                    # document body (set on citation selection) since Graph tab
+                    # may be opened before the full citation context is fetched.
+                    selected_tuple = st.session_state.get("selected_callout_tuple")
+                    if isinstance(selected_tuple, dict):
+                        try:
+                            tuple_idx = int(selected_tuple.get("citation_index"))
+                        except Exception:
+                            tuple_idx = None
+                        if (
+                            str(selected_tuple.get("doc_id") or "").strip() == doc
+                            and tuple_idx is not None
+                            and str(tuple_idx) == str(cite_idx)
+                        ):
+                            sentence_id = selected_tuple.get("sentence_id")
+
+                    if not sentence_id:
+                        sentence_id = st.session_state.get(
+                            "citation_selected_sentence_id"
+                        )
+
+                    if not sentence_id:
+                        context = st.session_state.get("citation_context") or {}
+                        sentence_id = (context or {}).get("sentence_id")
                     claim_index = _segment_to_claim_index(seg_id)
                     if not sentence_id or not claim_index:
                         return None
                     return f"claim:{doc}:{sentence_id}:{int(claim_index)}"
                 return None
+
+            # Streamlit forbids writing to a widget's session_state key after the
+            # widget is instantiated in the current run. Graph controls contain
+            # several buttons that want to "jump" the center claim.
+            #
+            # We route those actions through a separate pending key which is safe
+            # to set anywhere, then apply it *before* the center text_input is
+            # created.
+            pending = st.session_state.pop("_claim_graph_pending", None)
+            if isinstance(pending, dict):
+                if "center" in pending:
+                    st.session_state["claim_graph_center"] = str(
+                        pending.get("center") or ""
+                    ).strip()
+                if pending.get("clear_cache"):
+                    st.session_state.pop("claim_graph_key", None)
+                    st.session_state.pop("claim_graph_data", None)
+                    st.session_state.pop("claim_graph_error", None)
+                if isinstance(pending.get("selected"), dict):
+                    st.session_state["claim_graph_selected"] = pending.get("selected")
 
             st.session_state.setdefault(
                 "claim_graph_center", _guess_center_claim_id() or ""
@@ -4955,12 +5409,10 @@ def draw_ingestion_panel(*, center, right) -> None:
                 )
             with center_row[1]:
                 if st.button("Use active", key="claim-graph-use-active"):
-                    st.session_state["claim_graph_center"] = (
-                        _guess_center_claim_id() or ""
-                    )
-                    st.session_state.pop("claim_graph_key", None)
-                    st.session_state.pop("claim_graph_data", None)
-                    st.session_state.pop("claim_graph_error", None)
+                    st.session_state["_claim_graph_pending"] = {
+                        "center": _guess_center_claim_id() or "",
+                        "clear_cache": True,
+                    }
                     _rerun()
 
             sources: list[str] = []
@@ -5054,7 +5506,23 @@ def draw_ingestion_panel(*, center, right) -> None:
                 if not isinstance(selected, dict):
                     selected = {}
 
-                graph_col, inspect_col = st.columns([3, 2], gap="large")
+                split_key = "claim_graph_split_pct"
+                st.session_state.setdefault(split_key, 65)
+                graph_pct = int(st.session_state.get(split_key) or 65)
+                graph_pct = st.slider(
+                    "Graph width",
+                    min_value=50,
+                    max_value=80,
+                    value=graph_pct,
+                    step=5,
+                    key=split_key,
+                    help="Adjust split between graph and analysis.",
+                )
+
+                graph_col, inspect_col = st.columns(
+                    [int(graph_pct), int(100 - graph_pct)],
+                    gap="large",
+                )
                 with graph_col:
                     selection = claim_graph_panel.render(
                         graph_data,
@@ -5125,7 +5593,10 @@ def draw_ingestion_panel(*, center, right) -> None:
                     if compare_b_key not in st.session_state:
                         st.session_state[compare_b_key] = compare_b_default
 
-                    with st.expander("Compare mode", expanded=False):
+                    with st.expander(
+                        "Compare mode",
+                        expanded=bool(st.session_state.get(compare_enabled_key)),
+                    ):
                         if len(reviewers_for_compare) < 2:
                             st.info(
                                 "Add at least two reviewers in the Project panel "
@@ -5344,15 +5815,13 @@ def draw_ingestion_panel(*, center, right) -> None:
                                         return 1
 
                                     def _focus_claim(claim_id: str) -> None:
-                                        st.session_state["claim_graph_center"] = str(
-                                            claim_id or ""
-                                        ).strip()
-                                        st.session_state.pop("claim_graph_key", None)
-                                        st.session_state.pop("claim_graph_data", None)
-                                        st.session_state.pop("claim_graph_error", None)
-                                        st.session_state["claim_graph_selected"] = {
-                                            "type": "node",
-                                            "id": str(claim_id),
+                                        st.session_state["_claim_graph_pending"] = {
+                                            "center": str(claim_id or "").strip(),
+                                            "clear_cache": True,
+                                            "selected": {
+                                                "type": "node",
+                                                "id": str(claim_id),
+                                            },
                                         }
                                         _rerun()
 
@@ -5361,23 +5830,18 @@ def draw_ingestion_panel(*, center, right) -> None:
                                         source_id = str(
                                             edge.get("source_id") or ""
                                         ).strip()
-                                        if source_id:
-                                            st.session_state[
-                                                "claim_graph_center"
-                                            ] = source_id
-                                            st.session_state.pop(
-                                                "claim_graph_key", None
-                                            )
-                                            st.session_state.pop(
-                                                "claim_graph_data", None
-                                            )
-                                            st.session_state.pop(
-                                                "claim_graph_error", None
-                                            )
-                                        st.session_state["claim_graph_selected"] = {
-                                            "type": "edge",
-                                            "id": str(int(edge_id)),
+                                        pending = {
+                                            "clear_cache": bool(source_id),
+                                            "selected": {
+                                                "type": "edge",
+                                                "id": str(int(edge_id)),
+                                            },
                                         }
+                                        if source_id:
+                                            pending["center"] = source_id
+                                        st.session_state[
+                                            "_claim_graph_pending"
+                                        ] = pending
                                         _rerun()
 
                                     disagreements: list[dict] = []

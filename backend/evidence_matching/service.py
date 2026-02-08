@@ -396,8 +396,48 @@ class EvidenceMatchingService:
         }
         return self.store.record_run(claim_id, candidates=serialized, metadata=metadata)
 
+    def _attachment_claim_aliases(self, claim_id: str) -> list[str]:
+        """Return claim_id variants that may share attachments.
+
+        Historically, citation-derived claims used ids like:
+          cite:{doc_id}:{citation_index}:{segment_id}
+
+        Phase 09 introduced reviewer-scoped claim ids to avoid draft/segmentation
+        overwrites:
+          cite:{doc_id}:{citation_index}:{reviewer_uid}:{segment_id}
+
+        Attachments placed before this change may still be recorded against the
+        legacy (non-reviewer) claim id. To preserve walkthrough usability and
+        backward compatibility, evidence runs for reviewer-scoped claim ids
+        fall back to the legacy id when no direct attachments exist.
+        """
+        canonical = str(claim_id or "").strip()
+        if not canonical:
+            return []
+        aliases = [canonical]
+        parts = canonical.split(":")
+        if (
+            len(parts) == 5
+            and parts[0] == "cite"
+            and parts[1]
+            and str(parts[2]).isdigit()
+            and parts[4]
+        ):
+            legacy = ":".join([parts[0], parts[1], parts[2], parts[4]])
+            if legacy and legacy not in aliases:
+                aliases.append(legacy)
+        return aliases
+
     def _attachment_snapshot(self, claim_id: str) -> list[dict[str, Any]]:
-        records = attachment_store.list_attachments(claim_id=claim_id)
+        records: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for cid in self._attachment_claim_aliases(claim_id):
+            for record in attachment_store.list_attachments(claim_id=cid):
+                rid = str(record.get("id") or "")
+                if not rid or rid in seen:
+                    continue
+                seen.add(rid)
+                records.append(record)
         snapshot: list[dict[str, Any]] = []
         for record in records:
             if not attachment_store.is_ready(record):
@@ -439,10 +479,11 @@ class EvidenceMatchingService:
         )
 
     def _claim_text_from_attachments(self, claim_id: str) -> str | None:
-        for record in attachment_store.list_attachments(claim_id=claim_id):
-            text = record.get("claim_text")
-            if text:
-                return text
+        for cid in self._attachment_claim_aliases(claim_id):
+            for record in attachment_store.list_attachments(claim_id=cid):
+                text = record.get("claim_text")
+                if text:
+                    return text
         return None
 
     def _lock_state(self, claim_id: str) -> dict[str, Any]:

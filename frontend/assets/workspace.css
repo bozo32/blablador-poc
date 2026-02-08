@@ -169,6 +169,26 @@ div[data-testid="stFileUploader"] button:hover {
   margin-top: calc(var(--ws-space-2) * var(--ws-font-scale));
 }
 
+/* Suggested segmentations (other reviewers)
+   Rendered as a readable grey block to avoid Streamlit disabled textarea
+   styles making the text too faint in dense mode.
+*/
+.ws-suggested-segments {
+  background: rgba(17, 24, 39, 0.035);
+  border: 1px solid rgba(17, 24, 39, 0.14);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.ws-suggested-segments pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: rgba(17, 24, 39, 0.68);
+  font-size: 0.92rem;
+  line-height: 1.35;
+}
+
 /* Text-heavy reading defaults */
 div[data-testid="stMarkdownContainer"] {
   color: var(--ws-ink);

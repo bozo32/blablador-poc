@@ -12,6 +12,7 @@ WORKSPACE_ACTIVE_TAB = "workspace_active_tab"
 
 WORKSPACE_TAB_DOCUMENT = "Document"
 WORKSPACE_TAB_REVIEW = "Review"
+WORKSPACE_TAB_GRAPH = "Graph"
 
 
 def canonical_context_edit_key(*, doc_id: str, citation_index: int) -> str:

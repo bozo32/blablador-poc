@@ -635,6 +635,21 @@ class JudgmentUpsertRequest(BaseModel):
     year: Optional[str] = None
     claim_text: Optional[str] = None
 
+    # --- Phase 09+: stable citation/span anchoring ------------------------
+    #
+    # Motivation:
+    # - `target_id` / `citation_index` are derived from PDF parsing and can drift
+    #   across reprocessing (e.g., GROBID updates).
+    # - Reviewers may segment the citing text differently, so segment IDs are not
+    #   reliable for cross-user agreement.
+    #
+    # We therefore allow clients to attach a stable cited-work identifier and a
+    # small bundle of text features (quote selectors, fingerprints) so a future
+    # resolver can re-locate the intended in-text citation occurrence and spans.
+    cited_work_id: Optional[str] = None
+    citation_anchor: Optional[Dict[str, Any]] = None
+    span_selectors: Optional[List[Dict[str, Any]]] = None
+
     @field_validator("reviewer_uid", mode="before")
     def normalize_reviewer_uid(cls, value: Any) -> str:
         text = str(value or "").strip()
@@ -666,6 +681,11 @@ class JudgmentPayload(BaseModel):
     author: Optional[str] = None
     year: Optional[str] = None
     claim_text: Optional[str] = None
+
+    # Stable citation/span anchoring (see JudgmentUpsertRequest for rationale).
+    cited_work_id: Optional[str] = None
+    citation_anchor: Optional[Dict[str, Any]] = None
+    span_selectors: Optional[List[Dict[str, Any]]] = None
 
     @field_validator("reviewer_uid", mode="before")
     def normalize_reviewer_uid(cls, value: Any) -> str:

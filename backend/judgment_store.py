@@ -113,6 +113,9 @@ class JudgmentStore:
             author=request.author,
             year=request.year,
             claim_text=request.claim_text,
+            cited_work_id=getattr(request, "cited_work_id", None),
+            citation_anchor=getattr(request, "citation_anchor", None),
+            span_selectors=getattr(request, "span_selectors", None),
         )
 
         path = self._path_for_claim_reviewer(claim_id, reviewer)
@@ -244,6 +247,9 @@ class JudgmentStore:
                 "citation_index": j.citation_index,
                 "target_id": j.target_id,
                 "callout": j.callout,
+                "cited_work_id": getattr(j, "cited_work_id", None),
+                "citation_anchor": getattr(j, "citation_anchor", None),
+                "span_selectors": getattr(j, "span_selectors", None),
             }
 
         if mode == "core":

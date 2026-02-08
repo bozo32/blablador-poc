@@ -1,4 +1,4 @@
-from typing import Dict, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import requests
 
@@ -116,6 +116,65 @@ def get_citation_graph(
         params["doi"] = doi
     try:
         response = requests.get(url, params=params, timeout=DEFAULT_TIMEOUT)
+    except requests.RequestException as exc:
+        raise RuntimeError(_request_error_message(url, exc)) from exc
+    return _parse_response(response) or {}
+
+
+def auto_place_claim_source(
+    api_url: str,
+    *,
+    claim_id: str,
+    doc_id: str,
+    citation_index: Optional[int],
+    target_id: Optional[str],
+) -> dict:
+    url = f"{api_url.rstrip('/')}/claims/{claim_id}/auto-place"
+    payload = {
+        "doc_id": str(doc_id),
+        "citation_index": int(citation_index) if citation_index is not None else None,
+        "target_id": target_id,
+    }
+    try:
+        response = requests.post(url, json=payload, timeout=DEFAULT_TIMEOUT)
+    except requests.RequestException as exc:
+        raise RuntimeError(_request_error_message(url, exc)) from exc
+    return _parse_response(response) or {}
+
+
+def confirm_claims(
+    api_url: str,
+    *,
+    document_id: str,
+    sentence_id: str,
+    sentence_text: str,
+    citation_index: int,
+    target_id: Optional[str],
+    reviewer_uid: str,
+    confirmed_claims: List[Dict[str, Any]],
+    segmentation_model: Optional[str] = None,
+) -> dict:
+    """Persist confirmed claims for a citing sentence.
+
+    This powers backend claim indexing (graph nodes) and stable re-loads.
+    """
+    url = f"{api_url.rstrip('/')}/claims/confirm"
+    payload: Dict[str, Any] = {
+        "document_id": str(document_id or "").strip(),
+        "sentence_id": str(sentence_id or "").strip(),
+        "sentence_text": str(sentence_text or "").strip(),
+        "citation_index": int(citation_index),
+        "target_id": str(target_id).strip() if target_id else None,
+        "segmentation_model": str(segmentation_model).strip()
+        if segmentation_model
+        else None,
+        "reviewer_uid": str(reviewer_uid or "default").strip() or "default",
+        "confirmed_claims": list(confirmed_claims or []),
+    }
+    payload = {k: v for k, v in payload.items() if v is not None}
+
+    try:
+        response = requests.post(url, json=payload, timeout=DEFAULT_TIMEOUT)
     except requests.RequestException as exc:
         raise RuntimeError(_request_error_message(url, exc)) from exc
     return _parse_response(response) or {}

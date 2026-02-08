@@ -254,6 +254,70 @@ def auto_place_claim_source(
         public_record = attachment_store.public_status(rec["id"]) or {}
         return {"attachment": _serialize_attachment(public_record), "reused": True}
 
+    # Fallback: if another claim already has a ready attachment for the same
+    # citing doc + reference target, clone it rather than requiring the graph
+    # store to have merged the cited ingest id.
+    donor_same_target = None
+    for rec in attachment_store.list_attachments(archived=None, public=False):
+        if str(rec.get("doc_id") or "") != doc_id:
+            continue
+        if str(rec.get("target_id") or "") != str(target_id):
+            continue
+        if attachment_store.is_ready(rec):
+            donor_same_target = rec
+            break
+
+    if donor_same_target:
+        try:
+            source_path = Path(str(donor_same_target.get("file_path") or ""))
+        except Exception:
+            source_path = None
+        if source_path and source_path.exists():
+            filename = donor_same_target.get("filename") or source_path.name
+            try:
+                record = attachment_store.create_attachment(
+                    claim_id=claim_id,
+                    doc_id=doc_id,
+                    local_path=source_path,
+                    filename=filename,
+                    reference_hint={"reference_id": target_id},
+                    citation_index=citation_index,
+                    target_id=target_id,
+                    source_ingest_id=donor_same_target.get("source_ingest_id"),
+                )
+            except FileNotFoundError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+            donor_artifacts = donor_same_target.get("artifacts") or {}
+            dest_dir = Path(app_settings.ATTACHMENT_DIR) / str(record["id"])
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            copied = {}
+            for key in ("tei_xml", "tei_json", "sentences"):
+                src = donor_artifacts.get(key)
+                if not src:
+                    continue
+                src_path = Path(str(src))
+                if not src_path.exists():
+                    continue
+                dst_path = dest_dir / src_path.name
+                shutil.copy2(src_path, dst_path)
+                copied[key] = str(dst_path)
+            if copied:
+                attachment_store.mark_matched(str(record["id"]), artifacts=copied)
+            else:
+                # If we couldn't copy artifacts, enqueue processing like a normal
+                # upload.
+                if not background_state.get_state().get("paused"):
+                    if background_tasks is not None:
+                        background_tasks.add_task(
+                            attachment_pipeline.process_attachment, record["id"]
+                        )
+                    else:
+                        attachment_pipeline.enqueue_processing(record["id"])
+
+            public_record = attachment_store.public_status(record["id"]) or {}
+            return {"attachment": _serialize_attachment(public_record), "reused": False}
+
     cited_ingest_id = graph_store.resolve_reference_to_ingest_id(
         citing_doc_id=doc_id,
         reference_id=str(target_id),

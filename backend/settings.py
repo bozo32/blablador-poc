@@ -208,6 +208,10 @@ class AppSettings(PydanticBaseSettings):
         Path(__file__).parent.parent / "data" / "claims.db",
         description="SQLite path for storing confirmed claim parses",
     )
+    GRAPH_DB_PATH: Path = Field(
+        Path(__file__).parent.parent / "data" / "graph.db",
+        description="SQLite path for the document/claim knowledge graph",
+    )
     COLBERT_DIM: int = Field(128)
     COLBERT_MAXLEN: int = Field(180)
     COLBERT_TOP_K: int = Field(20)

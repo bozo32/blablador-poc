@@ -97,9 +97,39 @@ def _resolve_records(
                 records.append(record)
         return records
 
-    for record in attachment_store.list_attachments(claim_id=claim_id):
-        if attachment_store.is_ready(record):
-            records.append(record)
+    def _claim_aliases(value: str) -> list[str]:
+        canonical = str(value or "").strip()
+        if not canonical:
+            return []
+        aliases = [canonical]
+        parts = canonical.split(":")
+        if (
+            len(parts) == 5
+            and parts[0] == "cite"
+            and parts[1]
+            and str(parts[2]).isdigit()
+            and parts[4]
+        ):
+            legacy = ":".join([parts[0], parts[1], parts[2], parts[4]])
+            if legacy and legacy not in aliases:
+                aliases.append(legacy)
+        return aliases
+
+    seen: set[str] = set()
+    for cid in _claim_aliases(claim_id):
+        for record in attachment_store.list_attachments(claim_id=cid):
+            rid = str(record.get("id") or "")
+            if not rid or rid in seen:
+                continue
+            seen.add(rid)
+            if attachment_store.is_ready(record):
+                # Preserve the requested claim_id so downstream metadata stays
+                # aligned with the evidence run key (even if the attachment was
+                # originally placed on a legacy claim id).
+                if record.get("claim_id") != claim_id:
+                    record = dict(record)
+                    record["claim_id"] = claim_id
+                records.append(record)
     records.sort(key=lambda rec: rec.get("uploaded_at", ""))
     return records
 

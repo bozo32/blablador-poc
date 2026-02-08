@@ -1,6 +1,6 @@
 import os
 
-os.environ["TRANSFORMERS_CACHE"] = str(os.path.expanduser("~/.cache/huggingface"))
+os.environ.setdefault("HF_HOME", str(os.path.expanduser("~/.cache/huggingface")))
 
 import logging
 from functools import lru_cache
@@ -56,11 +56,11 @@ def get_nli_pipeline(model_name: str, *, device: str | None = None):
     tokenizer = AutoTokenizer.from_pretrained(
         model_name,
         use_fast=True,
-        cache_dir=os.environ["TRANSFORMERS_CACHE"],
+        cache_dir=os.environ["HF_HOME"],
     )
     model = AutoModelForSequenceClassification.from_pretrained(
         model_name,
-        cache_dir=os.environ["TRANSFORMERS_CACHE"],
+        cache_dir=os.environ["HF_HOME"],
     )
     chosen = (device or _default_device()).strip().lower()
     torch_device = torch.device("cpu")

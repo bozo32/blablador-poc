@@ -1398,6 +1398,71 @@ def put_evidence_selection(
         stored = evidence_selection_store.selection_store.upsert(claim_id, payload)
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    # Best-effort: mirror evidence selections into the span-first graph as
+    # reviewer-attributed assertions.
+    try:
+        parsed = span_graph_store.parse_cite_claim_id(claim_id)
+        if parsed:
+            reviewer_uid = str(parsed.get("reviewer_uid") or "default")
+            order_index = parsed.get("order_index")
+            ingest_id = str(parsed.get("document_id") or "").strip()
+            cite_idx = int(parsed.get("citation_index") or 0)
+
+            target_id = None
+            source_ingest_id = None
+            evidence_span_id = None
+            if stored.primary is not None:
+                evidence_span_id = stored.primary.span_id
+                record = attachment_store.get_attachment(
+                    stored.primary.attachment_id,
+                    public=False,
+                )
+                if record:
+                    target_id = (record.get("target_id") or "").strip() or None
+                    source_ingest_id = (
+                        record.get("source_ingest_id") or ""
+                    ).strip() or None
+
+            if ingest_id and order_index is not None:
+                span = span_graph_store.find_citation_span(
+                    ingest_id=ingest_id,
+                    citation_index=cite_idx,
+                    target_id=target_id,
+                )
+                if span:
+                    claim_span = span_graph_store.get_claim_span(
+                        span_id=span["span_id"],
+                        order_index=int(order_index),
+                    )
+                    if claim_span:
+                        claim_span_id = str(claim_span["claim_span_id"])
+                        span_graph_store.mark_checked(
+                            claim_span_id=claim_span_id,
+                            reviewer_uid=reviewer_uid,
+                        )
+
+                        if stored.verdict != "none":
+                            evidence_work_id = None
+                            if source_ingest_id:
+                                evidence_work_id = f"ingest:{source_ingest_id}"
+                            elif target_id:
+                                evidence_work_id = f"ref:{ingest_id}:{target_id}"
+                            if evidence_work_id:
+                                span_graph_store.upsert_work(work_id=evidence_work_id)
+                            span_graph_store.create_assertion(
+                                payload={
+                                    "reviewer_uid": reviewer_uid,
+                                    "verdict": stored.verdict,
+                                    "confidence": None,
+                                    "comment": stored.note,
+                                    "claim_span_id": claim_span_id,
+                                    "evidence_span_id": evidence_span_id,
+                                    "evidence_work_id": evidence_work_id,
+                                }
+                            )
+    except Exception:
+        logger.exception("Span graph mirror failed for evidence selection")
     return stored
 
 

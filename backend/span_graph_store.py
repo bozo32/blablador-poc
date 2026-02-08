@@ -2,12 +2,20 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, List, Optional, Sequence
 
 from backend import text_selectors
+
+
+_CITE_CLAIM_RE = re.compile(
+    r"^cite:(?P<doc>[^:]+):(?P<idx>\d+):(?:(?P<reviewer>[^:]+):)?(?P<seg>.+)$"
+)
+_SEG_LETTER_RE = re.compile(r"^\d+([a-z])$", re.IGNORECASE)
+_SEG_NUM_RE = re.compile(r"^(?:seg-)?(\d+)$", re.IGNORECASE)
 
 
 def _now() -> str:
@@ -181,6 +189,19 @@ SCHEMA: List[str] = [
     (
         "CREATE INDEX IF NOT EXISTS idx_assertions_evidence_span "
         "ON assertions(evidence_span_id)"
+    ),
+    """
+    CREATE TABLE IF NOT EXISTS review_marks (
+        claim_span_id TEXT NOT NULL,
+        reviewer_uid TEXT NOT NULL,
+        mark TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(claim_span_id, reviewer_uid, mark)
+    )
+    """,
+    (
+        "CREATE INDEX IF NOT EXISTS idx_review_marks_reviewer "
+        "ON review_marks(reviewer_uid)"
     ),
     """
     CREATE TABLE IF NOT EXISTS neighborhood_runs (
@@ -363,6 +384,66 @@ class SpanGraphStore:
         else:
             data["selector"] = None
         return data
+
+    # --- Review marks (unknown vs not_supported) --------------------------
+
+    def mark_checked(self, *, claim_span_id: str, reviewer_uid: str) -> None:
+        now = _now()
+        with self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO review_marks(claim_span_id, reviewer_uid, mark, updated_at)
+                VALUES(?, ?, 'checked', ?)
+                ON CONFLICT(claim_span_id, reviewer_uid, mark)
+                DO UPDATE SET updated_at=excluded.updated_at
+                """,
+                (str(claim_span_id), str(reviewer_uid), now),
+            )
+
+    def has_checked(self, *, claim_span_id: str, reviewer_uid: str) -> bool:
+        row = self._conn.execute(
+            """
+            SELECT 1 FROM review_marks
+            WHERE claim_span_id=? AND reviewer_uid=? AND mark='checked'
+            LIMIT 1
+            """,
+            (str(claim_span_id), str(reviewer_uid)),
+        ).fetchone()
+        return bool(row)
+
+    # --- Legacy claim_id helpers -----------------------------------------
+
+    def parse_cite_claim_id(self, claim_id: str) -> Optional[dict]:
+        match = _CITE_CLAIM_RE.match(str(claim_id or "").strip())
+        if not match:
+            return None
+        doc_id = (match.group("doc") or "").strip()
+        idx_raw = (match.group("idx") or "").strip()
+        seg_id = (match.group("seg") or "").strip()
+        reviewer = (match.group("reviewer") or "").strip() or "default"
+        try:
+            cite_idx = int(idx_raw)
+        except Exception:
+            return None
+
+        order_index = None
+        m = _SEG_LETTER_RE.match(seg_id)
+        if m:
+            order_index = 1 + (ord(m.group(1).lower()) - ord("a"))
+        else:
+            m2 = _SEG_NUM_RE.match(seg_id)
+            if m2:
+                try:
+                    order_index = int(m2.group(1))
+                except Exception:
+                    order_index = None
+        return {
+            "document_id": doc_id,
+            "citation_index": cite_idx,
+            "reviewer_uid": reviewer,
+            "segment_id": seg_id,
+            "order_index": order_index,
+        }
 
     def _init_schema(self) -> None:
         with self._conn:

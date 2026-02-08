@@ -67,6 +67,7 @@ from frontend.ingestion_api import (
     get_claim_status,
     get_span_bundle,
     compact_span_graph,
+    set_span_cite_role,
     get_citation_context,
     get_citation_graph,
     get_document_body,
@@ -2467,6 +2468,7 @@ def render_evidence_panel() -> None:
                 st.caption(
                     "This uses the new span-first endpoints (span-context/status)."
                 )
+                cache_key = f"span-bundle::{selected_claim}"
                 if st.button(
                     "Fetch span bundle",
                     key=f"fetch-span-bundle::{selected_claim}",
@@ -2477,13 +2479,6 @@ def render_evidence_panel() -> None:
                             str(selected_claim),
                             target_id=tgt,
                         )
-                    except RuntimeError as exc:
-                        st.error(str(exc))
-                        return
-
-                    st.json({"context": ctx})
-
-                    try:
                         claim_status = get_claim_status(
                             get_api_url(),
                             str(selected_claim),
@@ -2491,26 +2486,113 @@ def render_evidence_panel() -> None:
                         )
                     except RuntimeError as exc:
                         st.error(str(exc))
-                        return
-
-                    span_id = (claim_status or {}).get("span_id")
-                    reviewer_uid = (claim_status or {}).get("reviewer_uid")
-                    st.json({"claim_status": claim_status})
-
-                    if not span_id or not reviewer_uid:
-                        st.warning("Missing span_id/reviewer_uid in claim status.")
-                        return
-
-                    try:
-                        bundle = get_span_bundle(
-                            get_api_url(),
-                            str(span_id),
-                            reviewer_uid=str(reviewer_uid),
-                        )
-                    except RuntimeError as exc:
-                        st.error(str(exc))
+                        st.session_state.pop(cache_key, None)
                     else:
-                        st.json({"span_bundle": bundle})
+                        span_id = (claim_status or {}).get("span_id")
+                        reviewer_uid = (claim_status or {}).get("reviewer_uid")
+                        if not span_id or not reviewer_uid:
+                            st.warning("Missing span_id/reviewer_uid in claim status.")
+                            st.session_state.pop(cache_key, None)
+                        else:
+                            try:
+                                bundle = get_span_bundle(
+                                    get_api_url(),
+                                    str(span_id),
+                                    reviewer_uid=str(reviewer_uid),
+                                )
+                            except RuntimeError as exc:
+                                st.error(str(exc))
+                                st.session_state.pop(cache_key, None)
+                            else:
+                                st.session_state[cache_key] = {
+                                    "context": ctx,
+                                    "claim_status": claim_status,
+                                    "span_bundle": bundle,
+                                }
+
+                cached = st.session_state.get(cache_key)
+                if isinstance(cached, dict) and cached.get("span_bundle"):
+                    bundle = cached.get("span_bundle") or {}
+                    ctx = cached.get("context") or {}
+                    claim_status = cached.get("claim_status") or {}
+                    _span_status = (bundle.get("span_status") or {}).get("status")
+                    st.caption(f"Span status: {_span_status}")
+                    st.json({"context": ctx, "claim_status": claim_status})
+
+                    cites = bundle.get("cites") or []
+                    reviewer_uid = str(bundle.get("reviewer_uid") or "default")
+                    span_id = (bundle.get("span") or {}).get("span_id")
+                    if cites and span_id:
+                        st.markdown("**Citation roles**")
+                        role_options = [
+                            "evidentiary",
+                            "background",
+                            "reputational",
+                            "unknown",
+                        ]
+                        for entry in cites:
+                            cited_work_id = entry.get("cited_work_id")
+                            current = entry.get("role") or "unknown"
+                            if not cited_work_id:
+                                continue
+                            key = (
+                                f"cite-role::{span_id}::{cited_work_id}"
+                                f"::{reviewer_uid}"
+                            )
+                            idx = (
+                                role_options.index(current)
+                                if current in role_options
+                                else 3
+                            )
+                            st.selectbox(
+                                str(cited_work_id),
+                                role_options,
+                                index=idx,
+                                key=key,
+                            )
+
+                        if st.button(
+                            "Save roles",
+                            key=f"save-cite-roles::{span_id}::{reviewer_uid}",
+                        ):
+                            saved = 0
+                            for entry in cites:
+                                cited_work_id = entry.get("cited_work_id")
+                                if not cited_work_id:
+                                    continue
+                                key = (
+                                    f"cite-role::{span_id}::{cited_work_id}"
+                                    f"::{reviewer_uid}"
+                                )
+                                role = st.session_state.get(key)
+                                if role not in role_options:
+                                    continue
+                                try:
+                                    set_span_cite_role(
+                                        get_api_url(),
+                                        span_id=str(span_id),
+                                        cited_work_id=str(cited_work_id),
+                                        reviewer_uid=reviewer_uid,
+                                        role=str(role),
+                                    )
+                                except RuntimeError as exc:
+                                    st.error(str(exc))
+                                    return
+                                saved += 1
+                            st.success(f"Saved {saved} role(s).")
+                            # Refresh bundle.
+                            try:
+                                refreshed = get_span_bundle(
+                                    get_api_url(),
+                                    str(span_id),
+                                    reviewer_uid=str(reviewer_uid),
+                                )
+                            except RuntimeError:
+                                return
+                            st.session_state[cache_key]["span_bundle"] = refreshed
+
+                    with st.expander("Raw bundle JSON", expanded=False):
+                        st.json(bundle)
 
         def _render_judgment_controls() -> None:
             judgment = j_payload if isinstance(j_payload, dict) else {}

@@ -1,6 +1,7 @@
 from typing import Any, Dict, List, Optional, Union
 
 import requests
+import urllib.parse
 
 # Extraction (GROBID) can take >30s on first run.
 DEFAULT_TIMEOUT = 180
@@ -270,6 +271,31 @@ def get_span_bundle(
     }
     try:
         response = requests.get(url, params=params, timeout=DEFAULT_TIMEOUT)
+    except requests.RequestException as exc:
+        raise RuntimeError(_request_error_message(url, exc)) from exc
+    return _parse_response(response) or {}
+
+
+def set_span_cite_role(
+    api_url: str,
+    *,
+    span_id: str,
+    cited_work_id: str,
+    reviewer_uid: str,
+    role: str,
+) -> dict:
+    span_id = str(span_id or "").strip()
+    cited_work_id = str(cited_work_id or "").strip()
+    if not span_id or not cited_work_id:
+        raise RuntimeError("span_id and cited_work_id are required")
+    quoted = urllib.parse.quote(cited_work_id, safe="")
+    url = f"{api_url.rstrip('/')}/spans/{span_id}/cites/{quoted}/role"
+    payload = {
+        "reviewer_uid": str(reviewer_uid or "default").strip() or "default",
+        "role": role,
+    }
+    try:
+        response = requests.put(url, json=payload, timeout=DEFAULT_TIMEOUT)
     except requests.RequestException as exc:
         raise RuntimeError(_request_error_message(url, exc)) from exc
     return _parse_response(response) or {}

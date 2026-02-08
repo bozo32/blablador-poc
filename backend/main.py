@@ -842,9 +842,15 @@ def get_span_status(span_id: str, reviewer_uid: str = "default"):
     "/spans/{span_id}/bundle",
     response_model=schemas.SpanBundleResponse,
 )
-def get_span_bundle(span_id: str, reviewer_uid: str = "default"):
+def get_span_bundle(
+    span_id: str,
+    reviewer_uid: str = "default",
+    include_history: bool = False,
+):
     bundle = span_graph_store.span_bundle(
-        span_id=str(span_id), reviewer_uid=str(reviewer_uid)
+        span_id=str(span_id),
+        reviewer_uid=str(reviewer_uid),
+        include_history=bool(include_history),
     )
     if not bundle:
         raise HTTPException(status_code=404, detail="Span not found")

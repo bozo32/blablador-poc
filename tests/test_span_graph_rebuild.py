@@ -346,6 +346,18 @@ def test_claim_span_status_unknown_vs_not_supported(tmp_path):
     assert s2["status"] == "not_supported"
     assert s2["checked"] is True
 
+    store.upsert_selection_assertion(
+        claim_id="cite:doc-1:1:alice:10a",
+        reviewer_uid="alice",
+        verdict="support",
+        claim_span_id=claim_span_id,
+        evidence_span_id=None,
+        evidence_work_id="ref:x",
+        comment=None,
+    )
+    s3 = store.claim_span_status(claim_span_id=claim_span_id, reviewer_uid="alice")
+    assert s3["status"] == "supported"
+
 
 def test_claim_span_context_endpoint(tmp_path, monkeypatch):
     span_store = SpanGraphStore(tmp_path / "graph.db")
@@ -467,7 +479,7 @@ def test_span_bundle_endpoint(tmp_path, monkeypatch):
 
     bundle = client.get(
         f"/spans/{span_id}/bundle",
-        params={"reviewer_uid": "alice"},
+        params={"reviewer_uid": "alice", "include_history": "true"},
     )
     assert bundle.status_code == 200
     payload = bundle.json()
@@ -476,6 +488,8 @@ def test_span_bundle_endpoint(tmp_path, monkeypatch):
     assert len(payload["cites"]) == 1
     assert payload["cites"][0]["role"] == "evidentiary"
     assert len(payload["claim_spans"]) == 1
+    assert payload["include_history"] is True
+    assert payload["claim_spans"][0]["history_n_total"] >= 0
 
 
 def test_compact_assertions_removes_duplicates(tmp_path):

@@ -2468,6 +2468,14 @@ def render_evidence_panel() -> None:
                 st.caption(
                     "This uses the new span-first endpoints (span-context/status)."
                 )
+
+                show_history_key = f"span-bundle-history::{selected_claim}"
+                st.toggle(
+                    "Include assertion history in bundle",
+                    key=show_history_key,
+                    help="Adds history_n_total per claimspan (slower).",
+                )
+
                 cache_key = f"span-bundle::{selected_claim}"
                 if st.button(
                     "Fetch span bundle",
@@ -2499,6 +2507,9 @@ def render_evidence_panel() -> None:
                                     get_api_url(),
                                     str(span_id),
                                     reviewer_uid=str(reviewer_uid),
+                                    include_history=bool(
+                                        st.session_state.get(show_history_key)
+                                    ),
                                 )
                             except RuntimeError as exc:
                                 st.error(str(exc))
@@ -2586,6 +2597,9 @@ def render_evidence_panel() -> None:
                                     get_api_url(),
                                     str(span_id),
                                     reviewer_uid=str(reviewer_uid),
+                                    include_history=bool(
+                                        st.session_state.get(show_history_key)
+                                    ),
                                 )
                             except RuntimeError:
                                 return

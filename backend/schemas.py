@@ -1024,6 +1024,8 @@ class ClaimSpanSummaryPayload(BaseModel):
     checked: bool = False
     n_support: int = 0
     n_contradict: int = 0
+    current: Optional[AssertionPayload] = None
+    history_n_total: int = 0
 
 
 class SpanBundleResponse(BaseModel):
@@ -1032,6 +1034,7 @@ class SpanBundleResponse(BaseModel):
     span_status: SpanStatusResponse
     cites: List[SpanCitePayload] = Field(default_factory=list)
     claim_spans: List[ClaimSpanSummaryPayload] = Field(default_factory=list)
+    include_history: bool = False
 
 
 class OkResponse(BaseModel):

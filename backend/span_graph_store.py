@@ -771,31 +771,56 @@ class SpanGraphStore:
     # --- Status computation ------------------------------------------------
 
     def claim_span_status(self, *, claim_span_id: str, reviewer_uid: str) -> dict:
-        """Compute the v1 status lattice for a claim span and reviewer."""
+        """Compute the v1 status lattice for a claim span and reviewer.
+
+        The current evidence selection is represented as a deterministic `sel:*`
+        assertion. Non-selection assertions (manual) also contribute.
+        """
         reviewer_uid = str(reviewer_uid or "").strip() or "default"
         rows = self.list_assertions_for_claim_span(
             claim_span_id=str(claim_span_id),
             reviewer_uid=reviewer_uid,
         )
+        current = self.get_current_selection_assertion(
+            claim_span_id=str(claim_span_id),
+            reviewer_uid=reviewer_uid,
+        )
+
+        non_selection = [
+            r for r in rows if not str(r.get("assertion_id") or "").startswith("sel:")
+        ]
+
         support_pairs = {
-            (str(r.get("evidence_span_id") or ""), str(r.get("evidence_work_id") or ""))
-            for r in rows
+            (
+                str(r.get("evidence_span_id") or ""),
+                str(r.get("evidence_work_id") or ""),
+            )
+            for r in non_selection
             if (r.get("verdict") == "support")
         }
         contra_pairs = {
-            (str(r.get("evidence_span_id") or ""), str(r.get("evidence_work_id") or ""))
-            for r in rows
+            (
+                str(r.get("evidence_span_id") or ""),
+                str(r.get("evidence_work_id") or ""),
+            )
+            for r in non_selection
             if (r.get("verdict") == "contradict")
         }
         support_pairs.discard(("", ""))
         contra_pairs.discard(("", ""))
 
-        n_support = len(support_pairs)
-        n_contra = len(contra_pairs)
-        checked = self.has_checked(
-            claim_span_id=str(claim_span_id), reviewer_uid=reviewer_uid
+        n_support = len(support_pairs) + (
+            1 if (current or {}).get("verdict") == "support" else 0
         )
-        checked = checked or bool(rows)
+        n_contra = len(contra_pairs) + (
+            1 if (current or {}).get("verdict") == "contradict" else 0
+        )
+
+        checked = self.has_checked(
+            claim_span_id=str(claim_span_id),
+            reviewer_uid=reviewer_uid,
+        )
+        checked = checked or bool(rows) or bool(current)
 
         if n_support and n_contra:
             status = "contested"
@@ -862,7 +887,13 @@ class SpanGraphStore:
             "n_unknown": int(counts["unknown"]),
         }
 
-    def span_bundle(self, *, span_id: str, reviewer_uid: str) -> Optional[dict]:
+    def span_bundle(
+        self,
+        *,
+        span_id: str,
+        reviewer_uid: str,
+        include_history: bool = False,
+    ) -> Optional[dict]:
         span = self.get_span(str(span_id))
         if not span:
             return None
@@ -890,6 +921,18 @@ class SpanGraphStore:
                 claim_span_id=cs_id,
                 reviewer_uid=reviewer_uid,
             )
+            current = self.get_current_selection_assertion(
+                claim_span_id=cs_id,
+                reviewer_uid=reviewer_uid,
+            )
+            history_n_total = 0
+            if include_history:
+                history_n_total = len(
+                    self.list_assertions_for_claim_span(
+                        claim_span_id=cs_id,
+                        reviewer_uid=reviewer_uid,
+                    )
+                )
             claim_spans_payload.append(
                 {
                     "claim_span_id": cs_id,
@@ -899,6 +942,8 @@ class SpanGraphStore:
                     "checked": bool(status.get("checked")),
                     "n_support": int(status.get("n_support") or 0),
                     "n_contradict": int(status.get("n_contradict") or 0),
+                    "current": current,
+                    "history_n_total": int(history_n_total),
                 }
             )
         claim_spans_payload.sort(key=lambda item: int(item.get("order_index") or 0))
@@ -912,6 +957,7 @@ class SpanGraphStore:
             ),
             "cites": cites,
             "claim_spans": claim_spans_payload,
+            "include_history": bool(include_history),
         }
 
     def _init_schema(self) -> None:
@@ -1351,3 +1397,23 @@ class SpanGraphStore:
                 (str(claim_span_id),),
             ).fetchall()
         return [dict(r) for r in rows]
+
+    def get_current_selection_assertion(
+        self, *, claim_span_id: str, reviewer_uid: str
+    ) -> Optional[dict]:
+        row = self._conn.execute(
+            """
+            SELECT assertion_id, reviewer_uid, verdict, confidence, comment,
+                   claim_atom_id, claim_span_id, evidence_span_id, evidence_work_id,
+                   source, source_key,
+                   created_at
+            FROM assertions
+            WHERE claim_span_id=?
+              AND reviewer_uid=?
+              AND assertion_id LIKE 'sel:%'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (str(claim_span_id), str(reviewer_uid)),
+        ).fetchone()
+        return dict(row) if row else None

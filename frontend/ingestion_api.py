@@ -264,10 +264,12 @@ def get_span_bundle(
     span_id: str,
     *,
     reviewer_uid: str = "default",
+    include_history: bool = False,
 ) -> dict:
     url = f"{api_url.rstrip('/')}/spans/{span_id}/bundle"
     params: Dict[str, Union[int, str]] = {
-        "reviewer_uid": str(reviewer_uid or "default")
+        "reviewer_uid": str(reviewer_uid or "default"),
+        "include_history": "true" if include_history else "false",
     }
     try:
         response = requests.get(url, params=params, timeout=DEFAULT_TIMEOUT)

@@ -376,6 +376,27 @@ class SpanGraphStore:
                 )["n"]
             )
 
+        selection_dupes = 0
+        if aggressive:
+            selection_dupes = int(
+                (
+                    self._conn.execute(
+                        """
+                        SELECT COUNT(1) AS n
+                        FROM assertions
+                        WHERE assertion_id LIKE 'sel:%'
+                          AND rowid NOT IN (
+                            SELECT MAX(rowid)
+                            FROM assertions
+                            WHERE assertion_id LIKE 'sel:%'
+                            GROUP BY reviewer_uid, claim_span_id
+                          )
+                        """
+                    ).fetchone()
+                    or {}
+                )["n"]
+            )
+
         if not dry_run:
             with self._conn:
                 self._conn.execute(
@@ -395,6 +416,18 @@ class SpanGraphStore:
                     """
                 )
                 if aggressive:
+                    self._conn.execute(
+                        """
+                        DELETE FROM assertions
+                        WHERE assertion_id LIKE 'sel:%'
+                          AND rowid NOT IN (
+                            SELECT MAX(rowid)
+                            FROM assertions
+                            WHERE assertion_id LIKE 'sel:%'
+                            GROUP BY reviewer_uid, claim_span_id
+                          )
+                        """
+                    )
                     self._conn.execute(
                         """
                         DELETE FROM assertions
@@ -424,9 +457,10 @@ class SpanGraphStore:
             "after": after,
             "dedupe_candidates": dedupe_count,
             "legacy_candidates": legacy_count,
+            "selection_dupe_candidates": selection_dupes,
             "deleted": max(0, before - after)
             if not dry_run
-            else (dedupe_count + legacy_count),
+            else (dedupe_count + legacy_count + selection_dupes),
         }
 
     # --- Indexing adapters ------------------------------------------------
@@ -1240,17 +1274,10 @@ class SpanGraphStore:
         """Idempotently persist the current selection verdict as an assertion.
 
         Evidence selections are "current state" (one per claim). We write them
-        as a single upserted assertion keyed by (claim_id, reviewer_uid, claim_span_id)
+        as a single upserted assertion keyed by (reviewer_uid, claim_span_id)
         to avoid unbounded duplicate rows.
         """
-        key = "|".join(
-            [
-                "selection",
-                str(claim_id),
-                str(reviewer_uid),
-                str(claim_span_id),
-            ]
-        )
+        key = "|".join(["selection", str(reviewer_uid), str(claim_span_id)])
         assertion_id = f"sel:{_sha256(key)}"
         now = _now()
         with self._conn:

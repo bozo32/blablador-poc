@@ -286,6 +286,24 @@ def test_evidence_selection_mirrors_to_assertion(tmp_path, monkeypatch):
     )
     assert sel2.status_code == 200
 
+    # Third save under a different legacy claim id that maps to the same
+    # claim span should still replace the same selection assertion.
+    claim_id_alt = "cite:doc-1:9:alice:seg-1"
+    sel3 = client.put(
+        f"/claims/{claim_id_alt}/evidence/selection",
+        json={
+            "verdict": "support",
+            "primary": {
+                "candidate_id": "cand-1",
+                "attachment_id": "att-1",
+                "span_id": "evspan-1",
+            },
+            "secondary": [],
+            "note": "ok",
+        },
+    )
+    assert sel3.status_code == 200
+
     span = span_store.find_citation_span(
         ingest_id="doc-1", citation_index=9, target_id="b4"
     )
@@ -494,3 +512,44 @@ def test_compact_assertions_removes_duplicates(tmp_path):
     result = store.compact_assertions(dry_run=False, aggressive=False)
     assert result["after"] == result["before"] - 1
     assert len(store.list_assertions_for_claim_span(claim_span_id=cs)) == 1
+
+
+def test_compact_assertions_prunes_selection_duplicates(tmp_path):
+    store = SpanGraphStore(tmp_path / "graph.db")
+    span = store.upsert_span(
+        kind="citation_window",
+        selector={"exact": "x", "prefix": None, "suffix": None},
+        window_fingerprint="fp",
+        ingest_id="doc-1",
+    )
+    cs = store.upsert_claim_spans(
+        span_id=str(span["span_id"]),
+        items=[{"order_index": 1, "selector": None}],
+    )[0]["claim_span_id"]
+
+    store.upsert_selection_assertion(
+        claim_id="cite:doc-1:1:alice:10a",
+        reviewer_uid="alice",
+        verdict="support",
+        claim_span_id=cs,
+        evidence_span_id=None,
+        evidence_work_id="ref:x",
+        comment=None,
+    )
+    # Simulate an older build that wrote a second selection assertion row.
+    store.create_assertion(
+        payload={
+            "assertion_id": "sel:old",
+            "reviewer_uid": "alice",
+            "verdict": "support",
+            "claim_span_id": cs,
+            "evidence_work_id": "ref:x",
+            "source": "selection",
+            "source_key": "cite:doc-1:1:alice:seg-1",
+        }
+    )
+
+    before = store._conn.execute("SELECT COUNT(1) AS n FROM assertions").fetchone()["n"]
+    assert before == 2
+    result = store.compact_assertions(dry_run=False, aggressive=True)
+    assert result["after"] == 1

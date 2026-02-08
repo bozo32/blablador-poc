@@ -1050,6 +1050,7 @@ class SpanGraphCompactResponse(BaseModel):
     after: int
     dedupe_candidates: int
     legacy_candidates: int
+    selection_dupe_candidates: int = 0
     deleted: int
 
 

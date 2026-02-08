@@ -1057,6 +1057,37 @@ class SpanGraphCompactResponse(BaseModel):
     deleted: int
 
 
+class NeighborhoodSearchRequest(BaseModel):
+    span_id: str
+    reviewer_uid: str = "default"
+    max_per_seed: int = Field(default=25, ge=1, le=200)
+    min_bib_intersection: int = Field(default=1, ge=1, le=1000)
+    query_text: Optional[str] = None
+    min_abstract_score: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
+class NeighborhoodCandidatePayload(BaseModel):
+    work_id: str
+    bib_intersection: int
+    abstract_score: Optional[float] = None
+    rank: int
+    title: Optional[str] = None
+    doi: Optional[str] = None
+    year: Optional[str] = None
+
+
+class NeighborhoodSearchResponse(BaseModel):
+    run_id: str
+    span_id: str
+    reviewer_uid: str
+    candidates: List[NeighborhoodCandidatePayload] = Field(default_factory=list)
+
+
+class NeighborhoodRunResponse(BaseModel):
+    run: Dict[str, Any]
+    candidates: List[NeighborhoodCandidatePayload] = Field(default_factory=list)
+
+
 class ClaimGraphNode(BaseModel):
     id: str
     kind: str

@@ -6,6 +6,76 @@ import backend.main as backend_main
 from backend.span_graph_store import SpanGraphStore
 
 
+def test_neighborhood_search_endpoint(tmp_path, monkeypatch):
+    store = SpanGraphStore(tmp_path / "graph.db")
+    monkeypatch.setattr(backend_main, "span_graph_store", store)
+    client = TestClient(backend_main.app)
+
+    created = client.post(
+        "/spans/upsert",
+        json={
+            "kind": "citation_window",
+            "selector": {"exact": "x", "prefix": None, "suffix": None},
+            "window_fingerprint": "fp",
+            "ingest_id": "doc-1",
+        },
+    )
+    span_id = created.json()["span"]["span_id"]
+    client.post(
+        f"/spans/{span_id}/cites",
+        json={
+            "cites": [
+                {
+                    "cited_work_id": "https://doi.org/10.1234/example",
+                    "reference_id": "b4",
+                    "citation_index": 9,
+                }
+            ]
+        },
+    )
+
+    def _fake_cited_by(identifier: str, max_nodes: int = 25):
+        return [
+            {
+                "id": "https://openalex.org/W1",
+                "display_name": "Candidate one",
+                "doi": "https://doi.org/10.9999/one",
+                "publication_year": 2020,
+            },
+            {
+                "id": "https://openalex.org/W2",
+                "display_name": "Candidate two",
+                "doi": "https://doi.org/10.9999/two",
+                "publication_year": 2021,
+            },
+        ]
+
+    monkeypatch.setattr(backend_main.citation_graph, "fetch_cited_by", _fake_cited_by)
+
+    resp = client.post(
+        "/neighborhood/search",
+        json={
+            "span_id": span_id,
+            "reviewer_uid": "alice",
+            "max_per_seed": 10,
+            "min_bib_intersection": 1,
+            "query_text": "candidate",
+            "min_abstract_score": 0.0,
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["span_id"] == span_id
+    assert data["run_id"].startswith("nbr:")
+    assert len(data["candidates"]) == 2
+
+    run = client.get(f"/neighborhood/{data['run_id']}")
+    assert run.status_code == 200
+    payload = run.json()
+    assert payload["run"]["run_id"] == data["run_id"]
+    assert len(payload["candidates"]) == 2
+
+
 def test_span_claimspan_assertion_roundtrip(tmp_path, monkeypatch):
     store = SpanGraphStore(tmp_path / "graph.db")
     monkeypatch.setattr(backend_main, "span_graph_store", store)

@@ -15,7 +15,7 @@ import logging
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any, Dict, Literal, Optional
 
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -866,6 +866,164 @@ def compact_span_graph(payload: schemas.SpanGraphCompactRequest):
         dry_run=bool(payload.dry_run),
         aggressive=bool(payload.aggressive),
     )
+
+
+def _lexical_similarity(query: str, text: str) -> float:
+    q = {t for t in re.findall(r"[a-z0-9]{3,}", (query or "").lower())}
+    h = {t for t in re.findall(r"[a-z0-9]{3,}", (text or "").lower())}
+    if not q or not h:
+        return 0.0
+    inter = len(q & h)
+    denom = max(1, min(len(q), len(h)))
+    return max(0.0, min(1.0, inter / denom))
+
+
+@app.post(
+    "/neighborhood/search",
+    response_model=schemas.NeighborhoodSearchResponse,
+)
+def neighborhood_search(payload: schemas.NeighborhoodSearchRequest):
+    span_id = str(payload.span_id or "").strip()
+    reviewer_uid = str(payload.reviewer_uid or "default").strip() or "default"
+    bundle = span_graph_store.span_bundle(
+        span_id=span_id,
+        reviewer_uid=reviewer_uid,
+        include_history=False,
+    )
+    if not bundle:
+        raise HTTPException(status_code=404, detail="Span not found")
+    seeds = [
+        c.get("cited_work_id")
+        for c in (bundle.get("cites") or [])
+        if c.get("cited_work_id")
+    ]
+    seeds = [str(s).strip() for s in seeds if str(s).strip()]
+    if not seeds:
+        run_id = span_graph_store.create_neighborhood_run(
+            created_by=reviewer_uid,
+            context_span_id=span_id,
+            method="openalex_cited_by_intersection",
+            params=payload.model_dump(),
+        )
+        return {
+            "run_id": run_id,
+            "span_id": span_id,
+            "reviewer_uid": reviewer_uid,
+            "candidates": [],
+        }
+
+    max_per_seed = int(payload.max_per_seed)
+    counts: Dict[str, int] = {}
+    meta: Dict[str, Dict[str, Any]] = {}
+    for seed in seeds:
+        try:
+            citing = citation_graph.fetch_cited_by(seed, max_nodes=max_per_seed)
+        except Exception:
+            continue
+        for work in citing:
+            work_id = citation_graph._openalex_id(work.get("id")) or work.get("id")
+            if not work_id:
+                continue
+            counts[work_id] = counts.get(work_id, 0) + 1
+            meta.setdefault(work_id, work)
+
+    # Score + filter.
+    query_text = (payload.query_text or "").strip()
+    scored = []
+    for work_id, bib in counts.items():
+        if bib < int(payload.min_bib_intersection):
+            continue
+        work = meta.get(work_id) or {}
+        title = work.get("display_name") or work.get("title") or ""
+        abstract = citation_graph.extract_abstract(work) or ""
+        sim = (
+            _lexical_similarity(query_text, f"{title} {abstract}")
+            if query_text
+            else 0.0
+        )
+        if query_text and sim < float(payload.min_abstract_score):
+            continue
+        scored.append((bib, sim, work_id, work, title))
+    scored.sort(key=lambda row: (-row[0], -row[1], row[2]))
+
+    candidates_payload = []
+    for rank, (bib, sim, work_id, work, title) in enumerate(scored[:200], start=1):
+        doi = work.get("doi")
+        year = work.get("publication_year")
+        span_graph_store.upsert_work(
+            work_id=str(work_id),
+            doi=str(doi) if doi else None,
+            openalex_id=str(work_id),
+            title=str(title) if title else None,
+            year=str(year) if year else None,
+            abstract=citation_graph.extract_abstract(work),
+            abstract_source="openalex",
+        )
+        candidates_payload.append(
+            {
+                "work_id": str(work_id),
+                "bib_intersection": int(bib),
+                "abstract_score": float(sim) if query_text else None,
+                "rank": int(rank),
+                "title": str(title) if title else None,
+                "doi": str(doi) if doi else None,
+                "year": str(year) if year else None,
+            }
+        )
+
+    run_id = span_graph_store.create_neighborhood_run(
+        created_by=reviewer_uid,
+        context_span_id=span_id,
+        method="openalex_cited_by_intersection",
+        params=payload.model_dump(),
+    )
+    span_graph_store.add_neighborhood_candidates(
+        run_id=run_id,
+        candidates=[
+            {
+                "work_id": c["work_id"],
+                "bib_intersection": c["bib_intersection"],
+                "abstract_score": c.get("abstract_score"),
+                "rank": c["rank"],
+                "detail": {},
+            }
+            for c in candidates_payload
+        ],
+    )
+    return {
+        "run_id": run_id,
+        "span_id": span_id,
+        "reviewer_uid": reviewer_uid,
+        "candidates": candidates_payload,
+    }
+
+
+@app.get(
+    "/neighborhood/{run_id}",
+    response_model=schemas.NeighborhoodRunResponse,
+)
+def get_neighborhood_run(run_id: str, limit: int = 50):
+    run = span_graph_store.get_neighborhood_run(run_id=str(run_id))
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    candidates = span_graph_store.list_neighborhood_candidates(
+        run_id=str(run_id), limit=int(limit)
+    )
+    out = []
+    for c in candidates:
+        work = span_graph_store.get_work(str(c.get("candidate_work_id"))) or {}
+        out.append(
+            {
+                "work_id": str(c.get("candidate_work_id")),
+                "bib_intersection": int(c.get("bib_intersection") or 0),
+                "abstract_score": c.get("abstract_score"),
+                "rank": int(c.get("rank") or 0),
+                "title": work.get("title"),
+                "doi": work.get("doi"),
+                "year": work.get("year"),
+            }
+        )
+    return {"run": run, "candidates": out}
 
 
 @app.get(

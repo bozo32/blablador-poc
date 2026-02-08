@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, List, Optional, Sequence
 
+import uuid
+
 from backend import text_selectors
 
 
@@ -462,6 +464,143 @@ class SpanGraphStore:
             if not dry_run
             else (dedupe_count + legacy_count + selection_dupes),
         }
+
+    # --- Neighborhood runs -------------------------------------------------
+
+    def create_neighborhood_run(
+        self,
+        *,
+        created_by: str,
+        context_span_id: Optional[str],
+        method: str,
+        params: dict,
+    ) -> str:
+        run_id = f"nbr:{uuid.uuid4()}"
+        now = _now()
+        with self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO neighborhood_runs(
+                    run_id, created_by, context_work_id, context_span_id,
+                    context_claim_span_id, context_claim_atom_id,
+                    method, params_json, created_at
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    str(created_by or "system"),
+                    None,
+                    str(context_span_id) if context_span_id else None,
+                    None,
+                    None,
+                    str(method or "unknown"),
+                    _json_dumps(params or {}),
+                    now,
+                ),
+            )
+        return run_id
+
+    def add_neighborhood_candidates(
+        self, *, run_id: str, candidates: List[dict]
+    ) -> int:
+        now = _now()
+        inserted = 0
+        with self._conn:
+            for idx, cand in enumerate(candidates or []):
+                work_id = str((cand or {}).get("work_id") or "").strip()
+                if not work_id:
+                    continue
+                bib = (cand or {}).get("bib_intersection")
+                score = (cand or {}).get("abstract_score")
+                try:
+                    bib_val = int(bib) if bib is not None else None
+                except Exception:
+                    bib_val = None
+                try:
+                    score_val = float(score) if score is not None else None
+                except Exception:
+                    score_val = None
+                rank = (cand or {}).get("rank")
+                try:
+                    rank_val = int(rank) if rank is not None else (idx + 1)
+                except Exception:
+                    rank_val = idx + 1
+
+                detail = (cand or {}).get("detail")
+                detail_json = _json_dumps(detail) if isinstance(detail, dict) else None
+
+                self._conn.execute(
+                    """
+                    INSERT OR REPLACE INTO neighborhood_candidates(
+                        run_id, candidate_work_id, bib_intersection, abstract_score,
+                        rank, detail_json
+                    ) VALUES(?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(run_id),
+                        work_id,
+                        bib_val,
+                        score_val,
+                        rank_val,
+                        detail_json,
+                    ),
+                )
+                inserted += 1
+
+        # Touch run timestamp for traceability.
+        self._conn.execute(
+            "UPDATE neighborhood_runs SET created_at=? WHERE run_id=?",
+            (now, str(run_id)),
+        )
+        return inserted
+
+    def get_neighborhood_run(self, *, run_id: str) -> Optional[dict]:
+        row = self._conn.execute(
+            """
+            SELECT run_id, created_by, context_work_id, context_span_id,
+                   context_claim_span_id, context_claim_atom_id,
+                   method, params_json, created_at
+            FROM neighborhood_runs
+            WHERE run_id=?
+            """,
+            (str(run_id),),
+        ).fetchone()
+        if not row:
+            return None
+        data = dict(row)
+        try:
+            data["params"] = json.loads(data.pop("params_json") or "{}")
+        except Exception:
+            data["params"] = {}
+        return data
+
+    def list_neighborhood_candidates(
+        self, *, run_id: str, limit: int = 50
+    ) -> List[dict]:
+        rows = self._conn.execute(
+            """
+            SELECT run_id, candidate_work_id, bib_intersection, abstract_score,
+                   rank, detail_json
+            FROM neighborhood_candidates
+            WHERE run_id=?
+            ORDER BY rank ASC
+            LIMIT ?
+            """,
+            (str(run_id), int(limit)),
+        ).fetchall()
+        out: List[dict] = []
+        for row in rows:
+            data = dict(row)
+            raw = data.pop("detail_json", None)
+            if raw:
+                try:
+                    data["detail"] = json.loads(raw)
+                except Exception:
+                    data["detail"] = None
+            else:
+                data["detail"] = None
+            out.append(data)
+        return out
 
     # --- Indexing adapters ------------------------------------------------
 

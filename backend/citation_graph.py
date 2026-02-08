@@ -84,6 +84,38 @@ def _fetch_cited_by(work: Dict[str, Any], max_nodes: int) -> List[Dict[str, Any]
     return results
 
 
+def extract_abstract(work: Dict[str, Any]) -> Optional[str]:
+    inverted = work.get("abstract_inverted_index")
+    if not isinstance(inverted, dict) or not inverted:
+        return None
+    positions: Dict[int, str] = {}
+    max_pos = -1
+    for token, pos_list in inverted.items():
+        if not isinstance(token, str) or not isinstance(pos_list, list):
+            continue
+        for pos in pos_list:
+            try:
+                idx = int(pos)
+            except Exception:
+                continue
+            positions[idx] = token
+            if idx > max_pos:
+                max_pos = idx
+    if max_pos < 0:
+        return None
+    words = [""] * (max_pos + 1)
+    for idx, token in positions.items():
+        if 0 <= idx < len(words):
+            words[idx] = token
+    text = " ".join(w for w in words if w).strip()
+    return text or None
+
+
+def fetch_cited_by(identifier: str, max_nodes: int = 25) -> List[Dict[str, Any]]:
+    work = fetch_work(identifier)
+    return _fetch_cited_by(work, max_nodes=max_nodes)
+
+
 def _work_node(work: Dict[str, Any]) -> Dict[str, Any]:
     work_id = _openalex_id(work.get("id")) or work.get("id") or "unknown"
     return {

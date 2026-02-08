@@ -1007,6 +1007,31 @@ class ClaimStatusResponse(BaseModel):
     checked: bool = False
 
 
+class SpanCitePayload(BaseModel):
+    cited_work_id: str
+    reference_id: Optional[str] = None
+    citation_index: Optional[int] = None
+    role: SpanCiteRole = "unknown"
+
+
+class ClaimSpanSummaryPayload(BaseModel):
+    claim_span_id: str
+    span_id: str
+    order_index: int
+    status: SpanStatus
+    checked: bool = False
+    n_support: int = 0
+    n_contradict: int = 0
+
+
+class SpanBundleResponse(BaseModel):
+    span: SpanPayload
+    reviewer_uid: str
+    span_status: SpanStatusResponse
+    cites: List[SpanCitePayload] = Field(default_factory=list)
+    claim_spans: List[ClaimSpanSummaryPayload] = Field(default_factory=list)
+
+
 class OkResponse(BaseModel):
     ok: bool = True
 

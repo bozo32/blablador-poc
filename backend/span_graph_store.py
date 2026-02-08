@@ -633,6 +633,58 @@ class SpanGraphStore:
             "n_unknown": int(counts["unknown"]),
         }
 
+    def span_bundle(self, *, span_id: str, reviewer_uid: str) -> Optional[dict]:
+        span = self.get_span(str(span_id))
+        if not span:
+            return None
+        reviewer_uid = str(reviewer_uid or "").strip() or "default"
+
+        cites = self.list_span_cites(span_id=str(span_id))
+        for entry in cites:
+            cited_work_id = str(entry.get("cited_work_id") or "").strip()
+            if not cited_work_id:
+                continue
+            role = self.get_span_cite_role(
+                span_id=str(span_id),
+                cited_work_id=cited_work_id,
+                reviewer_uid=reviewer_uid,
+            )
+            entry["role"] = role or "unknown"
+
+        claim_spans = self.list_claim_spans_for_span(span_id=str(span_id))
+        claim_spans_payload: List[dict] = []
+        for cs in claim_spans:
+            cs_id = str(cs.get("claim_span_id") or "").strip()
+            if not cs_id:
+                continue
+            status = self.claim_span_status(
+                claim_span_id=cs_id,
+                reviewer_uid=reviewer_uid,
+            )
+            claim_spans_payload.append(
+                {
+                    "claim_span_id": cs_id,
+                    "span_id": str(span_id),
+                    "order_index": int(cs.get("order_index") or 0),
+                    "status": status.get("status"),
+                    "checked": bool(status.get("checked")),
+                    "n_support": int(status.get("n_support") or 0),
+                    "n_contradict": int(status.get("n_contradict") or 0),
+                }
+            )
+        claim_spans_payload.sort(key=lambda item: int(item.get("order_index") or 0))
+
+        return {
+            "span": span,
+            "reviewer_uid": reviewer_uid,
+            "span_status": self.span_status(
+                span_id=str(span_id),
+                reviewer_uid=reviewer_uid,
+            ),
+            "cites": cites,
+            "claim_spans": claim_spans_payload,
+        }
+
     def _init_schema(self) -> None:
         with self._conn:
             for ddl in SCHEMA:
@@ -814,6 +866,33 @@ class SpanGraphStore:
                 )
                 inserted += int(cur.rowcount or 0)
         return inserted
+
+    def list_span_cites(self, *, span_id: str) -> List[dict]:
+        rows = self._conn.execute(
+            """
+            SELECT span_id, cited_work_id, reference_id, citation_index, created_at
+            FROM span_cites
+            WHERE span_id=?
+            ORDER BY created_at ASC
+            """,
+            (str(span_id),),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_span_cite_role(
+        self, *, span_id: str, cited_work_id: str, reviewer_uid: str
+    ) -> Optional[str]:
+        row = self._conn.execute(
+            """
+            SELECT role FROM span_cite_roles
+            WHERE span_id=? AND cited_work_id=? AND reviewer_uid=?
+            LIMIT 1
+            """,
+            (str(span_id), str(cited_work_id), str(reviewer_uid)),
+        ).fetchone()
+        if not row:
+            return None
+        return str(row["role"] or "").strip() or None
 
     def set_span_cite_role(
         self,

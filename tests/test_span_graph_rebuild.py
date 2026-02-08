@@ -374,3 +374,54 @@ def test_span_status_endpoint(tmp_path):
     assert status["n_claim_spans"] == 2
     assert status["n_supported"] == 1
     assert status["n_not_supported"] == 1
+
+
+def test_span_bundle_endpoint(tmp_path, monkeypatch):
+    store = SpanGraphStore(tmp_path / "graph.db")
+    monkeypatch.setattr(backend_main, "span_graph_store", store)
+    client = TestClient(backend_main.app)
+
+    created = client.post(
+        "/spans/upsert",
+        json={
+            "kind": "citation_window",
+            "selector": {"exact": "x", "prefix": None, "suffix": None},
+            "window_fingerprint": "fp",
+            "ingest_id": "doc-1",
+        },
+    )
+    assert created.status_code == 200
+    span_id = created.json()["span"]["span_id"]
+
+    client.post(
+        f"/spans/{span_id}/cites",
+        json={
+            "cites": [
+                {
+                    "cited_work_id": "ref:doc-1:b4",
+                    "reference_id": "b4",
+                    "citation_index": 9,
+                }
+            ]
+        },
+    )
+    client.put(
+        f"/spans/{span_id}/cites/ref:doc-1:b4/role",
+        json={"reviewer_uid": "alice", "role": "evidentiary"},
+    )
+    client.post(
+        f"/spans/{span_id}/claim-spans",
+        json={"claim_spans": [{"order_index": 1}]},
+    )
+
+    bundle = client.get(
+        f"/spans/{span_id}/bundle",
+        params={"reviewer_uid": "alice"},
+    )
+    assert bundle.status_code == 200
+    payload = bundle.json()
+    assert payload["span"]["span_id"] == span_id
+    assert payload["reviewer_uid"] == "alice"
+    assert len(payload["cites"]) == 1
+    assert payload["cites"][0]["role"] == "evidentiary"
+    assert len(payload["claim_spans"]) == 1

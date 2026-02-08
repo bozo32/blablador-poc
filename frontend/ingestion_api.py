@@ -254,6 +254,23 @@ def get_span_status(
     return _parse_response(response) or {}
 
 
+def get_span_bundle(
+    api_url: str,
+    span_id: str,
+    *,
+    reviewer_uid: str = "default",
+) -> dict:
+    url = f"{api_url.rstrip('/')}/spans/{span_id}/bundle"
+    params: Dict[str, Union[int, str]] = {
+        "reviewer_uid": str(reviewer_uid or "default")
+    }
+    try:
+        response = requests.get(url, params=params, timeout=DEFAULT_TIMEOUT)
+    except requests.RequestException as exc:
+        raise RuntimeError(_request_error_message(url, exc)) from exc
+    return _parse_response(response) or {}
+
+
 def _request_error_message(url: str, exc: requests.RequestException) -> str:
     if isinstance(exc, requests.Timeout):
         return (

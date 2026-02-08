@@ -65,7 +65,7 @@ from frontend.ingestion_api import (
     confirm_claims,
     get_claim_span_context,
     get_claim_status,
-    get_span_status,
+    get_span_bundle,
     get_citation_context,
     get_citation_graph,
     get_document_body,
@@ -2520,8 +2520,8 @@ def render_evidence_panel() -> None:
                     "This uses the new span-first endpoints (span-context/status)."
                 )
                 if st.button(
-                    "Fetch span context",
-                    key=f"fetch-span-context::{selected_claim}",
+                    "Fetch span bundle",
+                    key=f"fetch-span-bundle::{selected_claim}",
                 ):
                     try:
                         ctx = get_claim_span_context(
@@ -2531,13 +2531,10 @@ def render_evidence_panel() -> None:
                         )
                     except RuntimeError as exc:
                         st.error(str(exc))
-                    else:
-                        st.json(ctx)
+                        return
 
-                if st.button(
-                    "Fetch claim/span status",
-                    key=f"fetch-span-status::{selected_claim}",
-                ):
+                    st.json({"context": ctx})
+
                     try:
                         claim_status = get_claim_status(
                             get_api_url(),
@@ -2546,22 +2543,26 @@ def render_evidence_panel() -> None:
                         )
                     except RuntimeError as exc:
                         st.error(str(exc))
-                        claim_status = None
-                    if claim_status:
-                        st.json({"claim_status": claim_status})
-                        span_id = (claim_status or {}).get("span_id")
-                        reviewer_uid = (claim_status or {}).get("reviewer_uid")
-                        if span_id and reviewer_uid:
-                            try:
-                                span_status = get_span_status(
-                                    get_api_url(),
-                                    str(span_id),
-                                    reviewer_uid=str(reviewer_uid),
-                                )
-                            except RuntimeError as exc:
-                                st.error(str(exc))
-                            else:
-                                st.json({"span_status": span_status})
+                        return
+
+                    span_id = (claim_status or {}).get("span_id")
+                    reviewer_uid = (claim_status or {}).get("reviewer_uid")
+                    st.json({"claim_status": claim_status})
+
+                    if not span_id or not reviewer_uid:
+                        st.warning("Missing span_id/reviewer_uid in claim status.")
+                        return
+
+                    try:
+                        bundle = get_span_bundle(
+                            get_api_url(),
+                            str(span_id),
+                            reviewer_uid=str(reviewer_uid),
+                        )
+                    except RuntimeError as exc:
+                        st.error(str(exc))
+                    else:
+                        st.json({"span_bundle": bundle})
 
         def _render_judgment_controls() -> None:
             judgment = j_payload if isinstance(j_payload, dict) else {}

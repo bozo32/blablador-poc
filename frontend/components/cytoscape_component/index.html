@@ -24,11 +24,10 @@
       }
     </style>
 
-    <!-- Pinned CDN assets (POC). If we need offline installs later, vendor builds. -->
-    <script src="https://unpkg.com/streamlit-component-lib@1.5.0/dist/index.js"></script>
-    <script src="https://unpkg.com/cytoscape@3.27.0/dist/cytoscape.min.js"></script>
-    <script src="https://unpkg.com/dagre@0.8.5/dist/dagre.min.js"></script>
-    <script src="https://unpkg.com/cytoscape-dagre@2.5.0/cytoscape-dagre.js"></script>
+    <!-- Vendored JS assets (no-build component; avoid network/proxy failures). -->
+    <script src="vendor/cytoscape.min.js"></script>
+    <script src="vendor/dagre.min.js"></script>
+    <script src="vendor/cytoscape-dagre.js"></script>
   </head>
 
   <body>
@@ -36,6 +35,35 @@
 
     <script>
       (function () {
+        // Minimal Streamlit component shim.
+        // Avoids depending on streamlit-component-lib at runtime.
+        const Streamlit = {
+          API_VERSION: 1,
+          RENDER_EVENT: "streamlit:render",
+          events: new EventTarget(),
+          setComponentReady: function () {
+            window.addEventListener("message", Streamlit._onMessageEvent);
+            Streamlit._sendBackMsg("streamlit:componentReady", {
+              apiVersion: Streamlit.API_VERSION,
+            });
+          },
+          setComponentValue: function (value) {
+            Streamlit._sendBackMsg("streamlit:setComponentValue", { value });
+          },
+          setFrameHeight: function (height) {
+            Streamlit._sendBackMsg("streamlit:setFrameHeight", { height: height });
+          },
+          _sendBackMsg: function (type, data) {
+            const msg = Object.assign({ isStreamlitMessage: true, type }, data || {});
+            window.parent.postMessage(msg, "*");
+          },
+          _onMessageEvent: function (event) {
+            const data = event && event.data ? event.data : null;
+            if (!data || data.type !== Streamlit.RENDER_EVENT) return;
+            Streamlit.events.dispatchEvent(new CustomEvent(Streamlit.RENDER_EVENT, { detail: data }));
+          },
+        };
+
         const DEFAULT_LAYOUT = { name: "dagre", rankDir: "LR", fit: true, padding: 30 };
         const DEFAULT_STYLE = [
           {

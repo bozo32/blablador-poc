@@ -40,6 +40,7 @@ from frontend.components import chase_queue as chase_queue_component
 from frontend.components import chasing_panel
 from frontend.components import claim_graph_panel
 from frontend.components import cytoscape_panel
+from frontend.components import work_citation_graph_panel
 from frontend.state_keys import (
     WORKSPACE_ACTIVE_TAB,
     WORKSPACE_DENSE_MODE,
@@ -6526,6 +6527,34 @@ def draw_ingestion_panel(*, center, right) -> None:
                         "No claim nodes found yet. Create/confirm at least one claim "
                         "in Chasing, then return to Surfing -> Claim graph."
                     )
+
+                # Work-level bootstrap: show document citation links even before
+                # claim nodes exist.
+                st.divider()
+                st.markdown("**Work graph (bootstrap)**")
+                seed_doc = str(st.session_state.get("selected_doc_id") or "").strip()
+                if not seed_doc:
+                    st.caption("Select a document in Reading to seed the work graph.")
+                else:
+                    try:
+                        work_graph = get_citation_graph(
+                            get_api_url(),
+                            seed_doc,
+                            target_id=None,
+                            depth=1,
+                            max_nodes=30,
+                        )
+                    except Exception as exc:
+                        st.caption(f"Work graph unavailable: {exc}")
+                    else:
+                        if work_graph:
+                            work_citation_graph_panel.render(
+                                work_graph,
+                                height=360,
+                                key="work-graph-bootstrap",
+                            )
+                        else:
+                            st.caption("No citation edges found for this document.")
             else:
                 node_by_id = {
                     str(n.get("id")): n for n in (graph_data.get("nodes") or [])
@@ -6541,13 +6570,12 @@ def draw_ingestion_panel(*, center, right) -> None:
                     selected = {}
 
                 split_key = "claim_graph_split_pct"
-                st.session_state.setdefault(split_key, 65)
-                graph_pct = int(st.session_state.get(split_key) or 65)
+                if split_key not in st.session_state:
+                    st.session_state[split_key] = 65
                 graph_pct = st.slider(
                     "Graph width",
                     min_value=50,
                     max_value=80,
-                    value=graph_pct,
                     step=5,
                     key=split_key,
                     help="Adjust split between graph and analysis.",

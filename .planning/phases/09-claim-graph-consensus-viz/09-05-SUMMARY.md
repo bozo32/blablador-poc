@@ -31,7 +31,7 @@ key-files:
     - frontend/assets/workspace.css
 
 key-decisions:
-  - "Use streamlit-agraph to avoid a custom Cytoscape build while still supporting pan/zoom + selection"
+  - "Use streamlit-agraph to avoid a custom JS build while still supporting pan/zoom + selection"
   - "Persist Graph tab filter settings under project_meta.graph_settings"
 
 patterns-established:
@@ -64,7 +64,8 @@ completed: 2026-02-07
 
 Each task was committed atomically:
 
-1. **Task 1: Add Cytoscape Streamlit component dependency** - `35f9859` (chore)
+1. **Task 1: Add interactive Streamlit graph component dependency** - `35f9859` (chore)
+ 
 2. **Task 2: Create frontend graph_api client and claim_graph_panel renderer** - `d9093e4` (feat)
 3. **Task 3: Replace Graph tab with claim graph + inspection panel (MVP)** - `91293d9` (feat)
 

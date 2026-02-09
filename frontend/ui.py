@@ -68,6 +68,7 @@ from frontend.ingestion_api import (
     get_span_bundle,
     compact_span_graph,
     set_span_cite_role,
+    neighborhood_search,
     get_citation_context,
     get_citation_graph,
     get_document_body,
@@ -5395,6 +5396,242 @@ def draw_ingestion_panel(*, center, right) -> None:
             render_evidence_panel()
 
         else:
+            st.markdown("### Graph")
+
+            graph_mode_key = "graph_mode"
+            st.session_state.setdefault(graph_mode_key, "Claim graph")
+            mode = st.radio(
+                "Mode",
+                ["Claim graph", "Span view (preview)"],
+                horizontal=True,
+                key=graph_mode_key,
+            )
+
+            if mode == "Span view (preview)":
+                active_reviewer_uid = _active_reviewer_uid() or "default"
+                st.caption("Span-first explorer (rebuild).")
+
+                st.session_state.setdefault("span_view_claim_id", "")
+                st.session_state.setdefault("span_view_span_id", "")
+                st.session_state.setdefault("span_view_include_history", False)
+                st.session_state.setdefault("span_view_query", "")
+
+                row = st.columns([2, 1, 1], gap="small")
+                with row[0]:
+                    st.text_input(
+                        "Claim id",
+                        key="span_view_claim_id",
+                        help="Legacy cite:... claim id (from Review).",
+                    )
+                with row[1]:
+                    st.text_input(
+                        "Span id",
+                        key="span_view_span_id",
+                        help="span:... id",
+                    )
+                with row[2]:
+                    st.toggle(
+                        "Include history",
+                        key="span_view_include_history",
+                        help="Adds history_n_total per claimspan.",
+                    )
+
+                use_cols = st.columns([1, 1, 1], gap="small")
+                with use_cols[0]:
+                    if st.button("Use active claim", key="span-view-use-active"):
+                        cid = evidence_store.get_active_claim_id()
+                        st.session_state["span_view_claim_id"] = str(cid or "")
+                with use_cols[1]:
+                    if st.button("Resolve claim -> span", key="span-view-resolve"):
+                        claim_id = str(
+                            st.session_state.get("span_view_claim_id") or ""
+                        ).strip()
+                        if not claim_id:
+                            st.warning("Enter a claim id.")
+                        else:
+                            claim_rec = claim_queue.get_claim_record(claim_id) or {}
+                            tgt = normalize_target_id(
+                                claim_rec.get("reference_id")
+                                or (claim_rec.get("reference_hint") or {}).get(
+                                    "reference_id"
+                                )
+                                or st.session_state.get("citation_selected_target")
+                            )
+                            try:
+                                ctx = get_claim_span_context(
+                                    get_api_url(),
+                                    claim_id,
+                                    target_id=tgt,
+                                )
+                            except RuntimeError as exc:
+                                st.error(str(exc))
+                            else:
+                                st.session_state["span_view_span_id"] = str(
+                                    ctx.get("span_id") or ""
+                                )
+                                st.session_state["span_view_ctx"] = ctx
+                with use_cols[2]:
+                    if st.button("Load span", key="span-view-load"):
+                        span_id = str(
+                            st.session_state.get("span_view_span_id") or ""
+                        ).strip()
+                        if not span_id:
+                            st.warning("Enter a span id.")
+                        else:
+                            try:
+                                bundle = get_span_bundle(
+                                    get_api_url(),
+                                    span_id,
+                                    reviewer_uid=str(active_reviewer_uid),
+                                    include_history=bool(
+                                        st.session_state.get(
+                                            "span_view_include_history"
+                                        )
+                                    ),
+                                )
+                            except RuntimeError as exc:
+                                st.error(str(exc))
+                            else:
+                                st.session_state["span_view_bundle"] = bundle
+
+                ctx = st.session_state.get("span_view_ctx")
+                if isinstance(ctx, dict) and ctx:
+                    with st.expander("Resolved context", expanded=False):
+                        st.json(ctx)
+
+                bundle = st.session_state.get("span_view_bundle")
+                if isinstance(bundle, dict) and bundle:
+                    span_status = (bundle.get("span_status") or {}).get("status")
+                    st.markdown(f"**Span status:** `{span_status}`")
+
+                    # Claimspans summary
+                    rows = []
+                    for cs in bundle.get("claim_spans") or []:
+                        current = (cs or {}).get("current") or {}
+                        rows.append(
+                            {
+                                "order": cs.get("order_index"),
+                                "status": cs.get("status"),
+                                "checked": cs.get("checked"),
+                                "current_verdict": current.get("verdict"),
+                                "evidence_work": current.get("evidence_work_id"),
+                                "history_n": cs.get("history_n_total"),
+                            }
+                        )
+                    if rows:
+                        st.dataframe(rows, use_container_width=True)
+
+                    # Cite roles
+                    cites = bundle.get("cites") or []
+                    if cites:
+                        st.markdown("**Cited works**")
+                        role_options = [
+                            "evidentiary",
+                            "background",
+                            "reputational",
+                            "unknown",
+                        ]
+                        for cite in cites:
+                            work_id = cite.get("cited_work_id")
+                            if not work_id:
+                                continue
+                            span_key = (bundle.get("span") or {}).get("span_id")
+                            key = (
+                                f"span-view-role::{span_key}::{work_id}"
+                                f"::{active_reviewer_uid}"
+                            )
+                            cur = cite.get("role") or "unknown"
+                            idx = role_options.index(cur) if cur in role_options else 3
+                            st.selectbox(str(work_id), role_options, index=idx, key=key)
+                        if st.button("Save cite roles", key="span-view-save-roles"):
+                            span_id = (bundle.get("span") or {}).get("span_id")
+                            saved = 0
+                            for cite in cites:
+                                work_id = cite.get("cited_work_id")
+                                if not work_id:
+                                    continue
+                                key = (
+                                    f"span-view-role::{span_id}::{work_id}"
+                                    f"::{active_reviewer_uid}"
+                                )
+                                role = st.session_state.get(key)
+                                if role not in role_options:
+                                    continue
+                                try:
+                                    set_span_cite_role(
+                                        get_api_url(),
+                                        span_id=str(span_id),
+                                        cited_work_id=str(work_id),
+                                        reviewer_uid=str(active_reviewer_uid),
+                                        role=str(role),
+                                    )
+                                except RuntimeError as exc:
+                                    st.error(str(exc))
+                                    break
+                                saved += 1
+                            st.success(f"Saved {saved} role(s).")
+
+                    # Neighborhood search
+                    st.divider()
+                    st.markdown("**Neighborhood search**")
+                    st.text_input(
+                        "Query (optional)",
+                        key="span_view_query",
+                        help="Lexical filter over candidate title/abstract.",
+                    )
+                    nbr_cols = st.columns([1, 1, 1], gap="small")
+                    with nbr_cols[0]:
+                        max_per_seed = st.number_input(
+                            "Max per seed",
+                            min_value=1,
+                            max_value=200,
+                            value=25,
+                            key="span_view_max_per_seed",
+                        )
+                    with nbr_cols[1]:
+                        min_inter = st.number_input(
+                            "Min intersection",
+                            min_value=1,
+                            max_value=100,
+                            value=1,
+                            key="span_view_min_inter",
+                        )
+                    with nbr_cols[2]:
+                        min_score = st.number_input(
+                            "Min abstract score",
+                            min_value=0.0,
+                            max_value=1.0,
+                            value=0.0,
+                            step=0.05,
+                            key="span_view_min_score",
+                        )
+                    if st.button("Run neighborhood search", key="span-view-nbr-run"):
+                        span_id = (bundle.get("span") or {}).get("span_id")
+                        try:
+                            resp = neighborhood_search(
+                                get_api_url(),
+                                span_id=str(span_id),
+                                reviewer_uid=str(active_reviewer_uid),
+                                query_text=str(
+                                    st.session_state.get("span_view_query") or ""
+                                ).strip()
+                                or None,
+                                max_per_seed=int(max_per_seed),
+                                min_bib_intersection=int(min_inter),
+                                min_abstract_score=float(min_score),
+                            )
+                        except RuntimeError as exc:
+                            st.error(str(exc))
+                        else:
+                            st.session_state["span_view_nbr"] = resp
+                    nbr = st.session_state.get("span_view_nbr")
+                    if isinstance(nbr, dict) and nbr.get("run_id"):
+                        st.caption(f"Run id: `{nbr.get('run_id')}`")
+                        cands = nbr.get("candidates") or []
+                        if cands:
+                            st.dataframe(cands, use_container_width=True)
+                return
+
             st.markdown("### Claim graph")
 
             active_reviewer_uid = _active_reviewer_uid()

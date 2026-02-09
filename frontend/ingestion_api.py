@@ -321,6 +321,48 @@ def compact_span_graph(
     return _parse_response(response) or {}
 
 
+def neighborhood_search(
+    api_url: str,
+    *,
+    span_id: str,
+    reviewer_uid: str,
+    query_text: Optional[str] = None,
+    max_per_seed: int = 25,
+    min_bib_intersection: int = 1,
+    min_abstract_score: float = 0.0,
+) -> dict:
+    url = f"{api_url.rstrip('/')}/neighborhood/search"
+    payload: Dict[str, Any] = {
+        "span_id": str(span_id),
+        "reviewer_uid": str(reviewer_uid or "default") or "default",
+        "max_per_seed": int(max_per_seed),
+        "min_bib_intersection": int(min_bib_intersection),
+        "query_text": str(query_text).strip() if query_text else None,
+        "min_abstract_score": float(min_abstract_score),
+    }
+    payload = {k: v for k, v in payload.items() if v is not None}
+    try:
+        response = requests.post(url, json=payload, timeout=DEFAULT_TIMEOUT)
+    except requests.RequestException as exc:
+        raise RuntimeError(_request_error_message(url, exc)) from exc
+    return _parse_response(response) or {}
+
+
+def get_neighborhood_run(
+    api_url: str,
+    run_id: str,
+    *,
+    limit: int = 50,
+) -> dict:
+    url = f"{api_url.rstrip('/')}/neighborhood/{run_id}"
+    params: Dict[str, Union[int, str]] = {"limit": int(limit)}
+    try:
+        response = requests.get(url, params=params, timeout=DEFAULT_TIMEOUT)
+    except requests.RequestException as exc:
+        raise RuntimeError(_request_error_message(url, exc)) from exc
+    return _parse_response(response) or {}
+
+
 def _request_error_message(url: str, exc: requests.RequestException) -> str:
     if isinstance(exc, requests.Timeout):
         return (

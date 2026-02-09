@@ -5919,6 +5919,43 @@ def draw_ingestion_panel(*, center, right) -> None:
                 st.session_state.setdefault("span_view_span_id", "")
                 st.session_state.setdefault("span_view_include_history", False)
                 st.session_state.setdefault("span_view_query", "")
+                st.session_state.setdefault("span_view_resolve_error", "")
+
+                def _span_view_use_active_claim() -> None:
+                    cid = evidence_store.get_active_claim_id()
+                    st.session_state["span_view_claim_id"] = str(cid or "")
+
+                def _span_view_resolve_claim_to_span() -> None:
+                    claim_id = str(
+                        st.session_state.get("span_view_claim_id") or ""
+                    ).strip()
+                    if not claim_id:
+                        st.session_state[
+                            "span_view_resolve_error"
+                        ] = "Enter a claim id."
+                        return
+
+                    claim_rec = claim_queue.get_claim_record(claim_id) or {}
+                    tgt = normalize_target_id(
+                        claim_rec.get("reference_id")
+                        or (claim_rec.get("reference_hint") or {}).get("reference_id")
+                        or st.session_state.get("citation_selected_target")
+                    )
+                    try:
+                        ctx = get_claim_span_context(
+                            get_api_url(),
+                            claim_id,
+                            target_id=tgt,
+                        )
+                    except RuntimeError as exc:
+                        st.session_state["span_view_resolve_error"] = str(exc)
+                        return
+
+                    st.session_state["span_view_span_id"] = str(
+                        ctx.get("span_id") or ""
+                    )
+                    st.session_state["span_view_ctx"] = ctx
+                    st.session_state["span_view_resolve_error"] = ""
 
                 row = st.columns([2, 1, 1], gap="small")
                 with row[0]:
@@ -5942,38 +5979,17 @@ def draw_ingestion_panel(*, center, right) -> None:
 
                 use_cols = st.columns([1, 1, 1], gap="small")
                 with use_cols[0]:
-                    if st.button("Use active claim", key="span-view-use-active"):
-                        cid = evidence_store.get_active_claim_id()
-                        st.session_state["span_view_claim_id"] = str(cid or "")
+                    st.button(
+                        "Use active claim",
+                        key="span-view-use-active",
+                        on_click=_span_view_use_active_claim,
+                    )
                 with use_cols[1]:
-                    if st.button("Resolve claim -> span", key="span-view-resolve"):
-                        claim_id = str(
-                            st.session_state.get("span_view_claim_id") or ""
-                        ).strip()
-                        if not claim_id:
-                            st.warning("Enter a claim id.")
-                        else:
-                            claim_rec = claim_queue.get_claim_record(claim_id) or {}
-                            tgt = normalize_target_id(
-                                claim_rec.get("reference_id")
-                                or (claim_rec.get("reference_hint") or {}).get(
-                                    "reference_id"
-                                )
-                                or st.session_state.get("citation_selected_target")
-                            )
-                            try:
-                                ctx = get_claim_span_context(
-                                    get_api_url(),
-                                    claim_id,
-                                    target_id=tgt,
-                                )
-                            except RuntimeError as exc:
-                                st.error(str(exc))
-                            else:
-                                st.session_state["span_view_span_id"] = str(
-                                    ctx.get("span_id") or ""
-                                )
-                                st.session_state["span_view_ctx"] = ctx
+                    st.button(
+                        "Resolve claim -> span",
+                        key="span-view-resolve",
+                        on_click=_span_view_resolve_claim_to_span,
+                    )
                 with use_cols[2]:
                     if st.button("Load span", key="span-view-load"):
                         span_id = str(
@@ -5997,6 +6013,12 @@ def draw_ingestion_panel(*, center, right) -> None:
                                 st.error(str(exc))
                             else:
                                 st.session_state["span_view_bundle"] = bundle
+
+                resolve_err = str(
+                    st.session_state.get("span_view_resolve_error") or ""
+                ).strip()
+                if resolve_err:
+                    st.error(resolve_err)
 
                 ctx = st.session_state.get("span_view_ctx")
                 if isinstance(ctx, dict) and ctx:

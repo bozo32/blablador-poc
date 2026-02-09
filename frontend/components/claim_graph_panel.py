@@ -28,13 +28,7 @@ def _node_title(node: Dict[str, Any]) -> str:
 
 
 def _edge_badge(edge: Dict[str, Any]) -> str:
-    aggs = edge.get("aggregates") or {}
-    n_support = int(aggs.get("n_support") or 0)
-    n_contra = int(aggs.get("n_contradict") or 0)
-    n_total = int(aggs.get("n_total") or 0)
-    if n_total <= 0:
-        return "0"
-    return f"{n_support}/{n_contra}"
+    return ""
 
 
 def _edge_color(edge: Dict[str, Any]) -> str:
@@ -43,12 +37,12 @@ def _edge_color(edge: Dict[str, Any]) -> str:
     n_contra = int(aggs.get("n_contradict") or 0)
     n_total = int(aggs.get("n_total") or 0)
     if n_total <= 0:
-        return "#94a3b8"  # slate-400
+        return "#d9e2ef"  # ws-border
     if n_support > n_contra:
         return "#16a34a"  # green-600
     if n_contra > n_support:
         return "#dc2626"  # red-600
-    return "#334155"  # slate-700
+    return "#4b5563"  # ws-muted
 
 
 def _edge_width(edge: Dict[str, Any]) -> int:
@@ -74,20 +68,15 @@ def _build_elements(
         node_id = str((raw or {}).get("id") or "").strip()
         if not node_id:
             continue
-        props = (raw or {}).get("properties") or {}
-        label = (
-            props.get("parsed_text") or (raw or {}).get("label") or node_id
-        ).strip()
-        if len(label) > 64:
-            label = label[:61].rstrip() + "..."
+        label = ""
         is_center = bool(center_id and node_id == center_id)
         nodes.append(
             Node(
                 id=node_id,
                 label=label,
                 title=_node_title(raw or {}),
-                size=34 if is_center else 25,
-                color="#1d4ed8" if is_center else "#0f172a",
+                size=28 if is_center else 14,
+                color="#2780e3" if is_center else "#111827",
             )
         )
 
@@ -155,7 +144,7 @@ def render(
     nodes, edges = _build_elements(payload or {}, center_id=center_claim_id)
 
     config = Config(
-        width=900,
+        width=1200,
         height=int(height),
         directed=True,
         physics=True,

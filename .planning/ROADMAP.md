@@ -198,7 +198,7 @@ Plans:
 - [x] 09-04-PLAN.md — Streamlit Current user dropdown + reviewer-scoped judgment UI
 - [x] 09-05-PLAN.md — Interactive claim graph tab (renderer + edge inspection/voting)
 - [x] 09-06-PLAN.md — Compare mode + end-to-end multi-user consensus verification checkpoint
-- [ ] 09-07-PLAN.md — Cytoscape Surfing POC: graph as architecture + plural segmentation + heat
+- [x] 09-07-PLAN.md — Cytoscape Surfing POC: graph as architecture + plural segmentation + heat
 
 ## Progress
 
@@ -217,4 +217,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 8. Workspace + Fast-Path Review UX | 7/8 | In progress | - |
 | 8.1. Recursive Retrieval + Node Graph | 0/TBD | Not started | - |
 | 8.2. Demo Dataset + Trace Replay | 0/TBD | Not started | - |
-| 9. Claim Graph + Multi-User Consensus | 6/7 | In progress | - |
+| 9. Claim Graph + Multi-User Consensus | 7/7 | Complete | 2026-02-09 |

@@ -39,6 +39,7 @@ from frontend import (
 from frontend.components import chase_queue as chase_queue_component
 from frontend.components import chasing_panel
 from frontend.components import claim_graph_panel
+from frontend.components import cytoscape_panel
 from frontend.state_keys import (
     WORKSPACE_ACTIVE_TAB,
     WORKSPACE_DENSE_MODE,
@@ -46,6 +47,7 @@ from frontend.state_keys import (
     WORKSPACE_TAB_DOCUMENT,
     WORKSPACE_TAB_REVIEW,
     WORKSPACE_TAB_GRAPH,
+    WORKSPACE_TAB_LABELS,
     canonical_segments_key,
 )
 from frontend.components.evidence_card import CardActionCallbacks, EvidenceCardRenderer
@@ -4542,9 +4544,18 @@ def draw_ingestion_panel(*, center, right) -> None:
         return
     doc_id = st.session_state.get("selected_doc_id")
     if not doc_id:
-        with center:
-            st.info("Select a PDF to view details.")
-        return
+        # Auto-select the most recently uploaded document so the workspace
+        # always has a default context (Graph should not require a start point).
+        first = docs[0] if isinstance(docs, list) and docs else None
+        first_id = (first or {}).get("id") if isinstance(first, dict) else None
+        if first_id:
+            st.session_state["selected_doc_id"] = str(first_id)
+            doc_id = str(first_id)
+            load_selected_document(show_error=False)
+        else:
+            with center:
+                st.info("Select a PDF to view details.")
+            return
     document = st.session_state.get("active_document")
     if not document or document.get("id") != doc_id:
         document = load_selected_document(show_error=False)
@@ -5242,7 +5253,7 @@ def draw_ingestion_panel(*, center, right) -> None:
         st.markdown(
             '<div class="ws-pane-header">'
             '<div class="ws-pane-header__title">Work area</div>'
-            '<div class="ws-pane-header__meta">Document / Review / Graph</div>'
+            '<div class="ws-pane-header__meta">Reading / Chasing / Surfing</div>'
             "</div>",
             unsafe_allow_html=True,
         )
@@ -5254,6 +5265,7 @@ def draw_ingestion_panel(*, center, right) -> None:
             [WORKSPACE_TAB_DOCUMENT, WORKSPACE_TAB_REVIEW, WORKSPACE_TAB_GRAPH],
             key=WORKSPACE_ACTIVE_TAB,
             horizontal=True,
+            format_func=lambda opt: WORKSPACE_TAB_LABELS.get(opt, opt),
             label_visibility="collapsed",
         )
         st.markdown("</div>", unsafe_allow_html=True)
@@ -5396,16 +5408,508 @@ def draw_ingestion_panel(*, center, right) -> None:
             render_evidence_panel()
 
         else:
-            st.markdown("### Graph")
+            st.markdown("### Surfing")
 
             graph_mode_key = "graph_mode"
-            st.session_state.setdefault(graph_mode_key, "Claim graph")
+            st.session_state.setdefault(graph_mode_key, "Surfing (POC)")
             mode = st.radio(
                 "Mode",
-                ["Claim graph", "Span view (preview)"],
+                ["Surfing (POC)", "Claim graph", "Span view (preview)"],
                 horizontal=True,
                 key=graph_mode_key,
             )
+
+            if mode == "Surfing (POC)":
+                st.caption(
+                    "Graph-as-architecture demo: stable anchors + plural segmentation "
+                    "+ heat."
+                )
+
+                poc_path = PROJECT_ROOT / "data" / "poc_graph.json"
+                try:
+                    poc = json.load(open(poc_path, "r", encoding="utf-8"))
+                except Exception as exc:
+                    st.error(f"POC dataset not available: {exc}")
+                    return
+
+                raw_nodes = poc.get("nodes") or []
+                raw_edges = poc.get("edges") or []
+                node_by_id = {
+                    str((n or {}).get("id") or "").strip(): (n or {})
+                    for n in raw_nodes
+                    if str((n or {}).get("id") or "").strip()
+                }
+
+                def _nodes_of_type(kind: str) -> list[dict]:
+                    out: list[dict] = []
+                    for n in raw_nodes:
+                        if not isinstance(n, dict):
+                            continue
+                        if str(n.get("type") or "").strip() != kind:
+                            continue
+                        out.append(n)
+                    return out
+
+                works = _nodes_of_type("Work")
+                citeanchors = _nodes_of_type("CiteAnchor")
+
+                works_sorted = sorted(
+                    works,
+                    key=lambda w: (
+                        str((w.get("properties") or {}).get("doi") or ""),
+                        str(w.get("id") or ""),
+                    ),
+                )
+                work_options = [str(w.get("id") or "").strip() for w in works_sorted]
+                if not work_options:
+                    st.info("No Works in the POC dataset.")
+                    return
+
+                st.session_state.setdefault("surf_poc_work", work_options[0])
+                st.session_state.setdefault("surf_poc_anchor", "")
+                st.session_state.setdefault("surf_poc_show_atoms", True)
+                st.session_state.setdefault("surf_poc_show_evidence", True)
+                st.session_state.setdefault("surf_poc_show_assertions", True)
+                st.session_state.setdefault("surf_poc_canonical_only", False)
+                st.session_state.setdefault("surf_poc_show_labels", False)
+
+                left, center, right = st.columns([1, 2, 1], gap="large")
+                with left:
+                    st.markdown("**POC scope**")
+                    st.selectbox(
+                        "Work",
+                        work_options,
+                        key="surf_poc_work",
+                        format_func=lambda wid: str(
+                            (node_by_id.get(str(wid)) or {}).get("label") or wid
+                        ),
+                    )
+
+                    work_id = str(st.session_state.get("surf_poc_work") or "").strip()
+                    work_node = node_by_id.get(work_id) or {}
+                    work_doi = str(
+                        ((work_node.get("properties") or {}).get("doi") or "")
+                    ).strip()
+
+                    anchor_options: list[str] = []
+                    for a in citeanchors:
+                        props = (a or {}).get("properties") or {}
+                        if str(props.get("citing_work_doi") or "").strip() != work_doi:
+                            continue
+                        anchor_id = str(a.get("id") or "").strip()
+                        if anchor_id:
+                            anchor_options.append(anchor_id)
+                    anchor_options = sorted(anchor_options)
+                    if anchor_options and (
+                        str(st.session_state.get("surf_poc_anchor") or "").strip()
+                        not in anchor_options
+                    ):
+                        st.session_state["surf_poc_anchor"] = anchor_options[0]
+
+                    st.selectbox(
+                        "CiteAnchor",
+                        anchor_options,
+                        key="surf_poc_anchor",
+                        format_func=lambda aid: str(
+                            (node_by_id.get(str(aid)) or {}).get("label") or aid
+                        ),
+                    )
+
+                    st.divider()
+                    st.markdown("**Layers**")
+                    st.checkbox("ClaimAtoms", key="surf_poc_show_atoms")
+                    st.checkbox("EvidenceSpans", key="surf_poc_show_evidence")
+                    st.checkbox("Assertions", key="surf_poc_show_assertions")
+                    st.checkbox("Canonical only", key="surf_poc_canonical_only")
+                    st.checkbox("Show labels (debug)", key="surf_poc_show_labels")
+
+                    if st.button("Fit", key="surf-poc-fit", use_container_width=True):
+                        st.session_state["surf_poc_fit"] = True
+
+                anchor_id = str(st.session_state.get("surf_poc_anchor") or "").strip()
+                canonical_only = bool(st.session_state.get("surf_poc_canonical_only"))
+                show_atoms = bool(st.session_state.get("surf_poc_show_atoms"))
+                show_evidence = bool(st.session_state.get("surf_poc_show_evidence"))
+                show_assertions = bool(st.session_state.get("surf_poc_show_assertions"))
+
+                # Heat: per ClaimAnchor, based on linked Assertions.
+                about_edges = [
+                    e
+                    for e in raw_edges
+                    if isinstance(e, dict)
+                    and str(e.get("type") or "").strip() == "ABOUT"
+                ]
+                claimanchor_ids = {
+                    str((n or {}).get("id") or "").strip()
+                    for n in raw_nodes
+                    if isinstance(n, dict)
+                    and str(n.get("type") or "").strip() == "ClaimAnchor"
+                }
+                rel_by_assertion: dict[str, str] = {}
+                for n in raw_nodes:
+                    if not isinstance(n, dict):
+                        continue
+                    if str(n.get("type") or "").strip() != "Assertion":
+                        continue
+                    aid = str(n.get("id") or "").strip()
+                    rel = str(
+                        ((n.get("properties") or {}).get("relation_type") or "")
+                    ).strip()
+                    if aid:
+                        rel_by_assertion[aid] = rel
+
+                def _entropy(counts: dict[str, int]) -> float:
+                    import math
+
+                    total = sum(int(v) for v in counts.values())
+                    if total <= 0:
+                        return 0.0
+                    ent = 0.0
+                    for v in counts.values():
+                        p = float(v) / float(total)
+                        if p > 0:
+                            ent -= p * math.log(p, 2)
+                    return float(ent)
+
+                heat_by_anchor: dict[str, float] = {}
+                rel_counts_by_anchor: dict[str, dict[str, int]] = {}
+                for e in about_edges:
+                    src = str(e.get("source") or "").strip()
+                    tgt = str(e.get("target") or "").strip()
+                    if not src or not tgt or tgt not in claimanchor_ids:
+                        continue
+                    rel = rel_by_assertion.get(src) or "unknown"
+                    rel_counts_by_anchor.setdefault(tgt, {})
+                    rel_counts_by_anchor[tgt][rel] = int(
+                        rel_counts_by_anchor[tgt].get(rel, 0) + 1
+                    )
+                for tgt, counts in rel_counts_by_anchor.items():
+                    n_total = sum(int(v) for v in counts.values())
+                    heat_by_anchor[tgt] = float(n_total) * _entropy(counts)
+
+                # Focused subgraph builder.
+                def _edge_connects_to(node_id: str) -> bool:
+                    for e in raw_edges:
+                        if not isinstance(e, dict):
+                            continue
+                        if str(e.get("source") or "").strip() == node_id:
+                            return True
+                        if str(e.get("target") or "").strip() == node_id:
+                            return True
+                    return False
+
+                if not anchor_id or anchor_id not in node_by_id:
+                    with center:
+                        st.info("Select a CiteAnchor to view the POC graph.")
+                    return
+
+                included: set[str] = {anchor_id}
+                for e in raw_edges:
+                    if not isinstance(e, dict):
+                        continue
+                    if str(e.get("source") or "").strip() != anchor_id:
+                        continue
+                    included.add(str(e.get("target") or "").strip())
+
+                # ClaimAtoms derived from anchor.
+                for e in raw_edges:
+                    if not isinstance(e, dict):
+                        continue
+                    if str(e.get("type") or "").strip() != "DERIVED_FROM":
+                        continue
+                    if str(e.get("target") or "").strip() != anchor_id:
+                        continue
+                    included.add(str(e.get("source") or "").strip())
+
+                # ClaimAnchors mapped from included atoms.
+                for e in raw_edges:
+                    if not isinstance(e, dict):
+                        continue
+                    if str(e.get("type") or "").strip() != "MAPS_TO":
+                        continue
+                    src = str(e.get("source") or "").strip()
+                    tgt = str(e.get("target") or "").strip()
+                    if src in included:
+                        included.add(tgt)
+
+                # Assertions about included claim anchors.
+                for e in raw_edges:
+                    if not isinstance(e, dict):
+                        continue
+                    if str(e.get("type") or "").strip() != "ABOUT":
+                        continue
+                    tgt = str(e.get("target") or "").strip()
+                    if tgt in included:
+                        included.add(str(e.get("source") or "").strip())
+
+                # Evidence linked from included assertions.
+                for e in raw_edges:
+                    if not isinstance(e, dict):
+                        continue
+                    if str(e.get("type") or "").strip() != "CITES_EVIDENCE":
+                        continue
+                    src = str(e.get("source") or "").strip()
+                    if src in included:
+                        included.add(str(e.get("target") or "").strip())
+
+                # Users connected to included atoms.
+                for e in raw_edges:
+                    if not isinstance(e, dict):
+                        continue
+                    if str(e.get("type") or "").strip() != "PROPOSES_ATOM":
+                        continue
+                    tgt = str(e.get("target") or "").strip()
+                    if tgt in included:
+                        included.add(str(e.get("source") or "").strip())
+
+                def _keep_node(n: dict) -> bool:
+                    nid = str(n.get("id") or "").strip()
+                    if not nid or nid not in included:
+                        return False
+                    if canonical_only:
+                        return str(n.get("type") or "").strip() in {
+                            "Work",
+                            "CiteAnchor",
+                        }
+                    kind = str(n.get("type") or "").strip()
+                    if kind == "ClaimAtom" and not show_atoms:
+                        return False
+                    if kind == "EvidenceSpan" and not show_evidence:
+                        return False
+                    if kind == "Assertion" and not show_assertions:
+                        return False
+                    return True
+
+                kept_nodes = [
+                    n for n in raw_nodes if isinstance(n, dict) and _keep_node(n)
+                ]
+                kept_ids = {str(n.get("id") or "").strip() for n in kept_nodes}
+
+                def _keep_edge(e: dict) -> bool:
+                    src = str(e.get("source") or "").strip()
+                    tgt = str(e.get("target") or "").strip()
+                    if not src or not tgt:
+                        return False
+                    if src not in kept_ids or tgt not in kept_ids:
+                        return False
+                    if canonical_only:
+                        return str(e.get("type") or "").strip() in {"IN_WORK", "CITES"}
+                    kind = str(e.get("type") or "").strip()
+                    if (
+                        kind in {"PROPOSES_ATOM", "DERIVED_FROM", "MAPS_TO"}
+                        and not show_atoms
+                    ):
+                        return False
+                    if kind == "CITES_EVIDENCE" and not show_evidence:
+                        return False
+                    if kind in {"ABOUT", "CITES_EVIDENCE"} and not show_assertions:
+                        return False
+                    return True
+
+                kept_edges = [
+                    e for e in raw_edges if isinstance(e, dict) and _keep_edge(e)
+                ]
+
+                elements: list[dict] = []
+                for n in kept_nodes:
+                    nid = str(n.get("id") or "").strip()
+                    props = (
+                        (n.get("properties") or {})
+                        if isinstance(n.get("properties"), dict)
+                        else {}
+                    )
+                    data = {
+                        "id": nid,
+                        "type": str(n.get("type") or "").strip(),
+                        "label": str(n.get("label") or "").strip(),
+                    }
+                    data.update(props)
+                    if data.get("type") == "ClaimAnchor":
+                        data["heat"] = float(heat_by_anchor.get(nid, 0.0))
+                    elements.append({"data": data})
+                for e in kept_edges:
+                    elements.append(
+                        {
+                            "data": {
+                                "id": str(e.get("id") or "").strip(),
+                                "source": str(e.get("source") or "").strip(),
+                                "target": str(e.get("target") or "").strip(),
+                                "type": str(e.get("type") or "").strip(),
+                                "provenance": str(e.get("provenance") or "").strip(),
+                            }
+                        }
+                    )
+
+                style = [
+                    {
+                        "selector": "node",
+                        "style": {
+                            "background-color": "#111827",
+                            "border-color": "#d9e2ef",
+                            "border-width": 1,
+                            "width": 18,
+                            "height": 18,
+                            "label": "",
+                            "font-size": 10,
+                            "text-wrap": "wrap",
+                            "text-max-width": 200,
+                            "text-valign": "bottom",
+                            "text-halign": "center",
+                            "color": "#111827",
+                        },
+                    },
+                    {
+                        "selector": "node[type = 'Work']",
+                        "style": {
+                            "background-color": "#2780e3",
+                            "width": 22,
+                            "height": 22,
+                        },
+                    },
+                    {
+                        "selector": "node[type = 'CiteAnchor']",
+                        "style": {"background-color": "#0f766e"},
+                    },
+                    {
+                        "selector": "node[type = 'ClaimAnchor']",
+                        "style": {
+                            "background-color": (
+                                "mapData(heat, 0, 3.0, #f59e0b, " "#ef4444)"
+                            ),
+                            "border-width": "mapData(heat, 0, 3.0, 1, 5)",
+                            "border-color": "#111827",
+                            "width": 20,
+                            "height": 20,
+                        },
+                    },
+                    {
+                        "selector": "node[type = 'ClaimAtom']",
+                        "style": {"background-color": "#6b7280"},
+                    },
+                    {
+                        "selector": "node[type = 'EvidenceSpan']",
+                        "style": {"background-color": "#7c3aed"},
+                    },
+                    {
+                        "selector": "node[type = 'Assertion']",
+                        "style": {
+                            "background-color": "#111827",
+                            "width": 10,
+                            "height": 10,
+                        },
+                    },
+                    {
+                        "selector": "edge",
+                        "style": {
+                            "width": 2,
+                            "line-color": "#d9e2ef",
+                            "target-arrow-color": "#d9e2ef",
+                            "target-arrow-shape": "triangle",
+                            "curve-style": "bezier",
+                            "label": "",
+                        },
+                    },
+                    {
+                        "selector": ":selected",
+                        "style": {
+                            "border-width": 3,
+                            "border-color": "#111827",
+                            "line-color": "#111827",
+                            "target-arrow-color": "#111827",
+                        },
+                    },
+                ]
+
+                selection_key = "surf_poc_selection"
+                st.session_state.setdefault(selection_key, {})
+                selection = st.session_state.get(selection_key)
+                if not isinstance(selection, dict):
+                    selection = {}
+
+                focus = {}
+                if bool(st.session_state.pop("surf_poc_fit", False)):
+                    focus = {"nodeIds": sorted(list(kept_ids)), "padding": 30}
+
+                with center:
+                    picked = cytoscape_panel.render(
+                        elements,
+                        style=style,
+                        layout={
+                            "name": "dagre",
+                            "rankDir": "LR",
+                            "fit": True,
+                            "padding": 30,
+                        },
+                        height=580,
+                        key="surf-poc",
+                        selection=selection,
+                        focus=focus,
+                        options={
+                            "showLabels": bool(
+                                st.session_state.get("surf_poc_show_labels")
+                            )
+                        },
+                    )
+                    if picked:
+                        st.session_state[selection_key] = picked
+                        selection = picked
+
+                with right:
+                    st.markdown("**Inspector**")
+                    if not selection:
+                        st.caption(
+                            "Click a node/edge. Heat routes attention; it is not "
+                            "correctness."
+                        )
+                    else:
+                        sel_type = str(selection.get("type") or "").strip()
+                        sel_id = str(selection.get("id") or "").strip()
+                        if sel_type == "edge":
+                            edge = next(
+                                (
+                                    e
+                                    for e in kept_edges
+                                    if str(e.get("id") or "").strip() == sel_id
+                                ),
+                                {},
+                            )
+                            st.caption(f"edge: `{sel_id}`")
+                            st.write(
+                                (
+                                    f"{edge.get('type')} :: {edge.get('source')} -> "
+                                    f"{edge.get('target')}"
+                                )
+                            )
+                        else:
+                            node = node_by_id.get(sel_id) or {}
+                            kind = str(node.get("type") or "").strip() or "node"
+                            st.caption(f"{kind}: `{sel_id}`")
+                            props = node.get("properties") or {}
+                            if kind == "ClaimAnchor":
+                                st.markdown(
+                                    "ClaimAnchors coordinate plural segmentations; "
+                                    "they are not truth claims."
+                                )
+                                st.caption(
+                                    f"heat={heat_by_anchor.get(sel_id, 0.0):.3f}"
+                                )
+                                st.caption(
+                                    f"relations={rel_counts_by_anchor.get(sel_id, {})}"
+                                )
+                            elif kind == "Assertion":
+                                st.markdown(
+                                    "Assertions are attributable links from people to "
+                                    "evidence (not adjudication)."
+                                )
+                                rel_type = (props or {}).get("relation_type")
+                                st.caption(f"relation_type={rel_type}")
+                            elif kind in {"Work", "CiteAnchor"}:
+                                st.markdown("Stable anchor.")
+                            if isinstance(props, dict) and props:
+                                with st.expander("Properties", expanded=False):
+                                    st.json(props)
+
+                return
 
             if mode == "Span view (preview)":
                 active_reviewer_uid = _active_reviewer_uid() or "default"

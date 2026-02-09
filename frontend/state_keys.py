@@ -14,6 +14,13 @@ WORKSPACE_TAB_DOCUMENT = "Document"
 WORKSPACE_TAB_REVIEW = "Review"
 WORKSPACE_TAB_GRAPH = "Graph"
 
+# Display labels (keep underlying values stable for session-state compatibility).
+WORKSPACE_TAB_LABELS = {
+    WORKSPACE_TAB_DOCUMENT: "Reading",
+    WORKSPACE_TAB_REVIEW: "Chasing",
+    WORKSPACE_TAB_GRAPH: "Surfing",
+}
+
 
 def canonical_context_edit_key(*, doc_id: str, citation_index: int) -> str:
     return f"context-edit::{doc_id}::{int(citation_index)}"

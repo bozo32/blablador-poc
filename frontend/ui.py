@@ -6556,6 +6556,41 @@ def draw_ingestion_panel(*, center, right) -> None:
                         else:
                             st.caption("No citation edges found for this document.")
             else:
+                # If the claim subgraph is empty (common before reviewers add
+                # claim->claim edges), still surface the document-level
+                # citation relationship so Surfing has a usable starting point.
+                if not (graph_data.get("edges") or []):
+                    with st.expander("Work graph (document citations)", expanded=True):
+                        seed_doc = str(
+                            st.session_state.get("selected_doc_id") or ""
+                        ).strip()
+                        if not seed_doc:
+                            st.caption(
+                                "Select a document in Reading to seed the work graph."
+                            )
+                        else:
+                            try:
+                                work_graph = get_citation_graph(
+                                    get_api_url(),
+                                    seed_doc,
+                                    target_id=None,
+                                    depth=1,
+                                    max_nodes=30,
+                                )
+                            except Exception as exc:
+                                st.caption(f"Work graph unavailable: {exc}")
+                            else:
+                                if work_graph:
+                                    work_citation_graph_panel.render(
+                                        work_graph,
+                                        height=360,
+                                        key="work-graph-empty-claim",
+                                    )
+                                else:
+                                    st.caption(
+                                        "No citation edges found for this document."
+                                    )
+
                 node_by_id = {
                     str(n.get("id")): n for n in (graph_data.get("nodes") or [])
                 }

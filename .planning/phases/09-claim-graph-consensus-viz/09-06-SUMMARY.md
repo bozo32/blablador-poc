@@ -40,7 +40,17 @@ Compare mode is implemented in the Graph tab inspector so two reviewers can be s
 ## Verification Status
 
 - Automated: `py_compile` passes for `frontend/ui.py`.
-- Manual: the end-to-end checkpoint in `.planning/phases/09-claim-graph-consensus-viz/09-06-PLAN.md` has not been re-run/recorded in planning docs yet.
+- Manual: the end-to-end checkpoint in `.planning/phases/09-claim-graph-consensus-viz/09-06-PLAN.md` has not been re-run/recorded here yet.
+
+### Manual Checkpoint Checklist (Fill In)
+
+1) Start backend + Streamlit.
+2) In Project panel, add 3 reviewer names and switch between them.
+3) For the same claim, save different judgments under two reviewers; confirm switching reviewers shows the right value.
+4) In Graph tab, select an edge and record opposing votes under two reviewers; confirm the edge aggregates reflect the ratio.
+5) Open Compare mode, pick the two reviewers, confirm disagreements list includes your conflicts, and clicking focuses the relevant node/edge.
+
+Result: PENDING
 
 ---
 

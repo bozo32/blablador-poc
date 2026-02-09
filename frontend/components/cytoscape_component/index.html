@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>cytoscape_component</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        width: 100%;
+        background: transparent;
+        overflow: hidden;
+        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto,
+          Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+      }
+
+      #cy {
+        height: 560px;
+        width: 100%;
+        background: #ffffff;
+      }
+    </style>
+
+    <!-- Pinned CDN assets (POC). If we need offline installs later, vendor builds. -->
+    <script src="https://unpkg.com/streamlit-component-lib@1.5.0/dist/index.js"></script>
+    <script src="https://unpkg.com/cytoscape@3.27.0/dist/cytoscape.min.js"></script>
+    <script src="https://unpkg.com/dagre@0.8.5/dist/dagre.min.js"></script>
+    <script src="https://unpkg.com/cytoscape-dagre@2.5.0/cytoscape-dagre.js"></script>
+  </head>
+
+  <body>
+    <div id="cy"></div>
+
+    <script>
+      (function () {
+        const DEFAULT_LAYOUT = { name: "dagre", rankDir: "LR", fit: true, padding: 30 };
+        const DEFAULT_STYLE = [
+          {
+            selector: "node",
+            style: {
+              "background-color": "#111827",
+              "border-color": "#d9e2ef",
+              "border-width": 1,
+              width: 18,
+              height: 18,
+              label: "",
+              "font-size": 10,
+              "text-wrap": "wrap",
+              "text-max-width": 160,
+              color: "#111827",
+              "text-valign": "bottom",
+              "text-halign": "center",
+            },
+          },
+          {
+            selector: "node[type = 'Work']",
+            style: {
+              "background-color": "#2780e3",
+              width: 22,
+              height: 22,
+            },
+          },
+          {
+            selector: "node[type = 'CiteAnchor']",
+            style: { "background-color": "#0f766e" },
+          },
+          {
+            selector: "node[type = 'ClaimAnchor']",
+            style: {
+              "background-color": "#f97316",
+              width: 20,
+              height: 20,
+            },
+          },
+          {
+            selector: "node[type = 'ClaimAtom']",
+            style: { "background-color": "#6b7280" },
+          },
+          {
+            selector: "node[type = 'EvidenceSpan']",
+            style: { "background-color": "#7c3aed" },
+          },
+          {
+            selector: "node[type = 'Assertion']",
+            style: {
+              "background-color": "#111827",
+              width: 10,
+              height: 10,
+              "border-width": 1,
+              "border-color": "#111827",
+            },
+          },
+          {
+            selector: "edge",
+            style: {
+              width: 2,
+              "line-color": "#d9e2ef",
+              "target-arrow-color": "#d9e2ef",
+              "target-arrow-shape": "triangle",
+              "curve-style": "bezier",
+              label: "",
+            },
+          },
+          {
+            selector: "edge[provenance = 'external_search']",
+            style: {
+              "line-style": "dotted",
+              "target-arrow-shape": "triangle",
+            },
+          },
+          {
+            selector: ":selected",
+            style: {
+              "border-width": 3,
+              "border-color": "#111827",
+              "line-color": "#111827",
+              "target-arrow-color": "#111827",
+            },
+          },
+        ];
+
+        let cy = null;
+        let lastKey = null;
+
+        function coerceArray(value) {
+          return Array.isArray(value) ? value : [];
+        }
+
+        function coerceObject(value) {
+          return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+        }
+
+        function computeStyle(baseStyle, options) {
+          const showLabels = !!(options && options.showLabels);
+          if (!showLabels) return baseStyle;
+          // Copy and enable label from data(label) for nodes.
+          return baseStyle.map((rule) => {
+            if (rule && rule.selector === "node") {
+              return {
+                selector: "node",
+                style: { ...rule.style, label: "data(label)" },
+              };
+            }
+            return rule;
+          });
+        }
+
+        function applySelection(selection) {
+          const sel = coerceObject(selection);
+          const t = String(sel.type || "").trim();
+          const id = String(sel.id || "").trim();
+          if (!cy) return;
+          cy.elements().unselect();
+          if (!t || !id) return;
+          const el = cy.getElementById(id);
+          if (el && el.length) el.select();
+        }
+
+        function applyFocus(focus) {
+          const f = coerceObject(focus);
+          const nodeIds = coerceArray(f.nodeIds).map((x) => String(x || "").trim()).filter(Boolean);
+          const padding = Number.isFinite(Number(f.padding)) ? Number(f.padding) : 30;
+          if (!cy) return;
+          if (!nodeIds.length) return;
+          const nodes = cy.collection(nodeIds.map((id) => cy.getElementById(id))).filter((n) => n && n.length);
+          if (nodes && nodes.length) {
+            cy.fit(nodes, padding);
+          }
+        }
+
+        function ensureCy(args) {
+          const elements = coerceArray(args.elements);
+          const userStyle = coerceArray(args.style);
+          const options = coerceObject(args.options);
+          const style = computeStyle(userStyle.length ? userStyle : DEFAULT_STYLE, options);
+          const layout = Object.keys(coerceObject(args.layout)).length ? coerceObject(args.layout) : DEFAULT_LAYOUT;
+
+          const height = Number.isFinite(Number(args.height)) ? Number(args.height) : 560;
+          const cyDiv = document.getElementById("cy");
+          cyDiv.style.height = `${height}px`;
+
+          if (!cy) {
+            if (window.cytoscapeDagre) {
+              try {
+                cytoscape.use(window.cytoscapeDagre);
+              } catch (e) {
+                // ignore
+              }
+            }
+
+            cy = cytoscape({
+              container: cyDiv,
+              elements,
+              style,
+              layout,
+              minZoom: 0.1,
+              maxZoom: 3,
+              wheelSensitivity: 0.2,
+            });
+
+            cy.on("tap", (evt) => {
+              if (evt.target === cy) {
+                cy.elements().unselect();
+                Streamlit.setComponentValue({});
+              }
+            });
+            cy.on("tap", "node", (evt) => {
+              const id = evt.target.id();
+              Streamlit.setComponentValue({ type: "node", id });
+            });
+            cy.on("tap", "edge", (evt) => {
+              const id = evt.target.id();
+              Streamlit.setComponentValue({ type: "edge", id });
+            });
+          } else {
+            cy.json({ elements, style });
+            try {
+              cy.layout(layout).run();
+            } catch (e) {
+              cy.layout(DEFAULT_LAYOUT).run();
+            }
+          }
+
+          Streamlit.setFrameHeight(height);
+        }
+
+        function onRender(event) {
+          const args = (event && event.detail && event.detail.args) ? event.detail.args : {};
+
+          // Best-effort idempotence: if Streamlit re-renders with identical content,
+          // Cytoscape still does some work; keep it simple.
+          const key = JSON.stringify({
+            elements: args.elements || [],
+            style: args.style || [],
+            layout: args.layout || {},
+            height: args.height || 560,
+            options: args.options || {},
+          });
+          if (key !== lastKey) {
+            lastKey = key;
+            ensureCy(args);
+          } else {
+            Streamlit.setFrameHeight(Number(args.height) || 560);
+          }
+
+          applySelection(args.selection);
+          applyFocus(args.focus);
+        }
+
+        Streamlit.events.addEventListener(Streamlit.RENDER_EVENT, onRender);
+        Streamlit.setComponentReady();
+      })();
+    </script>
+  </body>
+</html>

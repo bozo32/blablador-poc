@@ -51,6 +51,8 @@ def _seed_state() -> None:
     st.session_state.setdefault("surf_live_selection", {})
     st.session_state.setdefault("surf_live_show_claim_links", False)
     st.session_state.setdefault("surf_live_show_labels", False)
+    st.session_state.setdefault("surf_live_follow_active_citation", True)
+    st.session_state.setdefault("surf_live_last_callout", "")
 
 
 def _expanded_set(key: str) -> set[str]:
@@ -145,6 +147,88 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
 
     # --- Build Cytoscape elements ------------------------------------------
     elements: list[dict] = []
+    style = [
+        {
+            "selector": "node",
+            "style": {
+                "background-color": "#111827",
+                "border-color": "#d9e2ef",
+                "border-width": 1,
+                "width": 18,
+                "height": 18,
+                "label": "",
+                "font-size": 10,
+                "text-wrap": "wrap",
+                "text-max-width": 220,
+                "text-valign": "bottom",
+                "text-halign": "center",
+                "color": "#111827",
+            },
+        },
+        {
+            "selector": "node[type = 'Work']",
+            "style": {
+                "background-color": "#2780e3",
+                "width": 26,
+                "height": 26,
+                "border-width": 1,
+                "border-color": "#1f2937",
+            },
+        },
+        {
+            "selector": "node[type = 'CiteSpan']",
+            "style": {
+                "background-color": "#0f766e",
+                "width": 18,
+                "height": 18,
+                "border-width": 2,
+                "border-color": "#d9e2ef",
+            },
+        },
+        {
+            "selector": "node[type = 'CiteSpan'][claim_count = 0]",
+            "style": {
+                "border-width": 4,
+                "border-color": "#ef4444",
+            },
+        },
+        {
+            "selector": "node[type = 'ClaimSpan']",
+            "style": {
+                "background-color": "#6b7280",
+                "width": 14,
+                "height": 14,
+                "border-width": 1,
+                "border-color": "#d9e2ef",
+            },
+        },
+        {
+            "selector": "edge",
+            "style": {
+                "width": 2,
+                "line-color": "#d9e2ef",
+                "target-arrow-color": "#d9e2ef",
+                "target-arrow-shape": "triangle",
+                "curve-style": "bezier",
+                "label": "",
+            },
+        },
+        {
+            "selector": "edge[arrow = 'none']",
+            "style": {
+                "target-arrow-shape": "none",
+            },
+        },
+        {
+            "selector": ":selected",
+            "style": {
+                "border-width": 4,
+                "border-color": "#111827",
+                "line-color": "#111827",
+                "target-arrow-color": "#111827",
+            },
+        },
+    ]
 
     for wid, wn in work_by_id.items():
         label = str((wn or {}).get("label") or wid)
@@ -340,6 +424,11 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
             st.markdown("**Surfing**")
             st.caption("Start at documents; expand into citation spans and claims.")
             st.checkbox("Show labels (debug)", key="surf_live_show_labels")
+            st.checkbox(
+                "Follow active citation",
+                key="surf_live_follow_active_citation",
+                help="When you click a citation in Reading/Chasing, focus it here.",
+            )
 
             st.divider()
             st.markdown("**Expanded**")
@@ -372,8 +461,40 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
             focus = {"nodeIds": [node_id], "padding": 40}
 
     with center:
+        # If a citation is selected in Reading/Chasing, optionally auto-focus it.
+        if bool(st.session_state.get("surf_live_follow_active_citation")):
+            active = st.session_state.get("selected_callout_tuple")
+            if isinstance(active, dict):
+                try:
+                    cite_idx = int(active.get("citation_index"))
+                except Exception:
+                    cite_idx = None
+                doc_id = str(active.get("doc_id") or "").strip()
+                sentence_id = str(active.get("sentence_id") or "").strip()
+                target_id = str(active.get("target_id") or "").strip()
+                if cite_idx is not None and doc_id and sentence_id:
+                    key = CiteSpanKey(
+                        doc_id=doc_id,
+                        sentence_id=sentence_id,
+                        citation_index=int(cite_idx),
+                        target_id=target_id,
+                    )
+                    csid = _citespan_id(key)
+                    last = str(st.session_state.get("surf_live_last_callout") or "")
+                    if csid and csid != last:
+                        st.session_state["surf_live_last_callout"] = csid
+                        expanded_works.add(doc_id)
+                        st.session_state["surf_live_pending_focus"] = {"node_id": csid}
+                        st.session_state["surf_live_selection"] = {
+                            "type": "node",
+                            "id": csid,
+                        }
+                        pending_focus = {"node_id": csid}
+                        focus = {"nodeIds": [csid], "padding": 40}
+
         picked = cytoscape_panel.render(
             elements,
+            style=style,
             height=720,
             key="surf-live",
             selection=selection,

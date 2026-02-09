@@ -1,0 +1,231 @@
+{
+  "meta": {
+    "name": "graph-as-architecture-poc",
+    "version": 1,
+    "notes": "Small in-repo dataset to demonstrate stable anchors, plural segmentation, and disagreement heat."
+  },
+  "nodes": [
+    {
+      "id": "work:10.1111/citing",
+      "type": "Work",
+      "label": "Citing work",
+      "properties": {
+        "doi": "10.1111/citing",
+        "title": "A short citing paper",
+        "year": 2024
+      }
+    },
+    {
+      "id": "work:10.2222/cited1",
+      "type": "Work",
+      "label": "Cited work B",
+      "properties": {
+        "doi": "10.2222/cited1",
+        "title": "Cited work B",
+        "year": 2020
+      }
+    },
+    {
+      "id": "work:10.3333/cited2",
+      "type": "Work",
+      "label": "Cited work C",
+      "properties": {
+        "doi": "10.3333/cited2",
+        "title": "Cited work C",
+        "year": 2021
+      }
+    },
+    {
+      "id": "citeanchor:10.1111/citing#A1",
+      "type": "CiteAnchor",
+      "label": "(Doe 2020; Roe 2021)",
+      "properties": {
+        "citing_work_doi": "10.1111/citing",
+        "anchor_text": "(Doe 2020; Roe 2021)",
+        "cited_work_dois": ["10.2222/cited1", "10.3333/cited2"],
+        "anchor_quote": {
+          "exact": "... increases outcomes (Doe 2020; Roe 2021).",
+          "prefix": "In the intervention cohort,",
+          "suffix": "We further note limitations ..."
+        },
+        "window_fingerprint": "sha1:9b9f7a2a"
+      }
+    },
+    {
+      "id": "user:u1",
+      "type": "User",
+      "label": "u1",
+      "properties": {"name": "Reviewer 1"}
+    },
+    {
+      "id": "user:u2",
+      "type": "User",
+      "label": "u2",
+      "properties": {"name": "Reviewer 2"}
+    },
+    {
+      "id": "claimatom:10.1111/citing#A1#u1#a1",
+      "type": "ClaimAtom",
+      "label": "u1 atom 1",
+      "properties": {
+        "created_by": "u1",
+        "text": "The intervention increases outcomes.",
+        "quote_selector": {"exact": "increases outcomes"}
+      }
+    },
+    {
+      "id": "claimatom:10.1111/citing#A1#u1#a2",
+      "type": "ClaimAtom",
+      "label": "u1 atom 2",
+      "properties": {
+        "created_by": "u1",
+        "text": "The effect generalizes to older cohorts.",
+        "quote_selector": {"exact": "generalizes"}
+      }
+    },
+    {
+      "id": "claimatom:10.1111/citing#A1#u2#b1",
+      "type": "ClaimAtom",
+      "label": "u2 atom 1",
+      "properties": {
+        "created_by": "u2",
+        "text": "The intervention increases outcomes.",
+        "quote_selector": {"exact": "increases outcomes"}
+      }
+    },
+    {
+      "id": "claimatom:10.1111/citing#A1#u2#b2",
+      "type": "ClaimAtom",
+      "label": "u2 atom 2",
+      "properties": {
+        "created_by": "u2",
+        "text": "The effect depends on measurement choice.",
+        "quote_selector": {"exact": "depends"}
+      }
+    },
+    {
+      "id": "claimatom:10.1111/citing#A1#u2#b3",
+      "type": "ClaimAtom",
+      "label": "u2 atom 3",
+      "properties": {
+        "created_by": "u2",
+        "text": "The older-cohort evidence is inconclusive.",
+        "quote_selector": {"exact": "older"}
+      }
+    },
+    {
+      "id": "claimanchor:10.1111/citing#A1#K1",
+      "type": "ClaimAnchor",
+      "label": "Coordination anchor K1",
+      "properties": {
+        "canonical_label": "Outcome increase",
+        "member_count": 2
+      }
+    },
+    {
+      "id": "claimanchor:10.1111/citing#A1#K2",
+      "type": "ClaimAnchor",
+      "label": "Coordination anchor K2",
+      "properties": {
+        "canonical_label": "Generalization / caveats",
+        "member_count": 3
+      }
+    },
+    {
+      "id": "evidence:10.2222/cited1#E1",
+      "type": "EvidenceSpan",
+      "label": "Evidence E1",
+      "properties": {
+        "cited_work_doi": "10.2222/cited1",
+        "quote_or_snippet": "We observe a 12% improvement...",
+        "quote_selector": {"exact": "12% improvement"},
+        "created_by": "u1"
+      }
+    },
+    {
+      "id": "evidence:10.2222/cited1#E2",
+      "type": "EvidenceSpan",
+      "label": "Evidence E2",
+      "properties": {
+        "cited_work_doi": "10.2222/cited1",
+        "quote_or_snippet": "Sensitivity analyses change the estimate...",
+        "quote_selector": {"exact": "Sensitivity analyses"},
+        "created_by": "u2"
+      }
+    },
+    {
+      "id": "evidence:10.3333/cited2#E3",
+      "type": "EvidenceSpan",
+      "label": "Evidence E3",
+      "properties": {
+        "cited_work_doi": "10.3333/cited2",
+        "quote_or_snippet": "No significant improvement is detected...",
+        "quote_selector": {"exact": "No significant"},
+        "created_by": "u2"
+      }
+    },
+    {
+      "id": "assertion:u1:K1:E1:t1",
+      "type": "Assertion",
+      "label": "A1",
+      "properties": {
+        "created_by": "u1",
+        "relation_type": "supports",
+        "rationale": "Directly reports improvement." 
+      }
+    },
+    {
+      "id": "assertion:u2:K1:E3:t2",
+      "type": "Assertion",
+      "label": "A2",
+      "properties": {
+        "created_by": "u2",
+        "relation_type": "contradicts",
+        "rationale": "Alternate study finds null effect." 
+      }
+    },
+    {
+      "id": "assertion:u2:K2:E2:t3",
+      "type": "Assertion",
+      "label": "A3",
+      "properties": {
+        "created_by": "u2",
+        "relation_type": "unclear",
+        "rationale": "Effect depends on measurement." 
+      }
+    }
+  ],
+  "edges": [
+    {"id": "e-inwork", "source": "citeanchor:10.1111/citing#A1", "target": "work:10.1111/citing", "type": "IN_WORK"},
+    {"id": "e-cites-b", "source": "citeanchor:10.1111/citing#A1", "target": "work:10.2222/cited1", "type": "CITES"},
+    {"id": "e-cites-c", "source": "citeanchor:10.1111/citing#A1", "target": "work:10.3333/cited2", "type": "CITES"},
+
+    {"id": "e-u1-prop-a1", "source": "user:u1", "target": "claimatom:10.1111/citing#A1#u1#a1", "type": "PROPOSES_ATOM"},
+    {"id": "e-u1-prop-a2", "source": "user:u1", "target": "claimatom:10.1111/citing#A1#u1#a2", "type": "PROPOSES_ATOM"},
+    {"id": "e-u2-prop-b1", "source": "user:u2", "target": "claimatom:10.1111/citing#A1#u2#b1", "type": "PROPOSES_ATOM"},
+    {"id": "e-u2-prop-b2", "source": "user:u2", "target": "claimatom:10.1111/citing#A1#u2#b2", "type": "PROPOSES_ATOM"},
+    {"id": "e-u2-prop-b3", "source": "user:u2", "target": "claimatom:10.1111/citing#A1#u2#b3", "type": "PROPOSES_ATOM"},
+
+    {"id": "e-a1-from", "source": "claimatom:10.1111/citing#A1#u1#a1", "target": "citeanchor:10.1111/citing#A1", "type": "DERIVED_FROM"},
+    {"id": "e-a2-from", "source": "claimatom:10.1111/citing#A1#u1#a2", "target": "citeanchor:10.1111/citing#A1", "type": "DERIVED_FROM"},
+    {"id": "e-b1-from", "source": "claimatom:10.1111/citing#A1#u2#b1", "target": "citeanchor:10.1111/citing#A1", "type": "DERIVED_FROM"},
+    {"id": "e-b2-from", "source": "claimatom:10.1111/citing#A1#u2#b2", "target": "citeanchor:10.1111/citing#A1", "type": "DERIVED_FROM"},
+    {"id": "e-b3-from", "source": "claimatom:10.1111/citing#A1#u2#b3", "target": "citeanchor:10.1111/citing#A1", "type": "DERIVED_FROM"},
+
+    {"id": "e-map-a1", "source": "claimatom:10.1111/citing#A1#u1#a1", "target": "claimanchor:10.1111/citing#A1#K1", "type": "MAPS_TO"},
+    {"id": "e-map-b1", "source": "claimatom:10.1111/citing#A1#u2#b1", "target": "claimanchor:10.1111/citing#A1#K1", "type": "MAPS_TO"},
+
+    {"id": "e-map-a2", "source": "claimatom:10.1111/citing#A1#u1#a2", "target": "claimanchor:10.1111/citing#A1#K2", "type": "MAPS_TO"},
+    {"id": "e-map-b2", "source": "claimatom:10.1111/citing#A1#u2#b2", "target": "claimanchor:10.1111/citing#A1#K2", "type": "MAPS_TO"},
+    {"id": "e-map-b3", "source": "claimatom:10.1111/citing#A1#u2#b3", "target": "claimanchor:10.1111/citing#A1#K2", "type": "MAPS_TO"},
+
+    {"id": "e-about-a1", "source": "assertion:u1:K1:E1:t1", "target": "claimanchor:10.1111/citing#A1#K1", "type": "ABOUT"},
+    {"id": "e-cite-a1", "source": "assertion:u1:K1:E1:t1", "target": "evidence:10.2222/cited1#E1", "type": "CITES_EVIDENCE"},
+
+    {"id": "e-about-a2", "source": "assertion:u2:K1:E3:t2", "target": "claimanchor:10.1111/citing#A1#K1", "type": "ABOUT"},
+    {"id": "e-cite-a2", "source": "assertion:u2:K1:E3:t2", "target": "evidence:10.3333/cited2#E3", "type": "CITES_EVIDENCE"},
+
+    {"id": "e-about-a3", "source": "assertion:u2:K2:E2:t3", "target": "claimanchor:10.1111/citing#A1#K2", "type": "ABOUT"},
+    {"id": "e-cite-a3", "source": "assertion:u2:K2:E2:t3", "target": "evidence:10.2222/cited1#E2", "type": "CITES_EVIDENCE"}
+  ]
+}

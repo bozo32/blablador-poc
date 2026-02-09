@@ -25,7 +25,9 @@ tmp.*
 # anything else you don’t want under source control
 
 # ─── Project-generated folders ───────────────────────────────────────────────
-data/
+# Keep runtime data out of git, but allow the in-repo graph POC dataset.
+data/*
+!data/poc_graph.json
 experiments/
 
 # ─── Local ColBERT clones (use requirements pin or submodule instead) ───────

@@ -40,6 +40,7 @@ from frontend.components import chase_queue as chase_queue_component
 from frontend.components import chasing_panel
 from frontend.components import claim_graph_panel
 from frontend.components import cytoscape_panel
+from frontend.components import live_surfing_panel
 from frontend.components import work_citation_graph_panel
 from frontend.state_keys import (
     WORKSPACE_ACTIVE_TAB,
@@ -5412,13 +5413,25 @@ def draw_ingestion_panel(*, center, right) -> None:
             st.markdown("### Surfing")
 
             graph_mode_key = "graph_mode"
-            st.session_state.setdefault(graph_mode_key, "Surfing (POC)")
+            st.session_state.setdefault(graph_mode_key, "Surfing (live)")
             mode = st.radio(
                 "Mode",
-                ["Surfing (POC)", "Claim graph", "Span view (preview)"],
+                [
+                    "Surfing (live)",
+                    "Surfing (POC)",
+                    "Claim graph",
+                    "Span view (preview)",
+                ],
                 horizontal=True,
                 key=graph_mode_key,
             )
+
+            if mode == "Surfing (live)":
+                live_surfing_panel.render(
+                    api_url=get_api_url(),
+                    seed_doc_id=str(st.session_state.get("selected_doc_id") or ""),
+                )
+                return
 
             if mode == "Surfing (POC)":
                 st.caption(

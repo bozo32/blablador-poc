@@ -22,6 +22,23 @@
         width: 100%;
         background: #ffffff;
       }
+
+      #tooltip {
+        position: absolute;
+        z-index: 10;
+        display: none;
+        max-width: 360px;
+        padding: 8px 10px;
+        border-radius: 10px;
+        border: 1px solid rgba(217, 226, 239, 1);
+        background: rgba(255, 255, 255, 0.98);
+        color: #111827;
+        box-shadow: 0 10px 30px rgba(17, 24, 39, 0.08);
+        pointer-events: none;
+        font-size: 12px;
+        line-height: 1.25;
+        white-space: pre-wrap;
+      }
     </style>
 
     <!-- Vendored JS assets (no-build component; avoid network/proxy failures). -->
@@ -32,6 +49,7 @@
 
   <body>
     <div id="cy"></div>
+    <div id="tooltip" aria-hidden="true"></div>
 
     <script>
       (function () {
@@ -152,6 +170,23 @@
 
         let cy = null;
         let lastKey = null;
+        const tooltip = document.getElementById("tooltip");
+
+        function hideTooltip() {
+          if (!tooltip) return;
+          tooltip.style.display = "none";
+          tooltip.setAttribute("aria-hidden", "true");
+        }
+
+        function showTooltip(text, x, y) {
+          if (!tooltip) return;
+          if (!text) return hideTooltip();
+          tooltip.textContent = String(text);
+          tooltip.style.display = "block";
+          tooltip.setAttribute("aria-hidden", "false");
+          tooltip.style.left = `${Math.max(8, x + 10)}px`;
+          tooltip.style.top = `${Math.max(8, y + 10)}px`;
+        }
 
         function coerceArray(value) {
           return Array.isArray(value) ? value : [];
@@ -227,6 +262,20 @@
               minZoom: 0.1,
               maxZoom: 3,
               wheelSensitivity: 0.2,
+            });
+
+            cy.on("mouseover", "node", (evt) => {
+              const d = evt.target.data() || {};
+              const text = d.hover || d.label || d.id || "";
+              const pos = evt.renderedPosition || { x: 0, y: 0 };
+              showTooltip(text, pos.x, pos.y);
+            });
+            cy.on("mouseout", "node", () => hideTooltip());
+            cy.on("mousemove", (evt) => {
+              if (!tooltip || tooltip.style.display !== "block") return;
+              const pos = evt.renderedPosition || null;
+              if (!pos) return;
+              showTooltip(tooltip.textContent || "", pos.x, pos.y);
             });
 
             cy.on("tap", (evt) => {

@@ -6315,6 +6315,54 @@ def draw_ingestion_panel(*, center, right) -> None:
                     return f"claim:{doc}:{sentence_id}:{int(claim_index)}"
                 return None
 
+            def _claim_node_label(node: dict, *, max_chars: int = 80) -> str:
+                props = (node or {}).get("properties") or {}
+                text = str(
+                    props.get("parsed_text")
+                    or (node or {}).get("label")
+                    or (node or {}).get("id")
+                    or ""
+                ).strip()
+                if len(text) > max_chars:
+                    text = text[: max_chars - 1].rstrip() + "…"
+                doc_id = str(props.get("document_id") or "").strip()
+                sentence_id = str(props.get("sentence_id") or "").strip()
+                claim_index = str(props.get("claim_index") or "").strip()
+                suffix_bits = ":".join(
+                    bit for bit in [doc_id, sentence_id, claim_index] if bit
+                )
+                return f"{text} ({suffix_bits})" if suffix_bits else text
+
+            def _list_claim_node_options() -> tuple[list[str], dict[str, dict]]:
+                selected_doc = str(
+                    st.session_state.get("selected_doc_id") or ""
+                ).strip()
+                try:
+                    payload = graph_api.list_claim_nodes(
+                        doc_id=selected_doc or None,
+                        limit=500,
+                    )
+                except Exception:
+                    payload = {}
+                nodes = payload.get("nodes") or []
+                if not nodes:
+                    try:
+                        payload = graph_api.list_claim_nodes(doc_id=None, limit=500)
+                    except Exception:
+                        payload = {}
+                    nodes = payload.get("nodes") or []
+                by_id: dict[str, dict] = {}
+                ids: list[str] = []
+                for n in nodes:
+                    if not isinstance(n, dict):
+                        continue
+                    nid = str(n.get("id") or "").strip()
+                    if not nid:
+                        continue
+                    by_id[nid] = n
+                    ids.append(nid)
+                return ids, by_id
+
             # Streamlit forbids writing to a widget's session_state key after the
             # widget is instantiated in the current run. Graph controls contain
             # several buttons that want to "jump" the center claim.
@@ -6339,14 +6387,57 @@ def draw_ingestion_panel(*, center, right) -> None:
                 "claim_graph_center", _guess_center_claim_id() or ""
             )
 
+            claim_node_ids, claim_node_by_id = _list_claim_node_options()
+            # If user hasn't chosen a center, auto-pick the first available claim.
+            if not str(st.session_state.get("claim_graph_center") or "").strip():
+                auto_center = _guess_center_claim_id()
+                if auto_center and auto_center in claim_node_by_id:
+                    st.session_state["claim_graph_center"] = auto_center
+                elif claim_node_ids:
+                    st.session_state["claim_graph_center"] = claim_node_ids[0]
+
+            st.session_state.setdefault(
+                "claim_graph_center_choice",
+                str(st.session_state.get("claim_graph_center") or "").strip(),
+            )
+
+            def _on_center_choice_change() -> None:
+                picked = str(
+                    st.session_state.get("claim_graph_center_choice") or ""
+                ).strip()
+                st.session_state["_claim_graph_pending"] = {
+                    "center": picked,
+                    "clear_cache": True,
+                }
+                _rerun()
+
             center_row = st.columns([3, 1], gap="small")
             with center_row[0]:
-                st.text_input(
-                    "Center claim id",
-                    key="claim_graph_center",
-                    placeholder="claim:{doc_id}:{sentence_id}:{claim_index}",
-                    label_visibility="collapsed",
-                )
+                if claim_node_ids:
+                    # Prefer a picker over raw ids so users can start immediately.
+                    current = str(
+                        st.session_state.get("claim_graph_center") or ""
+                    ).strip()
+                    if current and current in claim_node_ids:
+                        st.session_state["claim_graph_center_choice"] = current
+                    st.selectbox(
+                        "Center claim",
+                        claim_node_ids,
+                        key="claim_graph_center_choice",
+                        format_func=lambda cid: _claim_node_label(
+                            claim_node_by_id.get(str(cid), {"id": str(cid)}),
+                            max_chars=90,
+                        ),
+                        on_change=_on_center_choice_change,
+                        label_visibility="collapsed",
+                    )
+                else:
+                    st.text_input(
+                        "Center claim id",
+                        key="claim_graph_center",
+                        placeholder="claim:{doc_id}:{sentence_id}:{claim_index}",
+                        label_visibility="collapsed",
+                    )
             with center_row[1]:
                 if st.button("Use active", key="claim-graph-use-active"):
                     st.session_state["_claim_graph_pending"] = {
@@ -6428,10 +6519,13 @@ def draw_ingestion_panel(*, center, right) -> None:
                 graph_data = _fetch_claim_graph(force=False)
 
             if not graph_data:
-                st.info(
-                    "Select a center claim (or click 'Use active'), "
-                    "then load the graph."
-                )
+                if claim_node_ids:
+                    st.info("Pick a center claim to load the graph.")
+                else:
+                    st.info(
+                        "No claim nodes found yet. Create/confirm at least one claim "
+                        "in Chasing, then return to Surfing -> Claim graph."
+                    )
             else:
                 node_by_id = {
                     str(n.get("id")): n for n in (graph_data.get("nodes") or [])

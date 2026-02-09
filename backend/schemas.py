@@ -1149,6 +1149,11 @@ class ClaimNodeResponse(BaseModel):
     node: ClaimGraphNode
 
 
+class ClaimNodeListResponse(BaseModel):
+    nodes: List[ClaimGraphNode] = Field(default_factory=list)
+    count: int = 0
+
+
 class ClaimLinkCreateRequest(BaseModel):
     source_claim_id: str
     target_claim_id: str

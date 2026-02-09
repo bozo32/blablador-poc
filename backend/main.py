@@ -491,6 +491,30 @@ def get_claim_graph_node(claim_id: str):
     return {"node": _node_payload(node)}
 
 
+@app.get("/graph/claim-nodes", response_model=schemas.ClaimNodeListResponse)
+def list_claim_graph_nodes(
+    doc_id: Optional[str] = None,
+    limit: int = Query(200, ge=1, le=5000),
+):
+    """List available claim nodes for UI bootstrap.
+
+    This exists so the claim graph can load without requiring users to know a
+    claim_id string.
+    """
+    want_doc = str(doc_id or "").strip() or None
+    out: list[dict] = []
+    for node in graph_store.list_claim_nodes():
+        payload = _node_payload(node)
+        if want_doc:
+            props = payload.get("properties") or {}
+            if str(props.get("document_id") or "").strip() != want_doc:
+                continue
+        out.append(payload)
+        if len(out) >= int(limit):
+            break
+    return {"nodes": out, "count": int(len(out))}
+
+
 @app.get(
     "/graph/edge/{edge_id}/votes", response_model=schemas.ClaimGraphVoteListResponse
 )

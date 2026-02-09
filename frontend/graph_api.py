@@ -132,3 +132,16 @@ def get_claim_candidates(claim_id: str, limit: int = 10) -> Dict[str, Any]:
         return resp.json() if resp.text else {}
     except requests.RequestException as exc:
         raise GraphApiError(str(exc)) from exc
+
+
+def list_claim_nodes(doc_id: Optional[str] = None, limit: int = 200) -> Dict[str, Any]:
+    url = f"{_api_root()}/graph/claim-nodes"
+    params: Dict[str, Any] = {"limit": int(limit)}
+    if doc_id:
+        params["doc_id"] = str(doc_id).strip()
+    try:
+        resp = requests.get(url, params=params, timeout=DEFAULT_TIMEOUT)
+        resp.raise_for_status()
+        return resp.json() if resp.text else {}
+    except requests.RequestException as exc:
+        raise GraphApiError(str(exc)) from exc

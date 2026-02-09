@@ -63,8 +63,10 @@ Add local multi-user review (no real auth) and an interactive claim-level graph 
 
 ### Edge styling + provenance layers
 - Consensus support vs contradict is visible at a glance.
-- MVP encoding: neutral edge line plus a small mid-edge ratio badge showing support vs contradict balance.
-- Ratio badges are always visible (kept small/low-noise).
+- Default encoding should avoid on-canvas text noise:
+  - Use edge color + thickness for at-a-glance consensus + vote volume.
+  - Show exact ratios/counts in the inspector and/or tooltip.
+  - Optional: render a small ratio badge only for the selected edge (or on hover).
 - Edge thickness scales with vote volume (n_total) and may also reflect confidence when present.
 - Provenance styles:
   - auto: solid

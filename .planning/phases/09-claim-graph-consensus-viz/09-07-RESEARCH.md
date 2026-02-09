@@ -52,9 +52,24 @@ Cons:
 - Hard to reliably send selection back to Python without a real Streamlit component.
 - Ends up re-implementing component plumbing anyway.
 
+### Option D: Custom Streamlit component with *no build* (static HTML + CDN libs)
+
+Use Streamlit's component API, but ship a static `index.html` that loads:
+
+- `streamlit-component-lib` from a pinned CDN URL
+- `cytoscape` (and any layout plugins) from pinned CDN URLs
+
+Pros:
+- No Node build step; simplest possible Streamlit wiring.
+- Still gets reliable Python<->JS messaging (`Streamlit.setComponentValue`).
+- Keeps Cytoscape as the long-term durable renderer without adopting a third-party wrapper.
+
+Cons:
+- Requires network access to fetch the pinned CDN assets (acceptable for this POC).
+
 ## Recommended approach
 
-Implement a custom component:
+Implement a custom component (Option D preferred for the POC; Option A acceptable later if we want fully vendored assets):
 
 - Python wrapper: `frontend/components/cytoscape_panel.py`
 - Frontend: `frontend/components/cytoscape_component/` (Streamlit component scaffold)
@@ -89,5 +104,5 @@ For the POC dataset, we can include token positions as hints, but:
 
 ## Minimal build strategy
 
-- Commit built assets for the component frontend (so `pip install -e .` users don't need Node).
-- Keep the JS dependencies pinned in the component package lockfile.
+- Prefer a no-build static HTML component for the POC.
+- If we later need offline/airgapped installs, vendor built assets and pin dependencies.

@@ -48,6 +48,8 @@ def _seed_state() -> None:
     st.session_state.setdefault("surf_live_seed_doc", "")
     st.session_state.setdefault("surf_live_expanded_works", [])
     st.session_state.setdefault("surf_live_expanded_citespans", [])
+    st.session_state.setdefault("surf_live_expanded_work_citespans", [])
+    st.session_state.setdefault("surf_live_active_citespan_doc", "")
     st.session_state.setdefault("surf_live_selection", {})
     st.session_state.setdefault("surf_live_show_labels", False)
     st.session_state.setdefault("surf_live_follow_active_citation", True)
@@ -200,6 +202,7 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
 
     expanded_works = _expanded_set("surf_live_expanded_works")
     expanded_cites = _expanded_set("surf_live_expanded_citespans")
+    expanded_work_citespans = _expanded_set("surf_live_expanded_work_citespans")
     selection = st.session_state.get("surf_live_selection")
     if not isinstance(selection, dict):
         selection = {}
@@ -328,6 +331,22 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
             },
         },
         {
+            "selector": "node[type = 'CiteSpanBucket']",
+            "style": {
+                "background-color": "#0f766e",
+                "width": 26,
+                "height": 26,
+                "border-width": 4,
+                "border-color": "#111827",
+                "label": "data(count_label)",
+                "text-valign": "center",
+                "text-halign": "center",
+                "color": "#ffffff",
+                "font-size": 12,
+                "font-weight": "bold",
+            },
+        },
+        {
             "selector": "node[type = 'ClaimSpan']",
             "style": {
                 "background-color": "#6b7280",
@@ -396,6 +415,7 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
         )
 
     citespan_records: dict[str, dict] = {}
+    citespans_by_doc: dict[str, list[dict]] = {}
 
     for wid in sorted(expanded_works):
         try:
@@ -424,6 +444,8 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
             citing_doc_id=wid,
             reference_ids=ref_ids,
         )
+
+        work_cites: list[dict] = []
 
         for seg in raw_segments:
             sentence_id = str(seg.get("sentence_id") or "").strip()
@@ -466,40 +488,114 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
                 "claim_count": claim_n,
             }
 
+            work_cites.append(citespan_records[csid])
+
+        citespans_by_doc[wid] = sorted(
+            work_cites,
+            key=lambda r: int(r.get("citation_index") or 0),
+        )
+
+        # Collapse or expand cite spans for this work.
+        if wid not in expanded_work_citespans:
+            unclaimed = sum(
+                1
+                for r in citespans_by_doc.get(wid) or []
+                if int(r.get("claim_count") or 0) == 0
+            )
+            bucket_id = f"citespanbucket:{wid}"
             elements.append(
                 {
                     "data": {
-                        "id": csid,
-                        "type": "CiteSpan",
-                        "label": label,
-                        "hover": label,
+                        "id": bucket_id,
+                        "type": "CiteSpanBucket",
+                        "count": int(len(citespans_by_doc.get(wid) or [])),
+                        "count_label": str(int(len(citespans_by_doc.get(wid) or []))),
+                        "hover": (
+                            f"CiteSpans: {len(citespans_by_doc.get(wid) or [])}\n"
+                            f"Needs claims: {unclaimed}"
+                        ),
                         "doc_id": wid,
-                        "sentence_id": sentence_id,
-                        "citation_index": int(citation_index),
-                        "reference_id": ref_id,
-                        "claim_count": int(claim_n),
                     }
                 }
             )
             elements.append(
                 {
                     "data": {
-                        "id": f"work2cs:{wid}->{csid}",
+                        "id": f"work2bucket:{wid}",
                         "source": wid,
-                        "target": csid,
-                        "type": "HAS_CITESPAN",
+                        "target": bucket_id,
+                        "type": "HAS_CITESPANS",
                         "arrow": "none",
                     }
                 }
             )
-            if tgt_ingest and tgt_ingest in work_by_id:
+        else:
+            cap = 40
+            visible = (citespans_by_doc.get(wid) or [])[:cap]
+            remainder = (citespans_by_doc.get(wid) or [])[cap:]
+            for rec in visible:
+                csid = str(rec.get("id") or "")
+                tgt_ingest = rec.get("target_ingest_id")
                 elements.append(
                     {
                         "data": {
-                            "id": f"cs2work:{csid}->{tgt_ingest}",
-                            "source": csid,
-                            "target": tgt_ingest,
-                            "type": "CITES_TARGET",
+                            "id": csid,
+                            "type": "CiteSpan",
+                            "label": str(rec.get("label") or "citation"),
+                            "hover": str(rec.get("label") or "citation"),
+                            "doc_id": wid,
+                            "sentence_id": str(rec.get("sentence_id") or ""),
+                            "citation_index": int(rec.get("citation_index") or 0),
+                            "reference_id": str(rec.get("reference_id") or ""),
+                            "claim_count": int(rec.get("claim_count") or 0),
+                        }
+                    }
+                )
+                elements.append(
+                    {
+                        "data": {
+                            "id": f"work2cs:{wid}->{csid}",
+                            "source": wid,
+                            "target": csid,
+                            "type": "HAS_CITESPAN",
+                            "arrow": "none",
+                        }
+                    }
+                )
+                if tgt_ingest and tgt_ingest in work_by_id:
+                    elements.append(
+                        {
+                            "data": {
+                                "id": f"cs2work:{csid}->{tgt_ingest}",
+                                "source": csid,
+                                "target": tgt_ingest,
+                                "type": "CITES_TARGET",
+                                "arrow": "none",
+                            }
+                        }
+                    )
+
+            if remainder:
+                bucket_id = f"citespanbucket:{wid}:more"
+                elements.append(
+                    {
+                        "data": {
+                            "id": bucket_id,
+                            "type": "CiteSpanBucket",
+                            "count": int(len(remainder)),
+                            "count_label": str(int(len(remainder))),
+                            "hover": f"More CiteSpans: {len(remainder)}",
+                            "doc_id": wid,
+                        }
+                    }
+                )
+                elements.append(
+                    {
+                        "data": {
+                            "id": f"work2bucket:{wid}:more",
+                            "source": wid,
+                            "target": bucket_id,
+                            "type": "HAS_MORE_CITESPANS",
                             "arrow": "none",
                         }
                     }
@@ -561,9 +657,12 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
             if st.button("Collapse all", key="surf-live-collapse"):
                 expanded_works = {seed}
                 expanded_cites = set()
+                expanded_work_citespans = set()
+                st.session_state["surf_live_active_citespan_doc"] = ""
 
             st.caption(f"Works expanded: {len(expanded_works)}")
             st.caption(f"CiteSpans expanded: {len(expanded_cites)}")
+            st.caption(f"CiteSpan lists: {len(expanded_work_citespans)}")
 
             st.divider()
             st.markdown("**Work list**")
@@ -629,34 +728,62 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
     if picked:
         st.session_state["surf_live_selection"] = picked
 
-    # Bottom list: TODO citespans (no confirmed claims)
-    with st.expander("CiteSpans needing claims", expanded=True):
-        todo: list[dict] = []
-        for rec in citespan_records.values():
-            if str(rec.get("doc_id") or "").strip() != seed:
-                continue
-            if int(rec.get("claim_count") or 0) > 0:
-                continue
-            todo.append(rec)
-        todo = sorted(todo, key=lambda r: int(r.get("citation_index") or 0))
-        if not todo:
-            st.caption("None detected for the seed document.")
+        # Double-click on collapsed citespan bucket expands it.
+        try:
+            action = str((picked or {}).get("action") or "").strip()
+            node_id = str((picked or {}).get("id") or "").strip()
+        except Exception:
+            action = ""
+            node_id = ""
+        if action == "dblclick" and node_id.startswith("citespanbucket:"):
+            parts = node_id.split(":")
+            doc_id = str(parts[1] if len(parts) > 1 else "").strip()
+            if doc_id:
+                expanded_work_citespans.add(doc_id)
+                st.session_state["surf_live_active_citespan_doc"] = doc_id
+                st.rerun()
+        elif node_id.startswith("citespanbucket:"):
+            parts = node_id.split(":")
+            doc_id = str(parts[1] if len(parts) > 1 else "").strip()
+            if doc_id:
+                st.session_state["surf_live_active_citespan_doc"] = doc_id
+        elif node_id in work_by_id:
+            st.session_state["surf_live_active_citespan_doc"] = node_id
+
+    active_doc = str(
+        st.session_state.get("surf_live_active_citespan_doc") or ""
+    ).strip()
+    if not active_doc:
+        active_doc = seed
+    with st.expander("CiteSpans", expanded=True):
+        rows = citespans_by_doc.get(active_doc) or []
+        if not rows:
+            st.caption(
+                "No cite spans found for this document (or extraction not complete)."
+            )
         else:
-            for rec in todo[:30]:
-                csid = str(rec.get("id") or "")
-                label = str(rec.get("label") or "citation")
-                cite_idx = int(rec.get("citation_index") or 0)
-                if st.button(
-                    f"{cite_idx}: {label}",
-                    key=f"surf-live-todo:{csid}",
-                ):
-                    expanded_works.add(seed)
-                    st.session_state["surf_live_pending_focus"] = {"node_id": csid}
-                    st.session_state["surf_live_selection"] = {
-                        "type": "node",
-                        "id": csid,
-                    }
-                    st.rerun()
+            with st.container(height=320):
+                for rec in rows:
+                    csid = str(rec.get("id") or "")
+                    cite_idx = int(rec.get("citation_index") or 0)
+                    label = str(rec.get("label") or "citation")
+                    claim_n = int(rec.get("claim_count") or 0)
+                    prefix = "TODO" if claim_n == 0 else "OK"
+                    if st.button(
+                        f"{prefix} {cite_idx}: {label}",
+                        key=f"surf-live-cs:{csid}",
+                        use_container_width=True,
+                    ):
+                        expanded_works.add(active_doc)
+                        expanded_work_citespans.add(active_doc)
+                        st.session_state["surf_live_pending_focus"] = {"node_id": csid}
+                        st.session_state["surf_live_selection"] = {
+                            "type": "node",
+                            "id": csid,
+                        }
+                        st.session_state["surf_live_active_citespan_doc"] = active_doc
+                        st.rerun()
 
     _store_expanded("surf_live_expanded_works", expanded_works)
     _store_expanded("surf_live_expanded_citespans", expanded_cites)
+    _store_expanded("surf_live_expanded_work_citespans", expanded_work_citespans)

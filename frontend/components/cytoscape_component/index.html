@@ -170,6 +170,8 @@
 
         let cy = null;
         let lastKey = null;
+        let lastTapAt = 0;
+        let lastTapId = null;
         const tooltip = document.getElementById("tooltip");
 
         function hideTooltip() {
@@ -286,7 +288,11 @@
             });
             cy.on("tap", "node", (evt) => {
               const id = evt.target.id();
-              Streamlit.setComponentValue({ type: "node", id });
+              const now = Date.now();
+              const isDbl = (lastTapId === id) && (now - lastTapAt <= 350);
+              lastTapAt = now;
+              lastTapId = id;
+              Streamlit.setComponentValue({ type: "node", id, action: isDbl ? "dblclick" : "click" });
             });
             cy.on("tap", "edge", (evt) => {
               const id = evt.target.id();

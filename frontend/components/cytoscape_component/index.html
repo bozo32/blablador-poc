@@ -173,6 +173,7 @@
         let lastTapAt = 0;
         let lastTapId = null;
         let lastSentValue = null;
+        let eventSeq = 0;
         const tooltip = document.getElementById("tooltip");
 
         function hideTooltip() {
@@ -306,11 +307,12 @@
                 type: "node",
                 id,
                 action: isDbl ? "dblclick" : "click",
+                seq: ++eventSeq,
               });
             });
             cy.on("tap", "edge", (evt) => {
               const id = evt.target.id();
-              sendValue({ type: "edge", id, action: "click" });
+              sendValue({ type: "edge", id, action: "click", seq: ++eventSeq });
             });
           } else {
             cy.json({ elements, style });

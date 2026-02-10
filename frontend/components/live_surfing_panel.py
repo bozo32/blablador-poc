@@ -62,6 +62,7 @@ def _seed_state() -> None:
     st.session_state.setdefault("surf_live_ref_cache", {})
     st.session_state.setdefault("surf_live_span_cache", {})
     st.session_state.setdefault("surf_live_bundle_cache", {})
+    st.session_state.setdefault("surf_live_last_event_seq", 0)
 
 
 def _get_span_id(
@@ -292,7 +293,20 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
                         "type": "node",
                         "id": csid,
                     }
-                    selection = {"type": "node", "id": csid}
+                    selection = {"type": "node", "id": csid, "action": "focus"}
+
+    # If the component sends a persistent dblclick action, treat it as an event
+    # (handled once) rather than state.
+    try:
+        picked_seq = int(selection.get("seq") or 0)
+    except Exception:
+        picked_seq = 0
+    last_seq = int(st.session_state.get("surf_live_last_event_seq") or 0)
+    if picked_seq and picked_seq <= last_seq:
+        # Clear action so we don't re-trigger on reruns.
+        selection = {k: v for k, v in selection.items() if k != "action"}
+    elif picked_seq:
+        st.session_state["surf_live_last_event_seq"] = picked_seq
 
     # --- Work graph (ledger-backed) ----------------------------------------
     try:

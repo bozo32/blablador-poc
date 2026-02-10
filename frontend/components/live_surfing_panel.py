@@ -937,6 +937,22 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
                 rec = work_by_id.get(sel_id) or {}
                 st.caption("Work")
                 st.write(str(rec.get("short") or sel_id))
+
+                is_exp = sel_id in expanded_work_citespans
+                next_exp = st.toggle(
+                    "Show citations",
+                    value=bool(is_exp),
+                    key=f"surf-live-show-cites:{sel_id}",
+                )
+                if bool(next_exp) != bool(is_exp):
+                    if next_exp:
+                        expanded_works.add(sel_id)
+                        expanded_work_citespans.add(sel_id)
+                    else:
+                        expanded_work_citespans.discard(sel_id)
+                    st.session_state["surf_live_active_citespan_doc"] = sel_id
+                    st.rerun()
+
                 if st.button("Expand citations", key="surf-live-expand-work"):
                     expanded_works.add(sel_id)
                     expanded_work_citespans.add(sel_id)
@@ -950,6 +966,20 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
                 st.caption("CiteSpan")
                 st.write(str(rec.get("label") or sel_id))
                 st.caption(f"claims confirmed: {int(rec.get('claim_count') or 0)}")
+
+                is_exp = sel_id in expanded_cites
+                next_exp = st.toggle(
+                    "Show claim spans",
+                    value=bool(is_exp),
+                    key=f"surf-live-show-claims:{sel_id}",
+                )
+                if bool(next_exp) != bool(is_exp):
+                    if next_exp:
+                        expanded_cites.add(sel_id)
+                    else:
+                        expanded_cites.discard(sel_id)
+                    st.rerun()
+
                 if st.button("Expand claim spans", key="surf-live-expand-cs"):
                     expanded_cites.add(sel_id)
                     st.rerun()

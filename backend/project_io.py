@@ -209,6 +209,7 @@ def export_project_zip() -> bytes:
                 sort_keys=True,
             ),
         )
+        written: set[str] = {"project.json"}
         for path in _paths_to_export():
             if not path.exists():
                 continue
@@ -218,6 +219,9 @@ def export_project_zip() -> bytes:
                     if data_root in path.parents
                     else str(path.name)
                 )
+                if arc in written:
+                    continue
+                written.add(arc)
                 zf.write(path, arcname=arc)
                 continue
             if path.is_dir():
@@ -228,6 +232,9 @@ def export_project_zip() -> bytes:
                         arc = str(child.relative_to(data_root))
                     except ValueError:
                         arc = str(child.relative_to(path.parent))
+                    if arc in written:
+                        continue
+                    written.add(arc)
                     zf.write(child, arcname=arc)
     return buf.getvalue()
 

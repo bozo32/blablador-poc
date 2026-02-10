@@ -514,10 +514,24 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
         paragraphs = body.get("paragraphs") or []
         ref_ids: list[str] = []
         raw_segments: list[dict] = []
+        sentence_text: dict[str, str] = {}
 
         for para in paragraphs:
             for sent in para.get("sentences") or []:
                 sentence_id = str(sent.get("sentence_id") or "").strip()
+                if sentence_id and (sentence_id not in sentence_text):
+                    parts: list[str] = []
+                    for seg in sent.get("segments") or []:
+                        if not isinstance(seg, dict):
+                            continue
+                        t = str(seg.get("type") or "").strip()
+                        if t == "text":
+                            parts.append(str(seg.get("text") or "").strip())
+                        elif t == "citation":
+                            parts.append(str(seg.get("callout") or "").strip())
+                    joined = " ".join(p for p in parts if p).strip()
+                    if joined:
+                        sentence_text[sentence_id] = joined
                 for seg in sent.get("segments") or []:
                     if not isinstance(seg, dict):
                         continue
@@ -565,6 +579,9 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
                 )
             )
             tgt_ingest = resolved.get(ref_id)
+            preview = sentence_text.get(sentence_id) or ""
+            if preview and len(preview) > 180:
+                preview = preview[:179].rstrip() + "…"
             citespan_records[csid] = {
                 "id": csid,
                 "doc_id": wid,
@@ -575,6 +592,7 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
                 "label": label,
                 "callout": seg.get("callout"),
                 "claim_count": claim_n,
+                "preview": preview or None,
             }
 
             work_cites.append(citespan_records[csid])
@@ -895,11 +913,29 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
                 expanded_work_citespans.add(doc_id)
                 st.session_state["surf_live_active_citespan_doc"] = doc_id
                 st.rerun()
+        elif action == "dblclick" and node_id in work_by_id:
+            expanded_works.add(node_id)
+            expanded_work_citespans.add(node_id)
+            st.session_state["surf_live_active_citespan_doc"] = node_id
+            st.rerun()
+        elif action == "dblclick" and node_id.startswith("citespan:"):
+            expanded_cites.add(node_id)
+            parsed = _parse_citespan_id(node_id)
+            if parsed and parsed.doc_id:
+                expanded_works.add(parsed.doc_id)
+                expanded_work_citespans.add(parsed.doc_id)
+                st.session_state["surf_live_active_citespan_doc"] = parsed.doc_id
+            st.session_state["surf_live_pending_focus"] = {"node_id": node_id}
+            st.rerun()
         elif node_id.startswith("citespanbucket:"):
             parts = node_id.split(":")
             doc_id = str(parts[1] if len(parts) > 1 else "").strip()
             if doc_id:
                 st.session_state["surf_live_active_citespan_doc"] = doc_id
+        elif node_id.startswith("citespan:"):
+            parsed = _parse_citespan_id(node_id)
+            if parsed and parsed.doc_id:
+                st.session_state["surf_live_active_citespan_doc"] = parsed.doc_id
         elif node_id in work_by_id:
             st.session_state["surf_live_active_citespan_doc"] = node_id
 
@@ -922,8 +958,12 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
                     label = str(rec.get("label") or "citation")
                     claim_n = int(rec.get("claim_count") or 0)
                     prefix = "TODO" if claim_n == 0 else "OK"
+                    preview = str(rec.get("preview") or "").strip()
+                    line = f"{prefix} {cite_idx}: {label}"
+                    if preview:
+                        line = f"{line} — {preview}"
                     if st.button(
-                        f"{prefix} {cite_idx}: {label}",
+                        line,
                         key=f"surf-live-cs:{csid}",
                         use_container_width=True,
                     ):

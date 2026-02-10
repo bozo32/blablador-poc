@@ -535,6 +535,31 @@ def resolve_graph_references(payload: schemas.ReferenceResolveRequest):
 
 
 @app.get(
+    "/spans/lookup-citation-window",
+    response_model=schemas.CitationSpanLookupResponse,
+)
+def lookup_citation_window_span(
+    ingest_id: str,
+    citation_index: int,
+    target_id: Optional[str] = None,
+):
+    ingest = str(ingest_id or "").strip()
+    if not ingest:
+        raise HTTPException(status_code=422, detail="ingest_id is required")
+    span = span_graph_store.find_citation_span(
+        ingest_id=ingest,
+        citation_index=int(citation_index),
+        target_id=str(target_id).strip() or None,
+    )
+    return {
+        "ingest_id": ingest,
+        "citation_index": int(citation_index),
+        "target_id": str(target_id).strip() or None,
+        "span_id": (str(span.get("span_id")) if span else None),
+    }
+
+
+@app.get(
     "/graph/edge/{edge_id}/votes", response_model=schemas.ClaimGraphVoteListResponse
 )
 def get_claim_graph_edge_votes(edge_id: int):

@@ -278,6 +278,27 @@ def get_span_bundle(
     return _parse_response(response) or {}
 
 
+def lookup_citation_window_span(
+    api_url: str,
+    *,
+    ingest_id: str,
+    citation_index: int,
+    target_id: Optional[str] = None,
+) -> dict:
+    url = f"{api_url.rstrip('/')}/spans/lookup-citation-window"
+    params: Dict[str, Union[int, str]] = {
+        "ingest_id": str(ingest_id or "").strip(),
+        "citation_index": int(citation_index),
+    }
+    if target_id:
+        params["target_id"] = str(target_id).strip()
+    try:
+        response = requests.get(url, params=params, timeout=DEFAULT_TIMEOUT)
+    except requests.RequestException as exc:
+        raise RuntimeError(_request_error_message(url, exc)) from exc
+    return _parse_response(response) or {}
+
+
 def set_span_cite_role(
     api_url: str,
     *,

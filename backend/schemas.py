@@ -1164,6 +1164,13 @@ class ReferenceResolveResponse(BaseModel):
     mapping: Dict[str, Optional[str]] = Field(default_factory=dict)
 
 
+class CitationSpanLookupResponse(BaseModel):
+    ingest_id: str
+    citation_index: int
+    target_id: Optional[str] = None
+    span_id: Optional[str] = None
+
+
 class ClaimLinkCreateRequest(BaseModel):
     source_claim_id: str
     target_claim_id: str

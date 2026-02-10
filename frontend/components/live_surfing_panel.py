@@ -6,7 +6,11 @@ from typing import Any, Optional
 import streamlit as st
 
 from frontend import graph_api, ledger_api
-from frontend.ingestion_api import get_document_body
+from frontend.ingestion_api import (
+    get_document_body,
+    get_span_bundle,
+    lookup_citation_window_span,
+)
 from frontend.components import cytoscape_panel
 
 
@@ -56,6 +60,54 @@ def _seed_state() -> None:
     st.session_state.setdefault("surf_live_last_callout", "")
     st.session_state.setdefault("surf_live_claim_cache", {})
     st.session_state.setdefault("surf_live_ref_cache", {})
+    st.session_state.setdefault("surf_live_span_cache", {})
+    st.session_state.setdefault("surf_live_bundle_cache", {})
+
+
+def _get_span_id(
+    *, api_url: str, ingest_id: str, citation_index: int, target_id: str
+) -> str:
+    cache = _as_dict(st.session_state.get("surf_live_span_cache"))
+    key = f"{ingest_id}::{int(citation_index)}::{str(target_id or '').strip()}"
+    if key in cache:
+        return str(cache.get(key) or "")
+    try:
+        resp = lookup_citation_window_span(
+            api_url,
+            ingest_id=str(ingest_id),
+            citation_index=int(citation_index),
+            target_id=str(target_id).strip() or None,
+        )
+    except Exception:
+        resp = {}
+    span_id = str(resp.get("span_id") or "").strip()
+    cache[key] = span_id
+    st.session_state["surf_live_span_cache"] = cache
+    return span_id
+
+
+def _get_span_bundle_cached(
+    *,
+    api_url: str,
+    span_id: str,
+    reviewer_uid: str,
+) -> dict:
+    cache = _as_dict(st.session_state.get("surf_live_bundle_cache"))
+    key = f"{span_id}::{reviewer_uid}"
+    if key in cache and isinstance(cache.get(key), dict):
+        return cache.get(key) or {}
+    try:
+        bundle = get_span_bundle(
+            api_url,
+            str(span_id),
+            reviewer_uid=str(reviewer_uid or "default"),
+            include_history=False,
+        )
+    except Exception:
+        bundle = {}
+    cache[key] = bundle
+    st.session_state["surf_live_bundle_cache"] = cache
+    return bundle
 
 
 def _expanded_set(key: str) -> set[str]:
@@ -203,7 +255,11 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
     expanded_works = _expanded_set("surf_live_expanded_works")
     expanded_cites = _expanded_set("surf_live_expanded_citespans")
     expanded_work_citespans = _expanded_set("surf_live_expanded_work_citespans")
-    selection = st.session_state.get("surf_live_selection")
+    # Prefer the current component value so selection is reflected immediately
+    # in the top inspector (otherwise it lags by one rerun).
+    selection = st.session_state.get("surf-live")
+    if not isinstance(selection, dict):
+        selection = st.session_state.get("surf_live_selection")
     if not isinstance(selection, dict):
         selection = {}
 
@@ -371,6 +427,39 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
             "selector": "edge[arrow = 'none']",
             "style": {
                 "target-arrow-shape": "none",
+            },
+        },
+        {
+            "selector": "edge[type = 'ASSERTS'][verdict = 'support']",
+            "style": {
+                "line-color": "#16a34a",
+                "target-arrow-color": "#16a34a",
+                "width": 3,
+            },
+        },
+        {
+            "selector": "edge[type = 'ASSERTS'][verdict = 'contradict']",
+            "style": {
+                "line-color": "#dc2626",
+                "target-arrow-color": "#dc2626",
+                "width": 3,
+            },
+        },
+        {
+            "selector": "edge[type = 'ASSERTS'][verdict = 'neutral']",
+            "style": {
+                "line-color": "#6b7280",
+                "target-arrow-color": "#6b7280",
+                "width": 3,
+            },
+        },
+        {
+            "selector": "edge[type = 'ASSERTS'][verdict = 'uncertain']",
+            "style": {
+                "line-style": "dotted",
+                "line-color": "#6b7280",
+                "target-arrow-color": "#6b7280",
+                "width": 3,
             },
         },
         {
@@ -606,43 +695,105 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
         key = _parse_citespan_id(csid)
         if not key:
             continue
-        for cid, cn in claim_by_id.items():
-            props = cn.get("properties") or {}
-            if str(props.get("document_id") or "").strip() != key.doc_id:
-                continue
-            if str(props.get("sentence_id") or "").strip() != key.sentence_id:
-                continue
-            try:
-                ci = int(props.get("citation_index"))
-            except Exception:
-                continue
-            if int(ci) != int(key.citation_index):
-                continue
-            if str(props.get("target_id") or "").strip() != str(key.reference_id or ""):
-                continue
 
-            parsed_text = str(props.get("parsed_text") or cn.get("label") or "").strip()
+        span_id = _get_span_id(
+            api_url=api_url,
+            ingest_id=key.doc_id,
+            citation_index=int(key.citation_index),
+            target_id=str(key.reference_id or ""),
+        )
+        if not span_id:
+            continue
+
+        bundle = _get_span_bundle_cached(
+            api_url=api_url,
+            span_id=span_id,
+            reviewer_uid=str(st.session_state.get("active_reviewer_uid") or "default"),
+        )
+        claim_spans = bundle.get("claim_spans") or []
+        span = bundle.get("span") or {}
+        selector = (span.get("selector") or {}) if isinstance(span, dict) else {}
+        exact = str(selector.get("exact") or "").strip()
+        prefix = str(selector.get("prefix") or "").strip()
+        suffix = str(selector.get("suffix") or "").strip()
+        preview = " ".join(bit for bit in [prefix, exact, suffix] if bit).strip()
+        if preview and csid in citespan_records:
+            citespan_records[csid]["preview"] = preview
+
+        # ClaimSpan nodes + cite->claim edges.
+        for cs in claim_spans:
+            if not isinstance(cs, dict):
+                continue
+            claim_span_id = str(cs.get("claim_span_id") or "").strip()
+            if not claim_span_id:
+                continue
+            order_index = cs.get("order_index")
+            try:
+                oi = int(order_index)
+            except Exception:
+                oi = 0
+
+            status = str(cs.get("status") or "").strip() or "unknown"
+            label = f"#{oi}" if oi else "claim"
+            hover = f"ClaimSpan {label}\nstatus={status}"
+
             elements.append(
                 {
                     "data": {
-                        "id": cid,
+                        "id": claim_span_id,
                         "type": "ClaimSpan",
-                        "label": parsed_text,
-                        "hover": parsed_text,
+                        "label": label,
+                        "hover": hover,
+                        "status": status,
                     }
                 }
             )
             elements.append(
                 {
                     "data": {
-                        "id": f"cs2claim:{csid}->{cid}",
+                        "id": f"cs2claim:{csid}->{claim_span_id}",
                         "source": csid,
-                        "target": cid,
+                        "target": claim_span_id,
                         "type": "HAS_CLAIM",
                         "arrow": "none",
                     }
                 }
             )
+
+            current = cs.get("current") or {}
+            verdict = str((current or {}).get("verdict") or "").strip() or None
+            evidence_work_id = str(
+                (current or {}).get("evidence_work_id") or ""
+            ).strip()
+
+            # If we can identify the counterparty doc, draw a directional edge.
+            target_doc = None
+            if evidence_work_id.startswith("ingest:"):
+                target_doc = evidence_work_id.split(":", 1)[-1].strip()
+            elif evidence_work_id.startswith("ref:"):
+                parts = evidence_work_id.split(":")
+                if len(parts) >= 3:
+                    ref_id = parts[2]
+                    mapping = _resolve_reference_targets(
+                        citing_doc_id=key.doc_id,
+                        reference_ids=[ref_id],
+                    )
+                    target_doc = mapping.get(ref_id)
+
+            if target_doc and target_doc in work_by_id:
+                edge_id = f"claim2work:{claim_span_id}->{target_doc}"
+                elements.append(
+                    {
+                        "data": {
+                            "id": edge_id,
+                            "source": claim_span_id,
+                            "target": target_doc,
+                            "type": "ASSERTS",
+                            "arrow": "triangle",
+                            "verdict": verdict or "unknown",
+                        }
+                    }
+                )
 
     # --- Layout: top panels (scrollable) + full-width graph ----------------
     top_left, top_right = st.columns([1, 1], gap="large")
@@ -686,8 +837,10 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
                 st.write(str(rec.get("short") or sel_id))
                 if st.button("Expand cite spans", key="surf-live-expand-work"):
                     expanded_works.add(sel_id)
+                    expanded_work_citespans.add(sel_id)
+                    st.session_state["surf_live_active_citespan_doc"] = sel_id
                 if st.button("Collapse cite spans", key="surf-live-collapse-work"):
-                    expanded_works.discard(sel_id)
+                    expanded_work_citespans.discard(sel_id)
             elif sel_id.startswith("citespan:"):
                 rec = citespan_records.get(sel_id) or {}
                 st.caption("CiteSpan")

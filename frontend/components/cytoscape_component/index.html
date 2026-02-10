@@ -172,6 +172,7 @@
         let lastKey = null;
         let lastTapAt = 0;
         let lastTapId = null;
+        let clickTimer = null;
         let lastSentValue = null;
         let eventSeq = 0;
         const tooltip = document.getElementById("tooltip");
@@ -233,6 +234,25 @@
           if (nextKey === lastSentValue) return;
           lastSentValue = nextKey;
           Streamlit.setComponentValue(next);
+        }
+
+        function modifiers(evt) {
+          const oe = evt && evt.originalEvent ? evt.originalEvent : null;
+          return {
+            shift: !!(oe && oe.shiftKey),
+            alt: !!(oe && oe.altKey),
+            meta: !!(oe && oe.metaKey),
+            ctrl: !!(oe && oe.ctrlKey),
+          };
+        }
+
+        // Delay click so double click can cancel it.
+        function scheduleClick(payload) {
+          if (clickTimer) clearTimeout(clickTimer);
+          clickTimer = setTimeout(() => {
+            sendValue({ ...payload, action: "click", seq: ++eventSeq });
+            clickTimer = null;
+          }, 420);
         }
 
         function applyFocus(focus) {
@@ -300,19 +320,30 @@
             cy.on("tap", "node", (evt) => {
               const id = evt.target.id();
               const now = Date.now();
-              const isDbl = (lastTapId === id) && (now - lastTapAt <= 350);
+              const isDbl = (lastTapId === id) && (now - lastTapAt <= 600);
               lastTapAt = now;
               lastTapId = id;
-              sendValue({
-                type: "node",
-                id,
-                action: isDbl ? "dblclick" : "click",
-                seq: ++eventSeq,
-              });
+              const mod = modifiers(evt);
+              if (isDbl) {
+                if (clickTimer) clearTimeout(clickTimer);
+                clickTimer = null;
+                sendValue({ type: "node", id, action: "dblclick", seq: ++eventSeq, ...mod });
+              } else {
+                scheduleClick({ type: "node", id, ...mod });
+              }
             });
             cy.on("tap", "edge", (evt) => {
               const id = evt.target.id();
-              sendValue({ type: "edge", id, action: "click", seq: ++eventSeq });
+              const mod = modifiers(evt);
+              scheduleClick({ type: "edge", id, ...mod });
+            });
+
+            cy.on("cxttap", "node", (evt) => {
+              const id = evt.target.id();
+              const mod = modifiers(evt);
+              if (clickTimer) clearTimeout(clickTimer);
+              clickTimer = null;
+              sendValue({ type: "node", id, action: "context", seq: ++eventSeq, ...mod });
             });
           } else {
             cy.json({ elements, style });
@@ -357,17 +388,6 @@
     </script>
   </body>
 </html>
-etail.args) ? event.detail.args : {};
-
-          // Best-effort idempotence: if Streamlit re-renders with identical content,
-          // Cytoscape still does some work; keep it simple.
-          const key = JSON.stringify({
-            elements: args.elements || [],
-            style: args.style || [],
-            layout: args.layout || {},
-            height: args.height || 560,
-            options: args.options || {},
-          });
           if (key !== lastKey) {
             lastKey = key;
             ensureCy(args);

@@ -911,15 +911,27 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
         options={"showLabels": bool(st.session_state.get("surf_live_show_labels"))},
     )
     if picked:
-        st.session_state["surf_live_selection"] = picked
-
-        # Double-click on collapsed citespan bucket expands it.
+        # Streamlit components return the last value on every rerun. Treat
+        # click/dblclick as an event keyed by `seq` so we don't rerun forever.
         try:
-            action = str((picked or {}).get("action") or "").strip()
-            node_id = str((picked or {}).get("id") or "").strip()
+            picked_seq = int((picked or {}).get("seq") or 0)
         except Exception:
-            action = ""
-            node_id = ""
+            picked_seq = 0
+        last_seq = int(st.session_state.get("surf_live_last_event_seq") or 0)
+        is_new_event = bool(picked_seq and picked_seq > last_seq)
+
+        if is_new_event:
+            st.session_state["surf_live_last_event_seq"] = picked_seq
+            st.session_state["surf_live_selection"] = picked
+        else:
+            # Keep selection for display, but strip action.
+            st.session_state["surf_live_selection"] = {
+                k: v for k, v in (picked or {}).items() if k != "action"
+            }
+
+        action = str((picked or {}).get("action") or "").strip() if is_new_event else ""
+        node_id = str((picked or {}).get("id") or "").strip()
+
         if action == "dblclick" and node_id.startswith("citespanbucket:"):
             parts = node_id.split(":")
             doc_id = str(parts[1] if len(parts) > 1 else "").strip()

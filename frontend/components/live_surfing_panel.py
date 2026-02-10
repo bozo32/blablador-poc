@@ -56,6 +56,7 @@ def _seed_state() -> None:
     st.session_state.setdefault("surf_live_active_citespan_doc", "")
     st.session_state.setdefault("surf_live_selection", {})
     st.session_state.setdefault("surf_live_show_labels", False)
+    st.session_state.setdefault("surf_live_debug", False)
     st.session_state.setdefault("surf_live_follow_active_citation", True)
     st.session_state.setdefault("surf_live_last_callout", "")
     st.session_state.setdefault("surf_live_claim_cache", {})
@@ -256,13 +257,16 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
     expanded_works = _expanded_set("surf_live_expanded_works")
     expanded_cites = _expanded_set("surf_live_expanded_citespans")
     expanded_work_citespans = _expanded_set("surf_live_expanded_work_citespans")
-    # Prefer the current component value so selection is reflected immediately
-    # in the top inspector (otherwise it lags by one rerun).
-    selection = st.session_state.get("surf-live")
-    if not isinstance(selection, dict):
-        selection = st.session_state.get("surf_live_selection")
+
+    # Stable selection for display.
+    selection = st.session_state.get("surf_live_selection")
     if not isinstance(selection, dict):
         selection = {}
+
+    # Latest component payload (may include transient action/seq).
+    comp_value = st.session_state.get("surf-live")
+    if not isinstance(comp_value, dict):
+        comp_value = {}
 
     # --- Follow active citation from Reading/Chasing -----------------------
     if bool(st.session_state.get("surf_live_follow_active_citation")):
@@ -903,6 +907,7 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
         with st.container(height=240):
             st.markdown("**Expanded**")
             st.checkbox("Show labels (debug)", key="surf_live_show_labels")
+            st.checkbox("Debug Surfing", key="surf_live_debug")
             st.checkbox(
                 "Follow active citation",
                 key="surf_live_follow_active_citation",
@@ -916,6 +921,32 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
             st.caption(f"Works expanded: {len(expanded_works)}")
             st.caption(f"CiteSpans expanded: {len(expanded_cites)}")
             st.caption(f"CiteSpan lists: {len(expanded_work_citespans)}")
+
+            if bool(st.session_state.get("surf_live_debug")):
+                st.divider()
+                st.caption("State (debug)")
+                st.json(
+                    {
+                        "seed": seed,
+                        "active_doc": st.session_state.get(
+                            "surf_live_active_citespan_doc"
+                        ),
+                        "expanded_works": sorted(list(expanded_works))[:50],
+                        "expanded_work_citespans": sorted(
+                            list(expanded_work_citespans)
+                        )[:50],
+                        "expanded_cites": sorted(list(expanded_cites))[:50],
+                        "selection": selection,
+                        "component": comp_value,
+                        "last_event_seq": st.session_state.get(
+                            "surf_live_last_event_seq"
+                        ),
+                        "selected_callout_tuple": st.session_state.get(
+                            "selected_callout_tuple"
+                        ),
+                    },
+                    expanded=False,
+                )
 
             st.divider()
             st.markdown("**Work list**")
@@ -951,16 +982,13 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
                     else:
                         expanded_work_citespans.discard(sel_id)
                     st.session_state["surf_live_active_citespan_doc"] = sel_id
-                    st.rerun()
 
                 if st.button("Expand citations", key="surf-live-expand-work"):
                     expanded_works.add(sel_id)
                     expanded_work_citespans.add(sel_id)
                     st.session_state["surf_live_active_citespan_doc"] = sel_id
-                    st.rerun()
                 if st.button("Collapse citations", key="surf-live-collapse-work"):
                     expanded_work_citespans.discard(sel_id)
-                    st.rerun()
             elif sel_id.startswith("citespan:"):
                 rec = citespan_records.get(sel_id) or {}
                 st.caption("CiteSpan")
@@ -978,14 +1006,11 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
                         expanded_cites.add(sel_id)
                     else:
                         expanded_cites.discard(sel_id)
-                    st.rerun()
 
                 if st.button("Expand claim spans", key="surf-live-expand-cs"):
                     expanded_cites.add(sel_id)
-                    st.rerun()
                 if st.button("Collapse claim spans", key="surf-live-collapse-cs"):
                     expanded_cites.discard(sel_id)
-                    st.rerun()
             elif sel_id and sel_id in claim_by_id:
                 cn = claim_by_id.get(sel_id) or {}
                 props = cn.get("properties") or {}
@@ -1051,7 +1076,6 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
                             "id": csid,
                         }
                         st.session_state["surf_live_active_citespan_doc"] = active_doc
-                        st.rerun()
 
     _store_expanded("surf_live_expanded_works", expanded_works)
     _store_expanded("surf_live_expanded_citespans", expanded_cites)

@@ -941,8 +941,10 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
                     expanded_works.add(sel_id)
                     expanded_work_citespans.add(sel_id)
                     st.session_state["surf_live_active_citespan_doc"] = sel_id
+                    st.rerun()
                 if st.button("Collapse citations", key="surf-live-collapse-work"):
                     expanded_work_citespans.discard(sel_id)
+                    st.rerun()
             elif sel_id.startswith("citespan:"):
                 rec = citespan_records.get(sel_id) or {}
                 st.caption("CiteSpan")
@@ -950,8 +952,10 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
                 st.caption(f"claims confirmed: {int(rec.get('claim_count') or 0)}")
                 if st.button("Expand claim spans", key="surf-live-expand-cs"):
                     expanded_cites.add(sel_id)
+                    st.rerun()
                 if st.button("Collapse claim spans", key="surf-live-collapse-cs"):
                     expanded_cites.discard(sel_id)
+                    st.rerun()
             elif sel_id and sel_id in claim_by_id:
                 cn = claim_by_id.get(sel_id) or {}
                 props = cn.get("properties") or {}

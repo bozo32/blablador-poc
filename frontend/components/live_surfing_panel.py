@@ -349,33 +349,45 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
 
         if evt_type == "node" and evt_id in work_by_id:
             st.session_state["surf_live_active_citespan_doc"] = evt_id
-            if evt_action == "dblclick":
+            if evt_action in {"dblclick", "context"}:
                 if shift:
                     expanded_work_citespans.discard(evt_id)
                     expanded_works.discard(evt_id)
                 else:
                     expanded_works.add(evt_id)
-                    expanded_work_citespans.add(evt_id)
+                    if evt_action == "context" and evt_id in expanded_work_citespans:
+                        expanded_work_citespans.discard(evt_id)
+                    else:
+                        expanded_work_citespans.add(evt_id)
         elif evt_type == "node" and evt_id.startswith("citespanbucket:"):
             parts = evt_id.split(":")
             doc_id = str(parts[1] if len(parts) > 1 else "").strip()
             if doc_id:
                 st.session_state["surf_live_active_citespan_doc"] = doc_id
-                if evt_action == "dblclick":
+                if evt_action in {"dblclick", "context"}:
                     if shift:
                         expanded_work_citespans.discard(doc_id)
                     else:
                         expanded_works.add(doc_id)
-                        expanded_work_citespans.add(doc_id)
+                        if (
+                            evt_action == "context"
+                            and doc_id in expanded_work_citespans
+                        ):
+                            expanded_work_citespans.discard(doc_id)
+                        else:
+                            expanded_work_citespans.add(doc_id)
         elif evt_type == "node" and evt_id.startswith("citespan:"):
             parsed = _parse_citespan_id(evt_id)
             if parsed and parsed.doc_id:
                 st.session_state["surf_live_active_citespan_doc"] = parsed.doc_id
-            if evt_action == "dblclick":
+            if evt_action in {"dblclick", "context"}:
                 if shift:
                     expanded_cites.discard(evt_id)
                 else:
-                    expanded_cites.add(evt_id)
+                    if evt_action == "context" and evt_id in expanded_cites:
+                        expanded_cites.discard(evt_id)
+                    else:
+                        expanded_cites.add(evt_id)
                     if parsed and parsed.doc_id:
                         expanded_works.add(parsed.doc_id)
                         expanded_work_citespans.add(parsed.doc_id)

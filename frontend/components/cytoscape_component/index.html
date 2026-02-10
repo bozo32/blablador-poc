@@ -347,6 +347,36 @@
 
           applySelection(args.selection);
           applyFocus(args.focus);
+
+          // Render events can come in bursts; don't reset click state.
+        }
+
+        Streamlit.events.addEventListener(Streamlit.RENDER_EVENT, onRender);
+        Streamlit.setComponentReady();
+      })();
+    </script>
+  </body>
+</html>
+etail.args) ? event.detail.args : {};
+
+          // Best-effort idempotence: if Streamlit re-renders with identical content,
+          // Cytoscape still does some work; keep it simple.
+          const key = JSON.stringify({
+            elements: args.elements || [],
+            style: args.style || [],
+            layout: args.layout || {},
+            height: args.height || 560,
+            options: args.options || {},
+          });
+          if (key !== lastKey) {
+            lastKey = key;
+            ensureCy(args);
+          } else {
+            Streamlit.setFrameHeight(Number(args.height) || 560);
+          }
+
+          applySelection(args.selection);
+          applyFocus(args.focus);
         }
 
         Streamlit.events.addEventListener(Streamlit.RENDER_EVENT, onRender);

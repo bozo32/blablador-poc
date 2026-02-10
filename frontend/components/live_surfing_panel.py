@@ -330,6 +330,56 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
 
     expanded_works.add(seed)
 
+    # Process Cytoscape click/dblclick as one-shot events (after we have
+    # `work_by_id`).
+    try:
+        evt_seq = int(selection.get("seq") or 0)
+    except Exception:
+        evt_seq = 0
+    last_seq = int(st.session_state.get("surf_live_last_event_seq") or 0)
+    is_new_evt = bool(evt_seq and evt_seq > last_seq)
+    if is_new_evt:
+        st.session_state["surf_live_last_event_seq"] = evt_seq
+        st.session_state["surf_live_selection"] = dict(selection)
+
+        evt_type = str(selection.get("type") or "").strip()
+        evt_id = str(selection.get("id") or "").strip()
+        evt_action = str(selection.get("action") or "").strip()
+        shift = bool(selection.get("shift"))
+
+        if evt_type == "node" and evt_id in work_by_id:
+            st.session_state["surf_live_active_citespan_doc"] = evt_id
+            if evt_action == "dblclick":
+                if shift:
+                    expanded_work_citespans.discard(evt_id)
+                    expanded_works.discard(evt_id)
+                else:
+                    expanded_works.add(evt_id)
+                    expanded_work_citespans.add(evt_id)
+        elif evt_type == "node" and evt_id.startswith("citespanbucket:"):
+            parts = evt_id.split(":")
+            doc_id = str(parts[1] if len(parts) > 1 else "").strip()
+            if doc_id:
+                st.session_state["surf_live_active_citespan_doc"] = doc_id
+                if evt_action == "dblclick":
+                    if shift:
+                        expanded_work_citespans.discard(doc_id)
+                    else:
+                        expanded_works.add(doc_id)
+                        expanded_work_citespans.add(doc_id)
+        elif evt_type == "node" and evt_id.startswith("citespan:"):
+            parsed = _parse_citespan_id(evt_id)
+            if parsed and parsed.doc_id:
+                st.session_state["surf_live_active_citespan_doc"] = parsed.doc_id
+            if evt_action == "dblclick":
+                if shift:
+                    expanded_cites.discard(evt_id)
+                else:
+                    expanded_cites.add(evt_id)
+                    if parsed and parsed.doc_id:
+                        expanded_works.add(parsed.doc_id)
+                        expanded_work_citespans.add(parsed.doc_id)
+
     # --- Claims for expanded docs (for "needs work" signals) --------------
     claim_count_by_citespan: dict[tuple[str, str, int, str], int] = {}
     claim_by_id: dict[str, dict] = {}
@@ -563,14 +613,18 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
         )
 
         work_cites: list[dict] = []
+        unindexed_ci = 100000
 
         for seg in raw_segments:
             sentence_id = str(seg.get("sentence_id") or "").strip()
             ref_id = str(seg.get("target_id") or "").strip()
+            indexed = True
             try:
                 citation_index = int(seg.get("citation_index"))
             except Exception:
-                continue
+                citation_index = unindexed_ci
+                unindexed_ci += 1
+                indexed = False
             if not sentence_id:
                 continue
             key = CiteSpanKey(
@@ -601,6 +655,7 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
                 "doc_id": wid,
                 "sentence_id": sentence_id,
                 "citation_index": int(citation_index),
+                "indexed": bool(indexed),
                 "reference_id": ref_id,
                 "target_ingest_id": tgt_ingest,
                 "label": label,
@@ -613,7 +668,10 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
 
         citespans_by_doc[wid] = sorted(
             work_cites,
-            key=lambda r: int(r.get("citation_index") or 0),
+            key=lambda r: (
+                0 if bool(r.get("indexed")) else 1,
+                int(r.get("citation_index") or 0),
+            ),
         )
 
         # Collapse or expand cite spans for this work.
@@ -867,11 +925,11 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
                 rec = work_by_id.get(sel_id) or {}
                 st.caption("Work")
                 st.write(str(rec.get("short") or sel_id))
-                if st.button("Expand cite spans", key="surf-live-expand-work"):
+                if st.button("Expand citations", key="surf-live-expand-work"):
                     expanded_works.add(sel_id)
                     expanded_work_citespans.add(sel_id)
                     st.session_state["surf_live_active_citespan_doc"] = sel_id
-                if st.button("Collapse cite spans", key="surf-live-collapse-work"):
+                if st.button("Collapse citations", key="surf-live-collapse-work"):
                     expanded_work_citespans.discard(sel_id)
             elif sel_id.startswith("citespan:"):
                 rec = citespan_records.get(sel_id) or {}
@@ -901,7 +959,7 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
         if node_id:
             focus = {"nodeIds": [node_id], "padding": 40}
 
-    picked = cytoscape_panel.render(
+    cytoscape_panel.render(
         elements,
         style=style,
         height=720,
@@ -910,60 +968,6 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
         focus=focus,
         options={"showLabels": bool(st.session_state.get("surf_live_show_labels"))},
     )
-    if picked:
-        # Streamlit components return the last value on every rerun. Treat
-        # click/dblclick as an event keyed by `seq` so we don't rerun forever.
-        try:
-            picked_seq = int((picked or {}).get("seq") or 0)
-        except Exception:
-            picked_seq = 0
-        last_seq = int(st.session_state.get("surf_live_last_event_seq") or 0)
-        is_new_event = bool(picked_seq and picked_seq > last_seq)
-
-        if is_new_event:
-            st.session_state["surf_live_last_event_seq"] = picked_seq
-            st.session_state["surf_live_selection"] = picked
-        else:
-            # Keep selection for display, but strip action.
-            st.session_state["surf_live_selection"] = {
-                k: v for k, v in (picked or {}).items() if k != "action"
-            }
-
-        action = str((picked or {}).get("action") or "").strip() if is_new_event else ""
-        node_id = str((picked or {}).get("id") or "").strip()
-
-        if action == "dblclick" and node_id.startswith("citespanbucket:"):
-            parts = node_id.split(":")
-            doc_id = str(parts[1] if len(parts) > 1 else "").strip()
-            if doc_id:
-                expanded_work_citespans.add(doc_id)
-                st.session_state["surf_live_active_citespan_doc"] = doc_id
-                st.rerun()
-        elif action == "dblclick" and node_id in work_by_id:
-            expanded_works.add(node_id)
-            expanded_work_citespans.add(node_id)
-            st.session_state["surf_live_active_citespan_doc"] = node_id
-            st.rerun()
-        elif action == "dblclick" and node_id.startswith("citespan:"):
-            expanded_cites.add(node_id)
-            parsed = _parse_citespan_id(node_id)
-            if parsed and parsed.doc_id:
-                expanded_works.add(parsed.doc_id)
-                expanded_work_citespans.add(parsed.doc_id)
-                st.session_state["surf_live_active_citespan_doc"] = parsed.doc_id
-            st.session_state["surf_live_pending_focus"] = {"node_id": node_id}
-            st.rerun()
-        elif node_id.startswith("citespanbucket:"):
-            parts = node_id.split(":")
-            doc_id = str(parts[1] if len(parts) > 1 else "").strip()
-            if doc_id:
-                st.session_state["surf_live_active_citespan_doc"] = doc_id
-        elif node_id.startswith("citespan:"):
-            parsed = _parse_citespan_id(node_id)
-            if parsed and parsed.doc_id:
-                st.session_state["surf_live_active_citespan_doc"] = parsed.doc_id
-        elif node_id in work_by_id:
-            st.session_state["surf_live_active_citespan_doc"] = node_id
 
     active_doc = str(
         st.session_state.get("surf_live_active_citespan_doc") or ""

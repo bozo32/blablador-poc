@@ -172,6 +172,7 @@
         let lastKey = null;
         let lastTapAt = 0;
         let lastTapId = null;
+        let lastSentValue = null;
         const tooltip = document.getElementById("tooltip");
 
         function hideTooltip() {
@@ -222,6 +223,15 @@
           if (!t || !id) return;
           const el = cy.getElementById(id);
           if (el && el.length) el.select();
+        }
+
+        function sendValue(value) {
+          // Avoid rerun loops if the same value is sent repeatedly.
+          const next = value && typeof value === "object" ? value : {};
+          const nextKey = JSON.stringify(next);
+          if (nextKey === lastSentValue) return;
+          lastSentValue = nextKey;
+          Streamlit.setComponentValue(next);
         }
 
         function applyFocus(focus) {
@@ -283,7 +293,7 @@
             cy.on("tap", (evt) => {
               if (evt.target === cy) {
                 cy.elements().unselect();
-                Streamlit.setComponentValue({});
+                sendValue({});
               }
             });
             cy.on("tap", "node", (evt) => {
@@ -292,11 +302,15 @@
               const isDbl = (lastTapId === id) && (now - lastTapAt <= 350);
               lastTapAt = now;
               lastTapId = id;
-              Streamlit.setComponentValue({ type: "node", id, action: isDbl ? "dblclick" : "click" });
+              sendValue({
+                type: "node",
+                id,
+                action: isDbl ? "dblclick" : "click",
+              });
             });
             cy.on("tap", "edge", (evt) => {
               const id = evt.target.id();
-              Streamlit.setComponentValue({ type: "edge", id });
+              sendValue({ type: "edge", id, action: "click" });
             });
           } else {
             cy.json({ elements, style });

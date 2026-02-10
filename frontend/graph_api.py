@@ -145,3 +145,23 @@ def list_claim_nodes(doc_id: Optional[str] = None, limit: int = 200) -> Dict[str
         return resp.json() if resp.text else {}
     except requests.RequestException as exc:
         raise GraphApiError(str(exc)) from exc
+
+
+def resolve_references(
+    *,
+    citing_doc_id: str,
+    reference_ids: list[str],
+) -> Dict[str, Any]:
+    url = f"{_api_root()}/graph/resolve-references"
+    payload = {
+        "citing_doc_id": str(citing_doc_id or "").strip(),
+        "reference_ids": [
+            str(r).strip() for r in (reference_ids or []) if str(r).strip()
+        ],
+    }
+    try:
+        resp = requests.post(url, json=payload, timeout=DEFAULT_TIMEOUT)
+        resp.raise_for_status()
+        return resp.json() if resp.text else {}
+    except requests.RequestException as exc:
+        raise GraphApiError(str(exc)) from exc

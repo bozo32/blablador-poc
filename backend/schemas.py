@@ -1154,6 +1154,16 @@ class ClaimNodeListResponse(BaseModel):
     count: int = 0
 
 
+class ReferenceResolveRequest(BaseModel):
+    citing_doc_id: str
+    reference_ids: List[str] = Field(default_factory=list)
+
+
+class ReferenceResolveResponse(BaseModel):
+    citing_doc_id: str
+    mapping: Dict[str, Optional[str]] = Field(default_factory=dict)
+
+
 class ClaimLinkCreateRequest(BaseModel):
     source_claim_id: str
     target_claim_id: str

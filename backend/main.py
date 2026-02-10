@@ -502,17 +502,36 @@ def list_claim_graph_nodes(
     claim_id string.
     """
     want_doc = str(doc_id or "").strip() or None
-    out: list[dict] = []
+    out: list[schemas.ClaimGraphNode] = []
     for node in graph_store.list_claim_nodes():
         payload = _node_payload(node)
         if want_doc:
-            props = payload.get("properties") or {}
+            props = payload.properties or {}
             if str(props.get("document_id") or "").strip() != want_doc:
                 continue
         out.append(payload)
         if len(out) >= int(limit):
             break
     return {"nodes": out, "count": int(len(out))}
+
+
+@app.post("/graph/resolve-references", response_model=schemas.ReferenceResolveResponse)
+def resolve_graph_references(payload: schemas.ReferenceResolveRequest):
+    citing = str(payload.citing_doc_id or "").strip()
+    mapping: dict[str, Optional[str]] = {}
+    for ref_id in payload.reference_ids or []:
+        rid = str(ref_id or "").strip()
+        if not rid:
+            continue
+        try:
+            ingest_id = graph_store.resolve_reference_to_ingest_id(
+                citing_doc_id=citing,
+                reference_id=rid,
+            )
+        except Exception:
+            ingest_id = None
+        mapping[rid] = str(ingest_id) if ingest_id else None
+    return {"citing_doc_id": citing, "mapping": mapping}
 
 
 @app.get(

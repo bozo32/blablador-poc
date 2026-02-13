@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 from pathlib import Path
@@ -12,10 +13,114 @@ from lxml import etree
 
 from backend import attachment_store, background_state, extraction, grobid_client, utils
 from backend.evidence_matching.service import evidence_service
+from backend.graph_store import GraphStore
+from backend.ingestion_store import (
+    create_ingested_document,
+    get_ingested_document,
+    store_extraction,
+)
 from backend.settings import settings
 
 
 logger = logging.getLogger(__name__)
+
+
+graph_store = GraphStore(settings.GRAPH_DB_PATH)
+
+
+def _maybe_ingest_matched_attachment(record: dict) -> None:
+    """Ensure a placed attachment's PDF is ingested as a Work.
+
+    Rationale: a placed/synced PDF should not remain "synced but not ingested".
+    Surfing and work-level graphs depend on ingested docs (with extraction) to
+    form stable work-work links and resolve reference targets.
+
+    This function is best-effort and safe under duplicates (ingestion_store
+    de-dupes by sha256).
+    """
+    if not isinstance(record, dict):
+        return
+    if str(record.get("source_ingest_id") or "").strip():
+        return
+    doc_id = str(record.get("doc_id") or "").strip()
+    target_id = str(record.get("target_id") or "").strip()
+    if not doc_id or not target_id:
+        return
+
+    try:
+        pdf_path = Path(str(record.get("file_path") or ""))
+    except Exception:
+        return
+    if not pdf_path.exists():
+        return
+
+    file_bytes = pdf_path.read_bytes()
+    filename = str(record.get("filename") or pdf_path.name)
+    metadata = create_ingested_document(file_bytes, filename)
+    ingest_id = str(metadata.get("id") or "").strip()
+    if not ingest_id:
+        return
+
+    try:
+        graph_store.index_ingest_upload(metadata)
+    except Exception:
+        logger.exception("Graph index failed for attachment ingest upload")
+
+    # Reuse TEI artifacts produced by attachment processing if extraction isn't
+    # complete.
+    existing = get_ingested_document(ingest_id) or {}
+    extraction_stage = existing.get("extraction") or {}
+    has_extraction = bool(
+        (extraction_stage.get("data") or {})
+        if isinstance(extraction_stage, dict)
+        else {}
+    )
+    if not has_extraction:
+        artifacts = record.get("artifacts") or {}
+        tei_xml_path = artifacts.get("tei_xml")
+        tei_json_path = artifacts.get("tei_json")
+        if tei_xml_path and tei_json_path:
+            try:
+                tei_xml = Path(str(tei_xml_path)).read_text(
+                    encoding="utf-8", errors="ignore"
+                )
+                extraction_payload = json.loads(
+                    Path(str(tei_json_path)).read_text(encoding="utf-8")
+                )
+                stored = store_extraction(ingest_id, tei_xml, extraction_payload)
+                try:
+                    graph_store.index_extraction(
+                        ingest_meta=stored,
+                        extraction_data=extraction_payload,
+                    )
+                except Exception:
+                    logger.exception("Graph index failed for attachment extraction")
+            except Exception:
+                logger.exception("Unable to reuse attachment TEI artifacts for ingest")
+
+    try:
+        attachment_store.update_attachment(
+            str(record.get("id")),
+            source_ingest_id=ingest_id,
+            timeline_event="ingested",
+            timeline_detail=f"Promoted to ingest:{ingest_id}",
+        )
+    except Exception:
+        logger.exception("Unable to stamp source_ingest_id on attachment")
+
+
+def promote_attachment_to_ingest(attachment_id: str) -> dict:
+    """Promote an existing attachment PDF into an ingested document.
+
+    Returns the updated attachment record (public view).
+    """
+    rec = attachment_store.get_attachment(str(attachment_id))
+    if rec is None:
+        raise attachment_store.AttachmentNotFound(
+            f"Attachment {attachment_id} not found"
+        )
+    _maybe_ingest_matched_attachment(rec)
+    return attachment_store.public_status(str(attachment_id)) or {}
 
 
 def _normalize_ws(value: str) -> str:
@@ -197,6 +302,15 @@ def process_attachment(
             )
             attachment_store.mark_matched(attachment_id, artifacts)
             logger.info("Attachment %s processed successfully", attachment_id)
+
+            # If this attachment is placed, promote it to an ingested Work so
+            # work-level graphs can resolve cited works automatically.
+            try:
+                latest = attachment_store.get_attachment(attachment_id)
+                if latest:
+                    _maybe_ingest_matched_attachment(latest)
+            except Exception:
+                logger.exception("Unable to promote matched attachment to ingested doc")
             try:
                 record = attachment_store.get_attachment(attachment_id)
                 raw_claim_id = (record or {}).get("claim_id")

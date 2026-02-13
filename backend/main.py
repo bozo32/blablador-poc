@@ -12,6 +12,7 @@ from backend import utils
 
 utils.set_sane_threads()
 import logging
+import threading
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -145,6 +146,94 @@ def _is_pdf_upload(file: UploadFile) -> bool:
     return filename.endswith(".pdf") and content_type == "application/pdf"
 
 
+def _set_ingest_stage_error(doc_id: str, *, stage: str, error: str) -> None:
+    try:
+        patch = {stage: {"status": "error", "error": str(error), "data": None}}
+        update_ingested_document(doc_id, patch)
+    except Exception:
+        logger.exception("Unable to persist %s error for %s", stage, doc_id)
+
+
+def _run_full_ingest_pipeline(doc_id: str) -> None:
+    """Run extraction + resolution for an ingested document.
+
+    This is intended to be used in background tasks after upload.
+    """
+    doc_id = str(doc_id or "").strip()
+    if not doc_id:
+        return
+
+    document = get_ingested_document(doc_id)
+    if document is None:
+        return
+
+    # --- Extraction ---
+    extraction_stage = document.get("extraction") or {}
+    extraction_data = (
+        (extraction_stage.get("data") or {})
+        if isinstance(extraction_stage, dict)
+        else {}
+    )
+    if not extraction_data:
+        try:
+            try:
+                update_ingested_document(
+                    doc_id,
+                    {"extraction": {"status": "running", "error": None}},
+                )
+            except Exception:
+                pass
+            pdf_path = get_document_source_path(doc_id)
+            tei_xml = grobid_client.extract_tei(pdf_path)
+            extraction_payload = extraction.parse_tei(tei_xml)
+            stored = store_extraction(doc_id, tei_xml, extraction_payload)
+            try:
+                graph_store.index_extraction(
+                    ingest_meta=stored,
+                    extraction_data=extraction_payload,
+                )
+            except Exception:
+                logger.exception("Graph index failed for extraction")
+            document = stored
+        except Exception as exc:
+            logger.exception("Extraction failed for %s", doc_id)
+            _set_ingest_stage_error(doc_id, stage="extraction", error=str(exc))
+            return
+
+    # --- Resolution ---
+    resolution_stage = document.get("resolution") or {}
+    resolution_data = (
+        (resolution_stage.get("data") or [])
+        if isinstance(resolution_stage, dict)
+        else []
+    )
+    if not resolution_data:
+        try:
+            try:
+                update_ingested_document(
+                    doc_id,
+                    {"resolution": {"status": "running", "error": None}},
+                )
+            except Exception:
+                pass
+            extraction_data2 = (document.get("extraction") or {}).get("data") or {}
+            references = extraction_data2.get("references")
+            if references:
+                resolved = resolve_references(references)
+                stored = store_resolution(doc_id, resolved)
+                try:
+                    graph_store.index_resolution(
+                        ingest_meta=stored,
+                        resolution_data=resolved,
+                    )
+                except Exception:
+                    logger.exception("Graph index failed for resolution")
+        except Exception as exc:
+            logger.exception("Resolution failed for %s", doc_id)
+            _set_ingest_stage_error(doc_id, stage="resolution", error=str(exc))
+            return
+
+
 def _serialize_attachment(record: Optional[dict]) -> schemas.AttachmentStatus:
     if record is None:
         raise HTTPException(status_code=404, detail="Attachment not found")
@@ -152,7 +241,11 @@ def _serialize_attachment(record: Optional[dict]) -> schemas.AttachmentStatus:
 
 
 @app.post("/ingest", response_model=schemas.IngestUploadResponse)
-async def ingest_document(file: UploadFile = File(...)):
+async def ingest_document(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    auto_process: bool = Query(True),
+):
     if not _is_pdf_upload(file):
         raise HTTPException(status_code=400, detail="Only PDF uploads are supported")
 
@@ -162,6 +255,18 @@ async def ingest_document(file: UploadFile = File(...)):
         graph_store.index_ingest_upload(metadata)
     except Exception:
         logger.exception("Graph index failed for ingest upload")
+
+    if bool(auto_process) and not background_state.get_state().get("paused"):
+        # Run in our own thread so multiple uploads don't block request workers;
+        # GROBID concurrency is throttled in grobid_client.
+        doc_id = str(metadata.get("id") or "").strip()
+        if doc_id:
+            threading.Thread(
+                target=_run_full_ingest_pipeline,
+                args=(doc_id,),
+                daemon=True,
+                name=f"ingest-pipeline-{doc_id}",
+            ).start()
     return {"document": metadata}
 
 
@@ -183,6 +288,35 @@ def get_ingest_document(doc_id: str):
 def get_document_ledger():
     rows = graph_store.ledger_rows()
     options = graph_store.ledger_options()
+
+    # Enrich ledger rows with ingestion stage status/errors so the UI can show
+    # failures without requiring a click.
+    by_ingest: dict[str, dict] = {}
+    for doc in list_ingested_documents():
+        ingest_id = str(doc.get("id") or "").strip()
+        if ingest_id:
+            by_ingest[ingest_id] = doc
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        ingest_id = str(row.get("ingest_id") or "").strip()
+        if not ingest_id:
+            continue
+        doc = by_ingest.get(ingest_id) or {}
+        extraction = doc.get("extraction") or {}
+        body_extraction = doc.get("body_extraction") or {}
+        resolution = doc.get("resolution") or {}
+        if isinstance(extraction, dict):
+            row["extraction_status"] = extraction.get("status")
+            row["extraction_error"] = extraction.get("error")
+        if isinstance(body_extraction, dict):
+            row["body_extraction_status"] = body_extraction.get("status")
+            row["body_extraction_error"] = body_extraction.get("error")
+        if isinstance(resolution, dict):
+            row["resolution_status"] = resolution.get("status")
+            row["resolution_error"] = resolution.get("error")
+
     return {"rows": rows, "options": options}
 
 
@@ -534,6 +668,67 @@ def resolve_graph_references(payload: schemas.ReferenceResolveRequest):
     return {"citing_doc_id": citing, "mapping": mapping}
 
 
+@app.post("/graph/reindex-docs")
+def reindex_graph_documents():
+    """Best-effort reindex of document-level graph state from ingestion store.
+
+    This is safe to run after code changes that affect document/alias inference
+    (eg. DOI/bib aliasing). It does not touch span graph tables.
+    """
+    docs = list_ingested_documents()
+    indexed = 0
+    errors: list[str] = []
+    for doc in docs:
+        try:
+            graph_store.index_ingest_upload(doc)
+        except Exception as exc:
+            errors.append(f"ingest_upload:{doc.get('id')}: {exc}")
+            continue
+        try:
+            extraction = (doc.get("extraction") or {}).get("data")
+            if isinstance(extraction, dict) and extraction:
+                graph_store.index_extraction(
+                    ingest_meta=doc, extraction_data=extraction
+                )
+        except Exception as exc:
+            errors.append(f"extraction:{doc.get('id')}: {exc}")
+        try:
+            resolution = (doc.get("resolution") or {}).get("data")
+            if isinstance(resolution, list) and resolution:
+                graph_store.index_resolution(
+                    ingest_meta=doc, resolution_data=resolution
+                )
+        except Exception as exc:
+            errors.append(f"resolution:{doc.get('id')}: {exc}")
+        indexed += 1
+
+    return {"ok": True, "documents": int(indexed), "errors": errors}
+
+
+@app.post("/ingest/reextract-all")
+def reextract_all_ingested_documents(
+    background_tasks: BackgroundTasks,
+    limit: int = Query(0, ge=0, le=5000),
+):
+    """Re-run extraction+resolution for all ingested documents.
+
+    Use this after changing extraction/graph indexing logic (eg. DOI/bib aliasing)
+    so all stored docs get re-indexed consistently.
+    """
+    docs = list_ingested_documents()
+    if int(limit) > 0:
+        docs = docs[: int(limit)]
+    doc_ids = [
+        str(d.get("id") or "").strip() for d in docs if str(d.get("id") or "").strip()
+    ]
+    for doc_id in doc_ids:
+        if background_tasks is not None:
+            background_tasks.add_task(_run_full_ingest_pipeline, doc_id)
+        else:
+            _run_full_ingest_pipeline(doc_id)
+    return {"ok": True, "queued": int(len(doc_ids))}
+
+
 @app.get(
     "/spans/lookup-citation-window",
     response_model=schemas.CitationSpanLookupResponse,
@@ -862,6 +1057,198 @@ def upsert_claim_spans(span_id: str, payload: schemas.ClaimSpansUpsertRequest):
         items.append({"order_index": int(cs.order_index), "selector": selector})
     claim_spans = span_graph_store.upsert_claim_spans(span_id=str(span_id), items=items)
     return {"span_id": str(span_id), "claim_spans": claim_spans}
+
+
+def _topology_edge_payload(edge_id: int) -> schemas.TopologyEdgePayload:
+    edge = graph_store.get_edge(int(edge_id)) or {}
+    aggs = graph_store.edge_vote_aggregates(int(edge_id))
+    return schemas.TopologyEdgePayload(
+        edge_id=int(edge_id),
+        kind=str(edge.get("kind") or ""),
+        source_id=str(edge.get("source_id") or ""),
+        target_id=str(edge.get("target_id") or ""),
+        enabled=bool(edge.get("enabled")),
+        properties=(edge.get("properties") or {}),
+        aggregates=schemas.ClaimGraphEdgeAggregates(**aggs),
+    )
+
+
+@app.post("/claim-atoms", response_model=schemas.ClaimAtomCreateResponse)
+def create_claim_atom(payload: schemas.ClaimAtomCreateRequest):
+    reviewer_uid = str(payload.reviewer_uid or "default").strip() or "default"
+    try:
+        atom = span_graph_store.create_claim_atom(
+            text=str(payload.text or ""),
+            created_by=reviewer_uid,
+            supersedes_id=str(payload.supersedes_id).strip()
+            if payload.supersedes_id
+            else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"atom": atom}
+
+
+@app.get("/claim-atoms/{claim_atom_id}", response_model=schemas.ClaimAtomCreateResponse)
+def get_claim_atom(claim_atom_id: str):
+    atom = span_graph_store.get_claim_atom(str(claim_atom_id))
+    if not atom:
+        raise HTTPException(status_code=404, detail="Claim atom not found")
+    return {"atom": atom}
+
+
+@app.post(
+    "/claim-spans/{claim_span_id}/atoms",
+    response_model=schemas.TopologyEdgePayload,
+)
+def link_claim_span_atom(claim_span_id: str, payload: schemas.ClaimSpanAtomLinkRequest):
+    reviewer_uid = str(payload.reviewer_uid or "default").strip() or "default"
+    csid = str(claim_span_id)
+    aid = str(payload.claim_atom_id or "").strip()
+    if not aid:
+        raise HTTPException(status_code=422, detail="claim_atom_id is required")
+    try:
+        span_graph_store.link_claim_span_atom(claim_span_id=csid, claim_atom_id=aid)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    edge_id = graph_store.upsert_topology_edge(
+        source_id=csid,
+        target_id=aid,
+        kind="CLAIMSPAN_EXPRESSES_ATOM",
+        source=str(payload.source or "manual"),
+        creator_uid=reviewer_uid,
+        enabled=True,
+    )
+    return _topology_edge_payload(edge_id)
+
+
+@app.get(
+    "/claim-spans/{claim_span_id}/atoms",
+    response_model=schemas.ClaimSpanAtomsResponse,
+)
+def list_claim_span_atoms(claim_span_id: str):
+    csid = str(claim_span_id)
+    atoms = span_graph_store.list_claim_span_atoms(claim_span_id=csid)
+    edges = graph_store.list_edges(
+        kind="CLAIMSPAN_EXPRESSES_ATOM",
+        source_id=csid,
+        include_disabled=True,
+    )
+    payload_edges = []
+    for e in edges:
+        edge_id = int(e.get("edge_id") or 0)
+        if not edge_id:
+            continue
+        payload_edges.append(_topology_edge_payload(edge_id))
+    return {"claim_span_id": csid, "atoms": atoms, "edges": payload_edges}
+
+
+@app.post(
+    "/claim-atoms/{claim_atom_id}/align",
+    response_model=schemas.TopologyEdgePayload,
+)
+def align_claim_atom_to_claim(
+    claim_atom_id: str, payload: schemas.AtomAlignClaimRequest
+):
+    reviewer_uid = str(payload.reviewer_uid or "default").strip() or "default"
+    aid = str(claim_atom_id)
+    cid = str(payload.claim_id or "").strip()
+    if not cid:
+        raise HTTPException(status_code=422, detail="claim_id is required")
+
+    edge_id = graph_store.upsert_topology_edge(
+        source_id=aid,
+        target_id=cid,
+        kind="ATOM_ALIGNS_TO_CLAIM",
+        source=str(payload.source or "manual"),
+        creator_uid=reviewer_uid,
+        enabled=True,
+    )
+    return _topology_edge_payload(edge_id)
+
+
+@app.post("/topology/settle", response_model=schemas.TopologySettleResponse)
+def topology_settle(payload: schemas.TopologySettleRequest):
+    kind = str(payload.kind or "").strip()
+    if not kind:
+        raise HTTPException(status_code=422, detail="kind is required")
+
+    policy = payload.policy
+    edges = graph_store.list_edges_by_kind(kind=kind, include_disabled=True)
+    evaluated = 0
+    enabled_n = 0
+    disabled_n = 0
+    unchanged_n = 0
+
+    for e in edges:
+        edge_id = int(e.get("edge_id") or 0)
+        if not edge_id:
+            continue
+        evaluated += 1
+        props = e.get("properties") or {}
+        aggs = graph_store.edge_vote_aggregates(edge_id)
+        n_total = int(aggs.get("n_total") or 0)
+        n_support = int(aggs.get("n_support") or 0)
+        n_contra = int(aggs.get("n_contradict") or 0)
+
+        if n_total < int(policy.min_total_votes or 1):
+            unchanged_n += 1
+            continue
+
+        decision = None
+        if bool(policy.contradict_veto) and n_contra > 0 and n_support == 0:
+            decision = False
+        elif (n_support - n_contra) >= int(
+            policy.support_margin or 0
+        ) and n_support >= int(policy.min_support or 0):
+            decision = True
+        elif (n_contra - n_support) >= int(
+            policy.support_margin or 0
+        ) and n_contra >= int(policy.min_contradict or 0):
+            decision = False
+
+        if decision is None:
+            unchanged_n += 1
+            continue
+
+        current_enabled = bool(e.get("enabled"))
+        if decision is False and current_enabled and bool(policy.manual_lock):
+            if str(props.get("source") or "") == "manual":
+                unchanged_n += 1
+                continue
+
+        if decision is True and not current_enabled:
+            enabled_n += 1
+        elif decision is False and current_enabled:
+            disabled_n += 1
+        else:
+            unchanged_n += 1
+            continue
+
+        if not bool(payload.dry_run):
+            graph_store.set_edge_enabled(
+                edge_id=edge_id,
+                enabled=bool(decision),
+                merge_properties={
+                    "settled_at": datetime.now(timezone.utc)
+                    .isoformat()
+                    .replace("+00:00", "Z"),
+                    "settled_by": "topology/settle",
+                    "settled_kind": kind,
+                    "settled_policy": policy.model_dump(),
+                    "settled_counts": aggs,
+                },
+            )
+
+    return {
+        "kind": kind,
+        "dry_run": bool(payload.dry_run),
+        "evaluated": int(evaluated),
+        "enabled": int(enabled_n),
+        "disabled": int(disabled_n),
+        "unchanged": int(unchanged_n),
+    }
 
 
 @app.post("/assertions", response_model=schemas.AssertionCreateResponse)
@@ -1193,9 +1580,33 @@ def extract_ingested_document(doc_id: str):
 
     try:
         pdf_path = get_document_source_path(doc_id)
-        tei_xml = grobid_client.extract_tei(pdf_path)
+        mode = "fulltext"
+        try:
+            tei_xml = grobid_client.extract_tei_fulltext(pdf_path)
+        except grobid_client.GrobidError:
+            mode = "header+references"
+            header_xml = grobid_client.extract_tei_header(pdf_path)
+            refs_xml = grobid_client.extract_tei_references(pdf_path)
+            tei_xml = grobid_client.merge_header_and_references_tei(
+                header_xml=header_xml,
+                references_xml=refs_xml,
+            )
         extraction_payload = extraction.parse_tei(tei_xml)
         stored = store_extraction(doc_id, tei_xml, extraction_payload)
+        try:
+            update_ingested_document(
+                doc_id,
+                {
+                    "body_extraction": {
+                        "status": "complete" if mode == "fulltext" else "error",
+                        "error": None
+                        if mode == "fulltext"
+                        else "Fulltext TEI failed; used header+references fallback.",
+                    }
+                },
+            )
+        except Exception:
+            pass
         try:
             graph_store.index_extraction(
                 ingest_meta=document, extraction_data=extraction_payload
@@ -1313,6 +1724,15 @@ def select_resolution_source(
         "data": updated_entries,
     }
     stored = update_ingested_document(doc_id, {"resolution": resolution_payload})
+
+    # Keep the claim graph's reference -> ingest anchoring up to date.
+    try:
+        graph_store.index_resolution(
+            ingest_meta={"id": str(doc_id)},
+            resolution_data=resolution_payload.get("data") or [],
+        )
+    except Exception:
+        logger.exception("Graph index failed for resolution selection")
     return {"document_id": doc_id, "resolution": stored.get("resolution")}
 
 
@@ -1440,6 +1860,19 @@ def patch_attachment_status(
                 logger.exception("Graph index failed for attachment placement")
 
     public_record = attachment_store.public_status(attachment_id)
+    return {"attachment": _serialize_attachment(public_record)}
+
+
+@app.post(
+    "/attachments/{attachment_id}/promote-ingest",
+    response_model=schemas.AttachmentResponse,
+)
+def promote_attachment_ingest(attachment_id: str):
+    """Promote an attachment PDF into an ingested Work."""
+    try:
+        public_record = attachment_pipeline.promote_attachment_to_ingest(attachment_id)
+    except attachment_store.AttachmentNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {"attachment": _serialize_attachment(public_record)}
 
 

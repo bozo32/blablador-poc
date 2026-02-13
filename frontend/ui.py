@@ -1657,17 +1657,47 @@ def render_documents_panel() -> None:
         with cols[1]:
             title = row.get("title") or ""
             title_hint = f" - {title}" if title else ""
+            extraction_status = str(row.get("extraction_status") or "").strip().lower()
+            extraction_error = str(row.get("extraction_error") or "").strip()
+            body_status = str(row.get("body_extraction_status") or "").strip().lower()
+            body_error = str(row.get("body_extraction_error") or "").strip()
+            resolution_status = str(row.get("resolution_status") or "").strip().lower()
+            resolution_error = str(row.get("resolution_error") or "").strip()
             chips = []
             if ingest_id:
                 chips.append("PDF")
-            if extracted:
+            if extraction_status == "running":
+                chips.append("E...")
+            elif extraction_status == "error":
+                chips.append("E!")
+            elif extracted:
                 chips.append("E")
-            if resolved:
+
+            if body_status == "running":
+                chips.append("B...")
+            elif body_status == "error":
+                chips.append("B!")
+            elif body_status == "complete":
+                chips.append("B")
+
+            if resolution_status == "running":
+                chips.append("R...")
+            elif resolution_status == "error":
+                chips.append("R!")
+            elif resolved:
                 chips.append("R")
             chips_text = (" " + " ".join(chips)) if chips else ""
-            # Tooltip: full APA.
+            # Tooltip: full APA + stage errors.
+            tooltip_lines = [apa]
+            if extraction_status == "error" and extraction_error:
+                tooltip_lines.append(f"Extraction error: {extraction_error}")
+            if body_status == "error" and body_error:
+                tooltip_lines.append(f"Body error: {body_error}")
+            if resolution_status == "error" and resolution_error:
+                tooltip_lines.append(f"Resolution error: {resolution_error}")
+            tooltip = "\n".join(tooltip_lines)
             st.markdown(
-                f"<div class='ledger-label' title='{html.escape(apa)}'>"
+                f"<div class='ledger-label' title='{html.escape(tooltip)}'>"
                 f"<span class='{dot_class}'></span> "
                 f"{html.escape(short)}{html.escape(title_hint)}"
                 f"<span class='doc-chips'>{html.escape(chips_text)}</span>"
@@ -1688,6 +1718,36 @@ def render_documents_panel() -> None:
 
     ingest_id = selected_row.get("ingest_id")
     if ingest_id:
+        extraction_status = (
+            str(selected_row.get("extraction_status") or "").strip().lower()
+        )
+        resolution_status = (
+            str(selected_row.get("resolution_status") or "").strip().lower()
+        )
+        if extraction_status == "error":
+            if st.button(
+                "Retry extraction",
+                key=f"doc-editor-retry-extract-{editor_doc}",
+                use_container_width=True,
+            ):
+                with st.spinner("Retrying extraction..."):
+                    trigger_extraction(api_url, str(ingest_id))
+                refresh_ingested_docs(show_error=False)
+                _ledger_fetch(api_url, force=True)
+        if resolution_status == "error":
+            if st.button(
+                "Retry resolution",
+                key=f"doc-editor-retry-resolve-{editor_doc}",
+                use_container_width=True,
+            ):
+                with st.spinner("Retrying resolution..."):
+                    try:
+                        trigger_resolution(api_url, str(ingest_id))
+                    except RuntimeError as exc:
+                        st.error(str(exc))
+                refresh_ingested_docs(show_error=False)
+                _ledger_fetch(api_url, force=True)
+
         if st.button(
             "Open", key=f"doc-editor-open-{editor_doc}", use_container_width=True
         ):
@@ -2040,6 +2100,79 @@ def render_project_panel() -> None:
             claim_queue.CLAIM_TIMELINE_KEY,
         ):
             st.session_state.pop(key, None)
+
+        # Clear broader workspace state so the UI is truly empty.
+        for key in (
+            "selected_doc_id",
+            "active_document",
+            "citation_selected_index",
+            "citation_selected_target",
+            "citation_selected_sentence_id",
+            "selected_callout_tuple",
+            "pending_citation_selection",
+            "workflow_active_citation",
+            "followed_citations",
+            "citation_context_key",
+            "citation_context",
+            "citation_context_error",
+            "citation_last_context_request",
+            "citation_follow_open",
+            "citation_graph_key",
+            "citation_graph",
+            "citation_graph_error",
+            "citation_last_graph_request",
+            "citation_context_cache",
+            "citation_parsing_inputs",
+            "chase_intent",
+            "chase_queue_open",
+            "chase_queue_selected",
+        ):
+            st.session_state.pop(key, None)
+        st.session_state[WORKSPACE_ACTIVE_TAB] = WORKSPACE_TAB_DOCUMENT
+
+        # Clear evidence store session cache.
+        st.session_state.pop("_evidence_store_state", None)
+        st.session_state.pop("_evidence_store_instance", None)
+
+        # Clear Surfing (live) UI state.
+        for key in list(st.session_state.keys()):
+            if isinstance(key, str) and (
+                key.startswith("surf_live_") or key == "surf-live"
+            ):
+                st.session_state.pop(key, None)
+
+        # Clear backend-stored callout segmentation drafts so reload doesn't repopulate.
+        try:
+            if reviewer is None:
+                target_reviewer = None
+            else:
+                target_reviewer = reviewer
+
+            payload = judgment_api.list_judgments(doc_id=None, include_drafts=True)
+            for j in payload.get("judgments") or []:
+                if not isinstance(j, dict):
+                    continue
+                claim_id = str(j.get("claim_id") or "")
+                if not claim_id.startswith("callout:"):
+                    continue
+                if str(j.get("status") or "") != "draft":
+                    continue
+                reviewer_uid = str(j.get("reviewer_uid") or "default")
+                if target_reviewer and reviewer_uid != str(target_reviewer):
+                    continue
+                # Overwrite with empty draft.
+                judgment_api.put_judgment(
+                    claim_id,
+                    {
+                        "status": "draft",
+                        "verdict": None,
+                        "notes": None,
+                        "span_selectors": None,
+                    },
+                    reviewer_uid=reviewer_uid,
+                )
+        except Exception:
+            pass
 
     reset_cols = st.columns([1, 1], gap="small")
     with reset_cols[0]:

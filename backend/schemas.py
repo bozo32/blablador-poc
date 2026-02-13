@@ -931,6 +931,37 @@ class ClaimSpansUpsertResponse(BaseModel):
     claim_spans: List[ClaimSpanPayload] = Field(default_factory=list)
 
 
+class ClaimAtomCreateRequest(BaseModel):
+    reviewer_uid: str
+    text: str
+    supersedes_id: Optional[str] = None
+
+
+class ClaimAtomPayload(BaseModel):
+    claim_atom_id: str
+    text: str
+    created_by: str
+    created_at: str
+    updated_at: str
+    supersedes_id: Optional[str] = None
+
+
+class ClaimAtomCreateResponse(BaseModel):
+    atom: ClaimAtomPayload
+
+
+class ClaimSpanAtomLinkRequest(BaseModel):
+    reviewer_uid: str
+    claim_atom_id: str
+    source: str = "manual"
+
+
+class AtomAlignClaimRequest(BaseModel):
+    reviewer_uid: str
+    claim_id: str
+    source: str = "manual"
+
+
 AssertionVerdict = ClaimGraphVoteVerdict
 
 
@@ -1112,6 +1143,59 @@ class ClaimGraphEdge(BaseModel):
     aggregates: ClaimGraphEdgeAggregates = Field(
         default_factory=ClaimGraphEdgeAggregates
     )
+
+
+class TopologyEdgePayload(BaseModel):
+    edge_id: int
+    kind: str
+    source_id: str
+    target_id: str
+    enabled: bool = True
+    properties: Dict[str, Any] = Field(default_factory=dict)
+    aggregates: ClaimGraphEdgeAggregates = Field(
+        default_factory=ClaimGraphEdgeAggregates
+    )
+
+
+class ClaimSpanAtomsResponse(BaseModel):
+    claim_span_id: str
+    atoms: List[ClaimAtomPayload] = Field(default_factory=list)
+    edges: List[TopologyEdgePayload] = Field(default_factory=list)
+
+
+class TopologySettlePolicy(BaseModel):
+    min_total_votes: int = Field(default=1, ge=1, le=1000)
+    min_support: int = Field(default=1, ge=0, le=1000)
+    min_contradict: int = Field(default=1, ge=0, le=1000)
+    support_margin: int = Field(default=1, ge=0, le=1000)
+    contradict_veto: bool = True
+    manual_lock: bool = True
+
+
+class TopologySettleRequest(BaseModel):
+    kind: str
+    policy: TopologySettlePolicy = Field(default_factory=TopologySettlePolicy)
+    dry_run: bool = False
+
+
+class TopologySettleResponse(BaseModel):
+    kind: str
+    dry_run: bool = False
+    evaluated: int = 0
+    enabled: int = 0
+    disabled: int = 0
+    unchanged: int = 0
+
+
+class WorkCitesWorkRequest(BaseModel):
+    citing_ingest_id: str
+    cited_ingest_id: str
+    reviewer_uid: str
+    enabled: bool = True
+
+
+class WorkCitesWorkResponse(BaseModel):
+    edge: TopologyEdgePayload
 
 
 class ClaimSubgraphResponse(BaseModel):

@@ -88,28 +88,58 @@ def compare_candidates(
 
 
 def _resolve_by_doi(doi: str) -> Tuple[Optional[Dict[str, Any]], Optional[float]]:
-    response = requests.get(
-        f"{settings.CROSSREF_API_URL}/{doi}",
-        params={"mailto": settings.CROSSREF_MAILTO},
-        timeout=10,
-    )
-    response.raise_for_status()
-    payload = response.json().get("message")
+    try:
+        response = requests.get(
+            f"{settings.CROSSREF_API_URL}/{doi}",
+            params={"mailto": settings.CROSSREF_MAILTO}
+            if settings.CROSSREF_MAILTO
+            else {},
+            timeout=10,
+        )
+    except requests.RequestException:
+        return None, None
+
+    # Crossref returns 404 for many DOI-like identifiers (eg arXiv DOIs).
+    if response.status_code == 404:
+        return None, None
+    try:
+        response.raise_for_status()
+    except requests.RequestException:
+        return None, None
+    try:
+        payload = response.json().get("message")
+    except Exception:
+        return None, None
     return payload, 1.0
 
 
 def _resolve_by_query(raw: str) -> Tuple[Optional[Dict[str, Any]], Optional[float]]:
-    response = requests.get(
-        settings.CROSSREF_API_URL,
-        params={
-            "query.bibliographic": raw,
-            "rows": 1,
-            "mailto": settings.CROSSREF_MAILTO,
-        },
-        timeout=10,
-    )
-    response.raise_for_status()
-    message = response.json().get("message", {})
+    try:
+        response = requests.get(
+            settings.CROSSREF_API_URL,
+            params={
+                "query.bibliographic": raw,
+                "rows": 1,
+                **(
+                    {"mailto": settings.CROSSREF_MAILTO}
+                    if settings.CROSSREF_MAILTO
+                    else {}
+                ),
+            },
+            timeout=10,
+        )
+    except requests.RequestException:
+        return None, None
+
+    try:
+        response.raise_for_status()
+    except requests.RequestException:
+        return None, None
+
+    try:
+        message = response.json().get("message", {})
+    except Exception:
+        return None, None
     items = message.get("items") or []
     if not items:
         return None, None
@@ -141,7 +171,7 @@ def _resolve_openalex_by_doi(
         return None, None
     params = _openalex_params()
     params["filter"] = f"doi:{normalized}"
-    params["per-page"] = 1
+    params["per-page"] = "1"
     response = requests.get(settings.OPENALEX_API_URL, params=params, timeout=10)
     response.raise_for_status()
     results = response.json().get("results") or []
@@ -157,7 +187,7 @@ def _resolve_openalex_by_title(
         return None, None
     params = _openalex_params()
     params["search"] = query
-    params["per-page"] = 1
+    params["per-page"] = "1"
     response = requests.get(settings.OPENALEX_API_URL, params=params, timeout=10)
     response.raise_for_status()
     results = response.json().get("results") or []
@@ -212,6 +242,9 @@ def _normalize_openalex_candidate(
 def _resolve_crossref_candidate(
     raw: str, doi: Optional[str]
 ) -> Optional[Dict[str, Any]]:
+    if not settings.CROSSREF_MAILTO:
+        return None
+
     if doi:
         message, confidence = _resolve_by_doi(doi)
         source = "doi"
@@ -283,9 +316,6 @@ def apply_resolution_selection(
 
 
 def resolve_references(entries: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    if not settings.CROSSREF_MAILTO:
-        raise RuntimeError("CROSSREF_MAILTO must be configured to use Crossref")
-
     resolved: List[Dict[str, Any]] = []
     for index, entry in enumerate(entries):
         reference_id, raw, doi, grobid = _normalize_entry(entry, index)
@@ -314,8 +344,14 @@ def resolve_references(entries: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]
         with ThreadPoolExecutor(max_workers=2) as executor:
             crossref_future = executor.submit(_resolve_crossref_candidate, query, doi)
             openalex_future = executor.submit(_resolve_openalex_candidate, query, doi)
-            crossref = crossref_future.result()
-            openalex = openalex_future.result()
+            try:
+                crossref = crossref_future.result()
+            except Exception:
+                crossref = None
+            try:
+                openalex = openalex_future.result()
+            except Exception:
+                openalex = None
 
         status, reason = compare_candidates(grobid, crossref, openalex)
         selected_source = _select_default_source(crossref, openalex, grobid)

@@ -56,6 +56,25 @@ class AppSettings(PydanticBaseSettings):
         description="Timeout (seconds) for GROBID extraction requests",
     )
 
+    GROBID_MAX_CONCURRENT: int = Field(
+        1,
+        description="Max concurrent GROBID requests (client-side throttle)",
+    )
+
+    GROBID_RETRY_503: int = Field(
+        3,
+        description="Retry count for transient GROBID 503 errors",
+    )
+
+    GROBID_CONSOLIDATE_CITATIONS: bool = Field(
+        False,
+        description="Ask GROBID to consolidate citations (calls external services)",
+    )
+    GROBID_CONSOLIDATE_HEADER: bool = Field(
+        False,
+        description="Ask GROBID to consolidate header (calls external services)",
+    )
+
     CROSSREF_MAILTO: str = Field(
         "",
         description="Contact email for Crossref REST API requests",

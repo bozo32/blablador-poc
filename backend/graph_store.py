@@ -6,7 +6,7 @@ import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 
 _NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
@@ -65,6 +65,33 @@ def bib_fingerprint(
     )
     digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:12]
     return f"bib:{digest}"
+
+
+def _safe_bib_key(
+    *,
+    title: Optional[str],
+    authors: Optional[Sequence[str]],
+    year: Optional[str],
+) -> Optional[str]:
+    """Return a bib:... key only when metadata is specific enough.
+
+    bib_fingerprint() is tolerant of missing fields; using it without guards can
+    create high-collision aliases. We require a reasonably informative title and
+    at least one additional signal (year or authors).
+    """
+    t = str(title or "").strip()
+    y = str(year or "").strip()
+    auth = [str(a or "").strip() for a in (authors or [])] if authors else []
+    auth = [a for a in auth if a]
+
+    if len(t) < 8:
+        return None
+    if not y and not auth:
+        return None
+    if y and not auth and len(t) < 24:
+        return None
+
+    return bib_fingerprint(title=t, authors=auth, year=y or None)
 
 
 def doc_node_id_from_key(doc_key: str) -> str:
@@ -280,6 +307,30 @@ class GraphStore:
         if isinstance(ingest_ids, list) and ingest_ids:
             value = ingest_ids[0]
             return str(value) if value else None
+
+        # Fallback: attempt to resolve the reference's doc_key/doi to an ingested
+        # document node via aliases.
+        doi = normalize_doi(props.get("doi"))
+        if doi:
+            node_id2 = self.resolve_alias(f"doi:{doi}")
+            if node_id2:
+                node2 = self._get_node(str(node_id2)) or {}
+                props2 = node2.get("properties") or {}
+                ingest2 = props2.get("ingest_ids") or []
+                if isinstance(ingest2, list) and ingest2:
+                    value = ingest2[0]
+                    return str(value) if value else None
+
+        doc_key = str(props.get("doc_key") or "").strip()
+        if doc_key.startswith("bib:"):
+            node_id3 = self.resolve_alias(doc_key)
+            if node_id3:
+                node3 = self._get_node(str(node_id3)) or {}
+                props3 = node3.get("properties") or {}
+                ingest3 = props3.get("ingest_ids") or []
+                if isinstance(ingest3, list) and ingest3:
+                    value = ingest3[0]
+                    return str(value) if value else None
         return None
 
     def _upsert_edge(
@@ -386,6 +437,8 @@ class GraphStore:
         title = metadata.get("title")
         authors = metadata.get("authors") or []
         year = metadata.get("year")
+        doi_meta = normalize_doi(metadata.get("doi"))
+        bib_meta = _safe_bib_key(title=title, authors=authors, year=year)
         ingest_id = str(ingest_meta.get("id") or "").strip() or None
 
         self._upsert_node(
@@ -399,10 +452,19 @@ class GraphStore:
                 "filename": ingest_meta.get("filename"),
                 "ingest_ids": [ingest_id] if ingest_id else [],
                 "sha256": ingest_meta.get("sha256"),
+                "doi": doi_meta,
             },
         )
         if ingest_id:
             self._set_alias(alias=f"ingest:{ingest_id}", node_id=node_id, kind="ingest")
+
+        # If this ingested doc has a DOI, alias the DOI key to the ingest node.
+        # This prevents "duplicate document nodes" while allowing reference
+        # resolution (doi -> ingest_id) via resolve_alias.
+        if doi_meta:
+            self._set_alias(alias=f"doi:{doi_meta}", node_id=node_id, kind="doi")
+        if bib_meta:
+            self._set_alias(alias=str(bib_meta), node_id=node_id, kind="bib")
 
         # References -> document nodes + CITES edges.
         for ref in (extraction_data or {}).get("references") or []:
@@ -415,14 +477,21 @@ class GraphStore:
             ref_title = grobid.get("title")
             ref_authors = grobid.get("authors") or []
             ref_year = grobid.get("year")
+            bib_ref = _safe_bib_key(title=ref_title, authors=ref_authors, year=ref_year)
             ref_key = (
                 f"doi:{doi}"
                 if doi
-                else bib_fingerprint(
-                    title=ref_title, authors=ref_authors, year=ref_year
+                else (
+                    bib_ref
+                    or bib_fingerprint(
+                        title=ref_title, authors=ref_authors, year=ref_year
+                    )
                 )
             )
-            ref_node_id = doc_node_id_from_key(ref_key)
+            # Prefer any existing alias for this reference (eg. doi -> ingested doc).
+            ref_node_id = self.resolve_alias(str(ref_key)) or doc_node_id_from_key(
+                ref_key
+            )
             self._upsert_node(
                 node_id=ref_node_id,
                 kind="document",
@@ -472,6 +541,30 @@ class GraphStore:
             if not node_id:
                 continue
             doi = normalize_doi(entry.get("doi"))
+            bib = _safe_bib_key(
+                title=entry.get("title"),
+                authors=entry.get("authors") or [],
+                year=entry.get("year"),
+            )
+
+            ingest_ids: list[str] = []
+            # If the resolution corresponds to an ingested document, anchor the
+            # reference node to that ingest id so downstream views (Surfing) can
+            # resolve reference_id -> ingest_id.
+            for alias_key in [f"doi:{doi}" if doi else None, bib]:
+                if not alias_key:
+                    continue
+                target_node_id = self.resolve_alias(str(alias_key))
+                if not target_node_id:
+                    continue
+                target_node = self._get_node(str(target_node_id)) or {}
+                props = target_node.get("properties") or {}
+                raw_ids = props.get("ingest_ids")
+                if isinstance(raw_ids, list):
+                    ingest_ids = [str(x) for x in raw_ids if str(x).strip()]
+                if ingest_ids:
+                    break
+
             self._upsert_node(
                 node_id=node_id,
                 kind="document",
@@ -480,6 +573,7 @@ class GraphStore:
                     "doi": doi,
                     "title": entry.get("title"),
                     "year": entry.get("year"),
+                    "ingest_ids": ingest_ids or None,
                 },
             )
 
@@ -817,6 +911,9 @@ class GraphStore:
         data["enabled"] = bool(int(data.get("enabled") or 0))
         return data
 
+    def get_edge(self, edge_id: int) -> Optional[dict]:
+        return self._get_edge(int(edge_id))
+
     def get_claim_node(self, claim_id: str) -> Optional[dict]:
         node = self._get_node(str(claim_id or "").strip())
         if not node:
@@ -928,6 +1025,221 @@ class GraphStore:
             )
         return int(cur.lastrowid)
 
+    def upsert_topology_edge(
+        self,
+        *,
+        source_id: str,
+        target_id: str,
+        kind: str,
+        source: str,
+        creator_uid: Optional[str] = None,
+        explored_by: Optional[Sequence[str]] = None,
+        enabled: bool = True,
+    ) -> int:
+        """Create or re-enable a generic topology edge.
+
+        This is the same settled-topology pattern used for claim links: an edge
+        row (with enabled flag) plus per-reviewer votes stored in edge_votes.
+        """
+        src = str(source_id or "").strip()
+        tgt = str(target_id or "").strip()
+        kind_norm = str(kind or "").strip()
+        if not src or not tgt or not kind_norm:
+            raise ValueError("source_id, target_id, and kind are required")
+        if src == tgt:
+            raise ValueError("Cannot link a node to itself")
+
+        now = _now()
+        row = self._conn.execute(
+            """
+            SELECT edge_id, properties_json
+            FROM edges
+            WHERE source_id=? AND target_id=? AND kind=? AND ref_id=''
+            """,
+            (src, tgt, kind_norm),
+        ).fetchone()
+
+        props: dict = {}
+        if row:
+            try:
+                props = json.loads(row["properties_json"] or "{}")
+            except Exception:
+                props = {}
+
+        props["source"] = str(source or "").strip() or "auto"
+        if creator_uid:
+            text = str(creator_uid or "").strip()
+            if text:
+                if props.get("source") == "manual" and not props.get("creator_uid"):
+                    props["creator_uid"] = text
+
+        if explored_by:
+            merged: List[str] = []
+            existing = props.get("explored_by")
+            if isinstance(existing, list):
+                merged.extend(str(x) for x in existing if str(x).strip())
+            for uid in explored_by:
+                text = str(uid or "").strip()
+                if text and text not in merged:
+                    merged.append(text)
+            if merged:
+                props["explored_by"] = merged
+
+        if row:
+            with self._conn:
+                self._conn.execute(
+                    """
+                    UPDATE edges
+                    SET enabled=?, properties_json=?, updated_at=?
+                    WHERE edge_id=?
+                    """,
+                    (
+                        1 if enabled else 0,
+                        json.dumps(props, ensure_ascii=True),
+                        now,
+                        int(row["edge_id"]),
+                    ),
+                )
+            return int(row["edge_id"])
+
+        with self._conn:
+            cur = self._conn.execute(
+                """
+                INSERT INTO edges(
+                    source_id,
+                    target_id,
+                    kind,
+                    ref_id,
+                    enabled,
+                    properties_json,
+                    created_at,
+                    updated_at
+                ) VALUES(?, ?, ?, '', ?, ?, ?, ?)
+                """,
+                (
+                    src,
+                    tgt,
+                    kind_norm,
+                    1 if enabled else 0,
+                    json.dumps(props, ensure_ascii=True),
+                    now,
+                    now,
+                ),
+            )
+        return int(cur.lastrowid)
+
+    def upsert_manual_work_cites_work(
+        self,
+        *,
+        citing_ingest_id: str,
+        cited_ingest_id: str,
+        reviewer_uid: str,
+        enabled: bool = True,
+    ) -> int:
+        """Create/enable a manual work->work citation edge.
+
+        This is a work-level override for cases where extraction/resolution is
+        wrong or incomplete. It uses the generic topology edge mechanism.
+        """
+        citing = str(citing_ingest_id or "").strip()
+        cited = str(cited_ingest_id or "").strip()
+        if not citing or not cited:
+            raise ValueError("citing_ingest_id and cited_ingest_id are required")
+        return self.upsert_topology_edge(
+            source_id=citing,
+            target_id=cited,
+            kind="WORK_CITES_WORK",
+            source="manual",
+            creator_uid=str(reviewer_uid or "default"),
+            enabled=bool(enabled),
+        )
+
+    def list_edges_by_kind(
+        self, *, kind: str, include_disabled: bool = True
+    ) -> List[dict]:
+        kind_norm = str(kind or "").strip()
+        if not kind_norm:
+            return []
+        where_enabled = "" if include_disabled else "AND enabled=1"
+        rows = self._conn.execute(
+            f"""
+            SELECT edge_id
+            FROM edges
+            WHERE kind=?
+              {where_enabled}
+            ORDER BY edge_id ASC
+            """,
+            (kind_norm,),
+        ).fetchall()
+        out: List[dict] = []
+        for r in rows:
+            edge = self._get_edge(int(r["edge_id"]))
+            if edge:
+                out.append(edge)
+        return out
+
+    def list_edges(
+        self,
+        *,
+        kind: str,
+        source_id: Optional[str] = None,
+        target_id: Optional[str] = None,
+        include_disabled: bool = True,
+    ) -> List[dict]:
+        kind_norm = str(kind or "").strip()
+        if not kind_norm:
+            return []
+        clauses = ["kind=?"]
+        params: List[Any] = [kind_norm]
+        if source_id is not None:
+            clauses.append("source_id=?")
+            params.append(str(source_id))
+        if target_id is not None:
+            clauses.append("target_id=?")
+            params.append(str(target_id))
+        if not include_disabled:
+            clauses.append("enabled=1")
+        where = " AND ".join(clauses)
+        rows = self._conn.execute(
+            f"SELECT edge_id FROM edges WHERE {where} ORDER BY edge_id ASC",
+            tuple(params),
+        ).fetchall()
+        out: List[dict] = []
+        for r in rows:
+            edge = self._get_edge(int(r["edge_id"]))
+            if edge:
+                out.append(edge)
+        return out
+
+    def set_edge_enabled(
+        self,
+        *,
+        edge_id: int,
+        enabled: bool,
+        merge_properties: Optional[dict] = None,
+    ) -> None:
+        edge = self._get_edge(int(edge_id))
+        if not edge:
+            raise KeyError("Edge not found")
+        props = edge.get("properties") or {}
+        for k, v in (merge_properties or {}).items():
+            if v is None:
+                continue
+            props[k] = v
+        with self._conn:
+            self._conn.execute(
+                (
+                    "UPDATE edges SET enabled=?, properties_json=?, updated_at=? "
+                    "WHERE edge_id=?"
+                ),
+                (
+                    1 if enabled else 0,
+                    json.dumps(props, ensure_ascii=True),
+                    _now(),
+                    int(edge_id),
+                ),
+            )
+
     def delete_claim_link(self, *, edge_id: int, reviewer_uid: str) -> None:
         edge = self._get_edge(int(edge_id))
         if not edge or edge.get("kind") != "CLAIM_LINK":
@@ -958,8 +1270,17 @@ class GraphStore:
         comment: Optional[str] = None,
     ) -> dict:
         edge = self._get_edge(int(edge_id))
-        if not edge or not edge.get("enabled"):
+        if not edge:
             raise KeyError("Edge not found")
+        if not edge.get("enabled"):
+            # Allow votes on disabled edges so consensus can re-enable topology.
+            # Exception: manually deleted claim links should stay inert.
+            props = edge.get("properties") or {}
+            if (
+                str(edge.get("kind") or "") == "CLAIM_LINK"
+                and str(props.get("source") or "") == "manual"
+            ):
+                raise KeyError("Edge not found")
 
         reviewer = str(reviewer_uid or "").strip() or "default"
         ver = str(verdict or "").strip()

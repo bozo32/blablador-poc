@@ -123,6 +123,16 @@ def delete_claim_link(edge_id: int, reviewer_uid: str) -> Dict[str, Any]:
         raise GraphApiError(str(exc)) from exc
 
 
+def reindex_docs() -> Dict[str, Any]:
+    url = f"{_api_root()}/graph/reindex-docs"
+    try:
+        resp = requests.post(url, timeout=DEFAULT_TIMEOUT)
+        resp.raise_for_status()
+        return resp.json() if resp.text else {}
+    except requests.RequestException as exc:
+        raise GraphApiError(str(exc)) from exc
+
+
 def get_claim_candidates(claim_id: str, limit: int = 10) -> Dict[str, Any]:
     url = f"{_api_root()}/graph/claim/{str(claim_id).strip()}/candidates"
     params = {"limit": int(limit)}

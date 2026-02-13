@@ -175,7 +175,94 @@
         let clickTimer = null;
         let lastSentValue = null;
         let eventSeq = 0;
+        let lastLayoutNonce = null;
         const tooltip = document.getElementById("tooltip");
+
+        // Position + viewport caching (client-side only).
+        // This prevents global re-layout churn across Streamlit reruns.
+        const posCache = new Map(); // nodeId -> {x,y}
+        let viewportCache = null; // { pan: {x,y}, zoom }
+
+        function stableHash(str) {
+          // Deterministic hash for placement offsets.
+          const s = String(str || "");
+          let h = 2166136261;
+          for (let i = 0; i < s.length; i++) {
+            h ^= s.charCodeAt(i);
+            h = Math.imul(h, 16777619);
+          }
+          return h >>> 0;
+        }
+
+        function capturePositions() {
+          if (!cy) return;
+          cy.nodes().forEach((n) => {
+            const id = n.id();
+            const p = n.position();
+            if (id && Number.isFinite(p.x) && Number.isFinite(p.y)) {
+              posCache.set(id, { x: p.x, y: p.y });
+            }
+          });
+          viewportCache = { pan: cy.pan(), zoom: cy.zoom() };
+        }
+
+        function restoreViewport() {
+          if (!cy || !viewportCache) return;
+          try {
+            cy.zoom(viewportCache.zoom);
+            cy.pan(viewportCache.pan);
+          } catch (e) {
+            // ignore
+          }
+        }
+
+        function seedPositions(elements) {
+          // Seed positions for nodes missing cached positions.
+          const els = coerceArray(elements);
+          const edges = els.filter((e) => e && e.data && e.data.source && e.data.target);
+          const nodes = els.filter((e) => e && e.data && e.data.id && (!e.data.source && !e.data.target));
+          const nodeIds = new Set(nodes.map((n) => String(n.data.id)));
+
+          function neighborWithPos(id) {
+            for (const ed of edges) {
+              const s = String(ed.data.source || "");
+              const t = String(ed.data.target || "");
+              if (s === id && posCache.has(t)) return { id: t, pos: posCache.get(t) };
+              if (t === id && posCache.has(s)) return { id: s, pos: posCache.get(s) };
+            }
+            return null;
+          }
+
+          for (const n of nodes) {
+            const id = String((n.data || {}).id || "");
+            if (!id) continue;
+            if (posCache.has(id)) continue;
+            const neigh = neighborWithPos(id);
+            if (neigh && neigh.pos) {
+              const h = stableHash(id);
+              const angle = ((h % 360) * Math.PI) / 180;
+              const radius = 60 + (h % 40);
+              posCache.set(id, {
+                x: neigh.pos.x + Math.cos(angle) * radius,
+                y: neigh.pos.y + Math.sin(angle) * radius,
+              });
+            } else {
+              // Place near origin; layout will fix on first run.
+              posCache.set(id, { x: 0, y: 0 });
+            }
+          }
+        }
+
+        function restorePositions() {
+          if (!cy) return;
+          cy.nodes().forEach((n) => {
+            const id = n.id();
+            const p = posCache.get(id);
+            if (p && Number.isFinite(p.x) && Number.isFinite(p.y)) {
+              n.position(p);
+            }
+          });
+        }
 
         function hideTooltip() {
           if (!tooltip) return;
@@ -273,6 +360,8 @@
           const options = coerceObject(args.options);
           const style = computeStyle(userStyle.length ? userStyle : DEFAULT_STYLE, options);
           const layout = Object.keys(coerceObject(args.layout)).length ? coerceObject(args.layout) : DEFAULT_LAYOUT;
+          const stableLayout = !!options.stableLayout;
+          const layoutNonce = options.layoutNonce;
 
           const height = Number.isFinite(Number(args.height)) ? Number(args.height) : 560;
           const cyDiv = document.getElementById("cy");
@@ -297,6 +386,17 @@
               wheelSensitivity: 0.2,
             });
 
+             cy.on("dragfree", "node", () => {
+               capturePositions();
+             });
+             cy.on("zoom pan", () => {
+               if (!cy) return;
+               viewportCache = { pan: cy.pan(), zoom: cy.zoom() };
+             });
+             cy.on("layoutstop", () => {
+               capturePositions();
+             });
+
             cy.on("mouseover", "node", (evt) => {
               const d = evt.target.data() || {};
               const text = d.hover || d.label || d.id || "";
@@ -304,6 +404,14 @@
               showTooltip(text, pos.x, pos.y);
             });
             cy.on("mouseout", "node", () => hideTooltip());
+
+            cy.on("mouseover", "edge", (evt) => {
+              const d = evt.target.data() || {};
+              const text = d.hover || d.label || d.id || "";
+              const pos = evt.renderedPosition || { x: 0, y: 0 };
+              showTooltip(text, pos.x, pos.y);
+            });
+            cy.on("mouseout", "edge", () => hideTooltip());
             cy.on("mousemove", (evt) => {
               if (!tooltip || tooltip.style.display !== "block") return;
               const pos = evt.renderedPosition || null;
@@ -346,11 +454,23 @@
               sendValue({ type: "node", id, action: "context", seq: ++eventSeq, ...mod });
             });
           } else {
+            // For stable layouts, seed and restore positions before deciding whether
+            // to run a global layout.
+            if (stableLayout) seedPositions(elements);
             cy.json({ elements, style });
-            try {
-              cy.layout(layout).run();
-            } catch (e) {
-              cy.layout(DEFAULT_LAYOUT).run();
+            if (stableLayout) {
+              restoreViewport();
+              restorePositions();
+            }
+            const forceLayout = (layoutNonce !== undefined && layoutNonce !== null && layoutNonce !== lastLayoutNonce);
+            if (forceLayout) lastLayoutNonce = layoutNonce;
+
+            if (!stableLayout || posCache.size === 0 || forceLayout) {
+              try {
+                cy.layout(layout).run();
+              } catch (e) {
+                cy.layout(DEFAULT_LAYOUT).run();
+              }
             }
           }
 
@@ -380,23 +500,6 @@
           applyFocus(args.focus);
 
           // Render events can come in bursts; don't reset click state.
-        }
-
-        Streamlit.events.addEventListener(Streamlit.RENDER_EVENT, onRender);
-        Streamlit.setComponentReady();
-      })();
-    </script>
-  </body>
-</html>
-          if (key !== lastKey) {
-            lastKey = key;
-            ensureCy(args);
-          } else {
-            Streamlit.setFrameHeight(Number(args.height) || 560);
-          }
-
-          applySelection(args.selection);
-          applyFocus(args.focus);
         }
 
         Streamlit.events.addEventListener(Streamlit.RENDER_EVENT, onRender);

@@ -17,6 +17,7 @@ from frontend.state_keys import (
 )
 from frontend.ingestion_api import auto_place_claim_source, confirm_claims
 from frontend.citation_anchors import maybe_attach_citation_anchor
+from frontend import judgment_api
 
 
 def _segment_locally(text: str, base_index: int) -> list[str]:
@@ -200,6 +201,29 @@ def render(
     cite_text = (edited or "").strip()
 
     st.markdown("**Segments**")
+
+    callout_judgment_id = f"callout:{doc_id}:{int(citation_index)}:{target_id or ''}"
+    if cite_key not in reviewer_segments:
+        # Best-effort restore saved segments from backend judgment drafts so
+        # browser reloads can resume without re-segmentation.
+        try:
+            stored = judgment_api.get_judgment(
+                callout_judgment_id,
+                reviewer_uid=str(active_reviewer_uid or "default"),
+            )
+        except Exception:
+            stored = {}
+        span_selectors = (stored or {}).get("span_selectors")
+        if isinstance(span_selectors, list) and span_selectors:
+            restored_lines: list[str] = []
+            for entry in span_selectors:
+                if not isinstance(entry, dict):
+                    continue
+                text = str(entry.get("text") or "").strip()
+                if text:
+                    restored_lines.append(text)
+            if restored_lines:
+                reviewer_segments[cite_key] = restored_lines
     canonical_segments = (
         f"{canonical_segments_key(citation_index=citation_index)}::{reviewer_state}"
     )
@@ -411,6 +435,39 @@ def render(
         st.session_state[rev_key] = int(st.session_state.get(rev_key) or 0) + 1
 
         _persist_confirmed_claims(lines)
+
+        # Persist segmentation lines to backend as a draft callout judgment.
+        try:
+            prov = maybe_attach_citation_anchor(
+                provenance={
+                    "doc_id": str(doc_id),
+                    "citation_index": int(citation_index),
+                    "target_id": str(target_id) if target_id else None,
+                },
+                context=context,
+            )
+            judgment_api.put_judgment(
+                callout_judgment_id,
+                {
+                    "status": "draft",
+                    "verdict": None,
+                    "notes": None,
+                    "doc_id": str(doc_id),
+                    "citation_index": int(citation_index),
+                    "target_id": str(target_id) if target_id else None,
+                    "sentence_id": _resolve_sentence_id() or context.get("sentence_id"),
+                    "callout": context.get("callout"),
+                    "reference_id": str(target_id) if target_id else None,
+                    "cited_work_id": prov.get("cited_work_id"),
+                    "citation_anchor": prov.get("citation_anchor"),
+                    "span_selectors": [
+                        {"segment_id": None, "text": ln} for ln in lines
+                    ],
+                },
+                reviewer_uid=str(active_reviewer_uid or "default"),
+            )
+        except Exception:
+            pass
 
         primary_callout = context.get("callout") or "citation"
         reference_hint = {

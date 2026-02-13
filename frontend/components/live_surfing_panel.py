@@ -10,8 +10,15 @@ from frontend.ingestion_api import (
     get_document_body,
     get_span_bundle,
     lookup_citation_window_span,
+    trigger_resolution,
 )
 from frontend.components import cytoscape_panel
+from frontend.state_keys import (
+    WORKSPACE_ACTIVE_TAB,
+    WORKSPACE_TAB_DOCUMENT,
+    WORKSPACE_TAB_GRAPH,
+    WORKSPACE_TAB_REVIEW,
+)
 
 
 @dataclass(frozen=True)
@@ -58,12 +65,28 @@ def _seed_state() -> None:
     st.session_state.setdefault("surf_live_show_labels", False)
     st.session_state.setdefault("surf_live_debug", False)
     st.session_state.setdefault("surf_live_follow_active_citation", True)
+    st.session_state.setdefault("surf_live_show_work_graph", False)
     st.session_state.setdefault("surf_live_last_callout", "")
+    st.session_state.setdefault("surf_live_layout_nonce", 0)
+    st.session_state.setdefault("surf_live_component_nonce", 0)
+
+
+def _active_reviewer_uid() -> str:
+    meta = st.session_state.get("project_meta")
+    if isinstance(meta, dict):
+        value = str(meta.get("active_reviewer_uid") or "").strip()
+        if value:
+            return value
+    value2 = str(st.session_state.get("active_reviewer_uid") or "").strip()
+    return value2 or "default"
     st.session_state.setdefault("surf_live_claim_cache", {})
     st.session_state.setdefault("surf_live_ref_cache", {})
     st.session_state.setdefault("surf_live_span_cache", {})
     st.session_state.setdefault("surf_live_bundle_cache", {})
     st.session_state.setdefault("surf_live_last_event_seq", 0)
+    st.session_state.setdefault("surf_live_citespan_followup", {})
+    st.session_state.setdefault("surf_live_open_todo_by_work", {})
+    st.session_state.setdefault("surf_live_todo_cap_by_work", {})
 
 
 def _get_span_id(
@@ -127,6 +150,24 @@ def _store_expanded(key: str, values: set[str]) -> None:
 
 def _as_dict(value: Any) -> dict:
     return value if isinstance(value, dict) else {}
+
+
+def _citespan_triage(*, citespan_id: str, unresolved: bool, claim_count: int) -> str:
+    """Return triage marker for a CiteSpan.
+
+    Values:
+    - "todo": follow up (stub/needs work)
+    - "ignore": do not follow up
+    - "": automatic / none
+    """
+    csid = str(citespan_id or "").strip()
+    overrides = _as_dict(st.session_state.get("surf_live_citespan_followup"))
+    raw = str(overrides.get(csid) or "").strip().lower()
+    if raw in {"todo", "ignore"}:
+        return raw
+    if bool(unresolved) or int(claim_count) == 0:
+        return "todo"
+    return ""
 
 
 def _get_claim_nodes(doc_id: str) -> list[dict]:
@@ -242,8 +283,116 @@ def _ledger_work_graph(api_url: str) -> tuple[dict[str, dict], list[tuple[str, s
     return work_by_id, edges
 
 
+def _limit_work_graph(
+    *,
+    seed: str,
+    work_by_id: dict[str, dict],
+    work_edges: list[tuple[str, str]],
+    expanded_works: set[str],
+    expanded_work_citespans: set[str],
+    max_nodes: int = 80,
+) -> tuple[dict[str, dict], list[tuple[str, str]]]:
+    """Reduce the ledger graph to a small neighborhood.
+
+    Surfing uses CiteSpans for deep navigation; the work-level graph is meant to be
+    a lightweight scaffold. Rendering the full ledger graph makes expansions feel
+    like they "explode".
+    """
+    seed = str(seed or "").strip()
+    if not seed:
+        return {}, []
+    max_nodes = int(max_nodes) if int(max_nodes) > 5 else 80
+
+    out_adj: dict[str, set[str]] = {}
+    in_adj: dict[str, set[str]] = {}
+    for s, t in work_edges:
+        s = str(s)
+        t = str(t)
+        out_adj.setdefault(s, set()).add(t)
+        in_adj.setdefault(t, set()).add(s)
+
+    visible: list[str] = []
+    seen: set[str] = set()
+
+    def _add(wid: str) -> None:
+        wid = str(wid or "").strip()
+        if not wid or wid not in work_by_id:
+            return
+        if wid in seen:
+            return
+        seen.add(wid)
+        visible.append(wid)
+
+    _add(seed)
+    for wid in sorted(expanded_works):
+        if len(visible) >= max_nodes:
+            break
+        _add(wid)
+
+    # 1-hop neighborhood around seed.
+    if seed not in expanded_work_citespans:
+        for wid in sorted(out_adj.get(seed, set())):
+            if len(visible) >= max_nodes:
+                break
+            _add(wid)
+    for wid in sorted(in_adj.get(seed, set())):
+        if len(visible) >= max_nodes:
+            break
+        _add(wid)
+
+    limited_work_by_id = {wid: work_by_id[wid] for wid in visible if wid in work_by_id}
+    limited_edges = [
+        (s, t)
+        for (s, t) in work_edges
+        if s in limited_work_by_id and t in limited_work_by_id
+    ]
+    return limited_work_by_id, limited_edges
+
+
+def _set_active_callout(
+    *,
+    doc_id: str,
+    sentence_id: Optional[str],
+    citation_index: int,
+    target_id: Optional[str],
+) -> None:
+    doc_id = str(doc_id or "").strip()
+    if not doc_id:
+        return
+    st.session_state["selected_doc_id"] = doc_id
+    st.session_state["citation_selected_index"] = int(citation_index)
+    st.session_state["citation_selected_target"] = (
+        str(target_id).strip() if target_id else None
+    )
+    st.session_state["citation_selected_sentence_id"] = (
+        str(sentence_id).strip() if sentence_id else None
+    )
+    st.session_state["selected_callout_tuple"] = {
+        "doc_id": doc_id,
+        "citation_index": int(citation_index),
+        "target_id": str(target_id).strip() if target_id else None,
+        "sentence_id": str(sentence_id).strip() if sentence_id else None,
+    }
+    # Mirror ui.select_citation cache busting so the destination tab reloads.
+    st.session_state["citation_context_key"] = None
+    st.session_state["citation_context"] = None
+    st.session_state["citation_context_error"] = None
+    st.session_state["citation_last_context_request"] = None
+    st.session_state["citation_follow_open"] = False
+    st.session_state["citation_graph_key"] = None
+    st.session_state["citation_graph"] = None
+    st.session_state["citation_graph_error"] = None
+    st.session_state["citation_last_graph_request"] = None
+    st.session_state["workflow_active_citation"] = int(citation_index)
+
+
 def render(*, api_url: str, seed_doc_id: str) -> None:
     _seed_state()
+
+    reviewer_uid = _active_reviewer_uid()
+
+    component_nonce = int(st.session_state.get("surf_live_component_nonce") or 0)
+    component_key = f"surf-live::{component_nonce}"
 
     seed_doc_id = str(seed_doc_id or "").strip()
     if seed_doc_id:
@@ -262,9 +411,15 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
     selection = st.session_state.get("surf_live_selection")
     if not isinstance(selection, dict):
         selection = {}
+    else:
+        selection = {
+            "type": str(selection.get("type") or "").strip(),
+            "id": str(selection.get("id") or "").strip(),
+        }
+        selection = {k: v for k, v in selection.items() if v}
 
     # Latest component payload (may include transient action/seq).
-    comp_value = st.session_state.get("surf-live")
+    comp_value = st.session_state.get(component_key)
     if not isinstance(comp_value, dict):
         comp_value = {}
 
@@ -289,39 +444,46 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
                     )
                 )
                 last = str(st.session_state.get("surf_live_last_callout") or "")
+                if csid:
+                    # Always bust span-bundle cache for the active callout so
+                    # Chasing edits are reflected without manual refresh.
+                    try:
+                        span_id = _get_span_id(
+                            api_url=api_url,
+                            ingest_id=str(doc_id),
+                            citation_index=int(cite_idx),
+                            target_id=str(ref_id),
+                        )
+                    except Exception:
+                        span_id = None
+                    if span_id:
+                        bundle_cache = _as_dict(
+                            st.session_state.get("surf_live_bundle_cache")
+                        )
+                        bundle_cache.pop(f"{span_id}::{reviewer_uid}", None)
+                        st.session_state["surf_live_bundle_cache"] = bundle_cache
+
                 if csid and csid != last:
                     st.session_state["surf_live_last_callout"] = csid
                     expanded_works.add(doc_id)
+                    expanded_work_citespans.add(doc_id)
                     st.session_state["surf_live_pending_focus"] = {"node_id": csid}
                     st.session_state["surf_live_selection"] = {
                         "type": "node",
                         "id": csid,
                     }
-                    selection = {"type": "node", "id": csid, "action": "focus"}
-
-    # If the component sends a persistent dblclick action, treat it as an event
-    # (handled once) rather than state.
-    try:
-        picked_seq = int(selection.get("seq") or 0)
-    except Exception:
-        picked_seq = 0
-    last_seq = int(st.session_state.get("surf_live_last_event_seq") or 0)
-    if picked_seq and picked_seq <= last_seq:
-        # Clear action so we don't re-trigger on reruns.
-        selection = {k: v for k, v in selection.items() if k != "action"}
-    elif picked_seq:
-        st.session_state["surf_live_last_event_seq"] = picked_seq
+                    selection = {"type": "node", "id": csid}
 
     # --- Work graph (ledger-backed) ----------------------------------------
     try:
-        work_by_id, work_edges = _ledger_work_graph(api_url)
+        ledger_work_by_id, ledger_work_edges = _ledger_work_graph(api_url)
     except Exception as exc:
         st.error(f"Work graph unavailable: {exc}")
         return
 
-    if seed not in work_by_id:
+    if seed not in ledger_work_by_id:
         # Fallback: still render a minimal seed node.
-        work_by_id[seed] = {
+        ledger_work_by_id[seed] = {
             "id": seed,
             "short": "Selected document",
             "title": seed,
@@ -332,54 +494,117 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
             "resolved": False,
         }
 
+    show_work_graph = bool(st.session_state.get("surf_live_show_work_graph"))
+    if show_work_graph:
+        # Keep the work-level scaffold small so work expansions reveal CiteSpans,
+        # not an overwhelming number of work nodes.
+        work_by_id, work_edges = _limit_work_graph(
+            seed=seed,
+            work_by_id=ledger_work_by_id,
+            work_edges=ledger_work_edges,
+            expanded_works=expanded_works,
+            expanded_work_citespans=expanded_work_citespans,
+            max_nodes=80,
+        )
+    else:
+        # Default: only show the seed + explicitly expanded works.
+        visible_ids = set(expanded_works) | {seed}
+        work_by_id = {
+            wid: ledger_work_by_id[wid]
+            for wid in visible_ids
+            if wid in ledger_work_by_id
+        }
+        work_edges = []
+
     expanded_works.add(seed)
 
-    # Process Cytoscape click/dblclick as one-shot events (after we have
-    # `work_by_id`).
+    # Process Cytoscape events from the component payload.
     try:
-        evt_seq = int(selection.get("seq") or 0)
+        evt_seq = int(comp_value.get("seq") or 0)
     except Exception:
         evt_seq = 0
     last_seq = int(st.session_state.get("surf_live_last_event_seq") or 0)
     is_new_evt = bool(evt_seq and evt_seq > last_seq)
     if is_new_evt:
         st.session_state["surf_live_last_event_seq"] = evt_seq
-        st.session_state["surf_live_selection"] = dict(selection)
 
-        evt_type = str(selection.get("type") or "").strip()
-        evt_id = str(selection.get("id") or "").strip()
-        evt_action = str(selection.get("action") or "").strip()
-        shift = bool(selection.get("shift"))
+        evt_type = str(comp_value.get("type") or "").strip()
+        evt_id = str(comp_value.get("id") or "").strip()
+        evt_action = str(comp_value.get("action") or "click").strip()
+        shift = bool(comp_value.get("shift"))
+
+        # Persist selection.
+        if evt_type in {"node", "edge"} and evt_id:
+            selection = {"type": evt_type, "id": evt_id}
+            st.session_state["surf_live_selection"] = dict(selection)
+        else:
+            selection = {}
+            st.session_state["surf_live_selection"] = {}
+
+        def _collapse_work(wid: str) -> None:
+            wid = str(wid or "").strip()
+            if not wid:
+                return
+            expanded_work_citespans.discard(wid)
+            expanded_works.discard(wid)
+            # Cascade collapse: remove citespans expanded under this work.
+            keep: set[str] = set()
+            for cs in expanded_cites:
+                parsed = _parse_citespan_id(cs)
+                if parsed and str(parsed.doc_id) == wid:
+                    continue
+                keep.add(cs)
+            expanded_cites.clear()
+            expanded_cites.update(keep)
 
         if evt_type == "node" and evt_id in work_by_id:
             st.session_state["surf_live_active_citespan_doc"] = evt_id
             if evt_action in {"dblclick", "context"}:
                 if shift:
-                    expanded_work_citespans.discard(evt_id)
-                    expanded_works.discard(evt_id)
+                    _collapse_work(evt_id)
                 else:
                     expanded_works.add(evt_id)
-                    if evt_action == "context" and evt_id in expanded_work_citespans:
+                    if evt_id in expanded_work_citespans:
                         expanded_work_citespans.discard(evt_id)
                     else:
                         expanded_work_citespans.add(evt_id)
         elif evt_type == "node" and evt_id.startswith("citespanbucket:"):
+            # Bucket ids:
+            # - citespanbucket:{work_id}                      (collapsed work view)
+            # - citespanbucket:{work_id}:todo                 (todo/unfollowed bucket)
+            # - citespanbucket:{work_id}:todo:more            (increase cap)
             parts = evt_id.split(":")
-            doc_id = str(parts[1] if len(parts) > 1 else "").strip()
-            if doc_id:
-                st.session_state["surf_live_active_citespan_doc"] = doc_id
+            work_id = str(parts[1] if len(parts) > 1 else "").strip()
+            bucket_kind = str(parts[2] if len(parts) > 2 else "").strip()
+            bucket_more = bool(len(parts) > 3 and str(parts[3]).strip() == "more")
+            if work_id:
+                st.session_state["surf_live_active_citespan_doc"] = work_id
                 if evt_action in {"dblclick", "context"}:
                     if shift:
-                        expanded_work_citespans.discard(doc_id)
-                    else:
-                        expanded_works.add(doc_id)
-                        if (
-                            evt_action == "context"
-                            and doc_id in expanded_work_citespans
-                        ):
-                            expanded_work_citespans.discard(doc_id)
+                        if bucket_kind == "todo":
+                            open_map = _as_dict(
+                                st.session_state.get("surf_live_open_todo_by_work")
+                            )
+                            open_map.pop(work_id, None)
+                            st.session_state["surf_live_open_todo_by_work"] = open_map
                         else:
-                            expanded_work_citespans.add(doc_id)
+                            _collapse_work(work_id)
+                    else:
+                        expanded_works.add(work_id)
+                        expanded_work_citespans.add(work_id)
+                        if bucket_kind == "todo":
+                            if bucket_more:
+                                cap_map = _as_dict(
+                                    st.session_state.get("surf_live_todo_cap_by_work")
+                                )
+                                cur = int(cap_map.get(work_id) or 40)
+                                cap_map[work_id] = int(cur + 40)
+                                st.session_state["surf_live_todo_cap_by_work"] = cap_map
+                            open_map = _as_dict(
+                                st.session_state.get("surf_live_open_todo_by_work")
+                            )
+                            open_map[work_id] = True
+                            st.session_state["surf_live_open_todo_by_work"] = open_map
         elif evt_type == "node" and evt_id.startswith("citespan:"):
             parsed = _parse_citespan_id(evt_id)
             if parsed and parsed.doc_id:
@@ -388,7 +613,7 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
                 if shift:
                     expanded_cites.discard(evt_id)
                 else:
-                    if evt_action == "context" and evt_id in expanded_cites:
+                    if evt_id in expanded_cites:
                         expanded_cites.discard(evt_id)
                     else:
                         expanded_cites.add(evt_id)
@@ -399,6 +624,8 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
     # --- Claims for expanded docs (for "needs work" signals) --------------
     claim_count_by_citespan: dict[tuple[str, str, int, str], int] = {}
     claim_by_id: dict[str, dict] = {}
+    claim_rows_by_context: dict[tuple[str, int, str], list[tuple[int, str]]] = {}
+    claim_text_by_citespan_order: dict[tuple[str, int, str, int], str] = {}
     for wid in sorted(expanded_works):
         for cn in _get_claim_nodes(wid):
             if not isinstance(cn, dict):
@@ -415,8 +642,32 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
                 citation_index = int(props.get("citation_index"))
             except Exception:
                 continue
+            try:
+                claim_index = int(props.get("claim_index"))
+            except Exception:
+                claim_index = -1
+            parsed_text = str(props.get("parsed_text") or "").strip()
             key = (doc_id, sentence_id, int(citation_index), ref_id)
             claim_count_by_citespan[key] = int(claim_count_by_citespan.get(key, 0) + 1)
+
+            ctx_key = (doc_id, int(citation_index), ref_id)
+            if claim_index >= 0 and parsed_text:
+                claim_rows_by_context.setdefault(ctx_key, []).append(
+                    (int(claim_index), parsed_text)
+                )
+
+    # Best-effort map order_index -> parsed_text for claimspans.
+    for (doc_id, cite_idx, ref_id), rows in claim_rows_by_context.items():
+        if not rows:
+            continue
+        rows_sorted = sorted(rows, key=lambda t: int(t[0]))
+        min_idx = min(int(t[0]) for t in rows_sorted)
+        shift = 1 if min_idx == 0 else 0
+        for claim_index, parsed_text in rows_sorted:
+            order_index = int(claim_index) + int(shift)
+            claim_text_by_citespan_order[
+                (doc_id, int(cite_idx), ref_id, order_index)
+            ] = parsed_text
 
     # --- Elements ----------------------------------------------------------
     elements: list[dict] = []
@@ -450,6 +701,18 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
             },
         },
         {
+            # Stub/Unresolved cited work.
+            "selector": "node[type = 'Work'][stub = 1]",
+            "style": {
+                "shape": "hexagon",
+                "background-color": "#93c5fd",
+                "border-width": 3,
+                "border-color": "#1f2937",
+                "width": 22,
+                "height": 22,
+            },
+        },
+        {
             "selector": "node[type = 'CiteSpan']",
             "style": {
                 "background-color": "#0f766e",
@@ -460,10 +723,27 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
             },
         },
         {
-            "selector": "node[type = 'CiteSpan'][claim_count = 0]",
+            # Accessibility: do not rely on color alone for triage.
+            # - todo: diamond shape
+            # - ignore: triangle shape
+            "selector": "node[type = 'CiteSpan'][triage = 'todo']",
             "style": {
+                "shape": "diamond",
+                "width": 20,
+                "height": 20,
                 "border-width": 4,
-                "border-color": "#ef4444",
+                "border-color": "#1b5e20",
+            },
+        },
+        {
+            "selector": "node[type = 'CiteSpan'][triage = 'ignore']",
+            "style": {
+                "shape": "triangle",
+                "width": 20,
+                "height": 20,
+                "background-color": "#9ca3af",
+                "border-width": 4,
+                "border-color": "#7f1d1d",
             },
         },
         {
@@ -483,6 +763,24 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
             },
         },
         {
+            "selector": "node[type = 'CiteSpanBucket'][bucket_kind = 'ignore']",
+            "style": {
+                "background-color": "#9ca3af",
+                "border-color": "#7f1d1d",
+            },
+        },
+        {
+            "selector": "node[type = 'CiteSpanBucket'][bucket_kind = 'todo_more']",
+            "style": {
+                "background-color": "#0f766e",
+                "width": 22,
+                "height": 22,
+                "border-width": 2,
+                "border-color": "#111827",
+                "label": "data(count_label)",
+            },
+        },
+        {
             "selector": "node[type = 'ClaimSpan']",
             "style": {
                 "background-color": "#6b7280",
@@ -496,8 +794,8 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
             "selector": "edge",
             "style": {
                 "width": 2,
-                "line-color": "#d9e2ef",
-                "target-arrow-color": "#d9e2ef",
+                "line-color": "#cbd5e1",
+                "target-arrow-color": "#cbd5e1",
                 "target-arrow-shape": "triangle",
                 "curve-style": "bezier",
                 "label": "",
@@ -510,34 +808,70 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
             },
         },
         {
+            # Structural edges stay neutral; evaluative edges get redundant cues.
+            "selector": "edge[type = 'CITES_TARGET'][state = 'unexplored']",
+            "style": {
+                "line-style": "dashed",
+                "line-color": "#6b7280",
+                "opacity": 0.45,
+                "target-arrow-shape": "none",
+            },
+        },
+        {
+            "selector": "edge[type = 'CITES_TARGET'][state = 'explored']",
+            "style": {
+                "line-style": "solid",
+                "line-color": "#6b7280",
+                "opacity": 0.9,
+                "target-arrow-shape": "none",
+            },
+        },
+        {
             "selector": "edge[type = 'ASSERTS'][verdict = 'support']",
             "style": {
-                "line-color": "#16a34a",
-                "target-arrow-color": "#16a34a",
+                "line-style": "solid",
+                "line-color": "#1b5e20",
+                "target-arrow-shape": "triangle",
+                "target-arrow-color": "#1b5e20",
                 "width": 3,
             },
         },
         {
             "selector": "edge[type = 'ASSERTS'][verdict = 'contradict']",
             "style": {
-                "line-color": "#dc2626",
-                "target-arrow-color": "#dc2626",
+                "line-style": "solid",
+                "line-color": "#b91c1c",
+                "target-arrow-shape": "tee",
+                "target-arrow-color": "#b91c1c",
                 "width": 3,
             },
         },
         {
             "selector": "edge[type = 'ASSERTS'][verdict = 'neutral']",
             "style": {
-                "line-color": "#6b7280",
-                "target-arrow-color": "#6b7280",
+                "line-style": "dotted",
+                "line-color": "#4b5563",
+                "target-arrow-shape": "none",
+                "target-arrow-color": "#4b5563",
                 "width": 3,
             },
         },
         {
             "selector": "edge[type = 'ASSERTS'][verdict = 'uncertain']",
             "style": {
-                "line-style": "dotted",
+                "line-style": "dashed",
+                "line-color": "#b45309",
+                "target-arrow-shape": "diamond",
+                "target-arrow-color": "#b45309",
+                "width": 3,
+            },
+        },
+        {
+            "selector": "edge[type = 'ASSERTS'][verdict = 'unknown']",
+            "style": {
+                "line-style": "dashed",
                 "line-color": "#6b7280",
+                "target-arrow-shape": "diamond",
                 "target-arrow-color": "#6b7280",
                 "width": 3,
             },
@@ -568,7 +902,13 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
             }
         )
 
+    rendered_work_ids: set[str] = set(work_by_id.keys())
+
     for src, tgt in work_edges:
+        # When a work's citations are expanded, prefer CiteSpan/ClaimSpan level
+        # edges to targets. Avoid duplicating with a coarse work->work edge.
+        if src in expanded_work_citespans:
+            continue
         if src not in work_by_id or tgt not in work_by_id:
             continue
         elements.append(
@@ -579,6 +919,7 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
                     "target": tgt,
                     "type": "CITES",
                     "arrow": "none",
+                    "hover": "Work cites Work",
                 }
             }
         )
@@ -587,6 +928,8 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
     citespans_by_doc: dict[str, list[dict]] = {}
 
     for wid in sorted(expanded_works):
+        if wid not in work_by_id:
+            continue
         try:
             body = get_document_body(api_url, wid)
         except Exception:
@@ -690,24 +1033,252 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
             ),
         )
 
-        # Collapse or expand cite spans for this work.
-        if wid not in expanded_work_citespans:
-            unclaimed = sum(
-                1
-                for r in citespans_by_doc.get(wid) or []
-                if int(r.get("claim_count") or 0) == 0
+    # Collapse or expand cite spans for this work.
+    if wid not in expanded_work_citespans:
+        # Bucket count should reflect "not followed" (no confirmed claims), not
+        # resolution state.
+        todo_n = 0
+        for r in citespans_by_doc.get(wid) or []:
+            csid = str(r.get("id") or "").strip()
+            claim_n = int(r.get("claim_count") or 0)
+            triage = _citespan_triage(
+                citespan_id=csid,
+                unresolved=False,
+                claim_count=int(claim_n),
             )
-            bucket_id = f"citespanbucket:{wid}"
+            if claim_n == 0 and triage != "ignore":
+                todo_n += 1
+
+        bucket_id = f"citespanbucket:{wid}"
+        elements.append(
+            {
+                "data": {
+                    "id": bucket_id,
+                    "type": "CiteSpanBucket",
+                    "bucket_kind": "todo",
+                    "count": int(todo_n),
+                    "count_label": str(int(todo_n)),
+                    "hover": (
+                        f"Follow-up TODO: {todo_n}\n"
+                        f"CiteSpans total: {len(citespans_by_doc.get(wid) or [])}"
+                    ),
+                    "doc_id": wid,
+                }
+            }
+        )
+        elements.append(
+            {
+                "data": {
+                    "id": f"work2bucket:{wid}",
+                    "source": wid,
+                    "target": bucket_id,
+                    "type": "HAS_CITESPANS",
+                    "arrow": "none",
+                }
+            }
+        )
+    else:
+        # Show only "followed" CiteSpans as individual nodes.
+        # Anything triaged as TODO stays in a bucket until explicitly opened.
+        all_rows = citespans_by_doc.get(wid) or []
+
+        followed: list[dict] = []
+        todo_rows: list[dict] = []
+        ignore_rows: list[dict] = []
+
+        for rec in all_rows:
+            csid = str(rec.get("id") or "").strip()
+            claim_n = int(rec.get("claim_count") or 0)
+            unresolved = not bool(str(rec.get("target_ingest_id") or "").strip())
+            triage = _citespan_triage(
+                citespan_id=csid,
+                unresolved=bool(unresolved),
+                claim_count=int(claim_n),
+            )
+            if claim_n > 0:
+                followed.append(rec)
+            elif triage == "ignore":
+                ignore_rows.append(rec)
+            else:
+                todo_rows.append(rec)
+
+        for rec in followed:
+            csid = str(rec.get("id") or "")
+            tgt_ingest = rec.get("target_ingest_id")
+            claim_n = int(rec.get("claim_count") or 0)
+            unresolved = not bool(str(tgt_ingest or "").strip())
+            triage = _citespan_triage(
+                citespan_id=csid,
+                unresolved=bool(unresolved),
+                claim_count=int(claim_n),
+            )
+
+            # Prefer edited/anchored citation-window preview if we have a span.
+            span_id = _get_span_id(
+                api_url=api_url,
+                ingest_id=wid,
+                citation_index=int(rec.get("citation_index") or 0),
+                target_id=str(rec.get("reference_id") or ""),
+            )
+            if span_id:
+                bundle = _get_span_bundle_cached(
+                    api_url=api_url,
+                    span_id=str(span_id),
+                    reviewer_uid=str(reviewer_uid),
+                )
+                span = bundle.get("span") or {}
+                selector = (
+                    (span.get("selector") or {}) if isinstance(span, dict) else {}
+                )
+                exact = str(selector.get("exact") or "").strip()
+                prefix = str(selector.get("prefix") or "").strip()
+                suffix = str(selector.get("suffix") or "").strip()
+                edited_preview = " ".join(
+                    bit for bit in [prefix, exact, suffix] if bit
+                ).strip()
+                if edited_preview:
+                    rec["preview"] = edited_preview
+            preview = str(rec.get("preview") or "").strip()
+            hover_bits = [str(rec.get("label") or "citation").strip()]
+            if preview:
+                hover_bits.append(preview)
+            if triage == "todo":
+                hover_bits.append("follow-up: TODO")
+            elif triage == "ignore":
+                hover_bits.append("follow-up: ignore")
+            if unresolved:
+                hover_bits.append("target: unresolved")
+            hover = "\n".join(bit for bit in hover_bits if bit)
+            elements.append(
+                {
+                    "data": {
+                        "id": csid,
+                        "type": "CiteSpan",
+                        "label": str(rec.get("label") or "citation"),
+                        "hover": hover,
+                        "doc_id": wid,
+                        "sentence_id": str(rec.get("sentence_id") or ""),
+                        "citation_index": int(rec.get("citation_index") or 0),
+                        "reference_id": str(rec.get("reference_id") or ""),
+                        "claim_count": int(claim_n),
+                        "triage": triage,
+                        "resolved": 0 if unresolved else 1,
+                    }
+                }
+            )
+            elements.append(
+                {
+                    "data": {
+                        "id": f"work2cs:{wid}->{csid}",
+                        "source": wid,
+                        "target": csid,
+                        "type": "HAS_CITESPAN",
+                        "arrow": "none",
+                    }
+                }
+            )
+
+            # Create a stable cited-work target node id (resolved or stub).
+            if tgt_ingest and str(tgt_ingest).strip():
+                target_node_id = str(tgt_ingest).strip()
+            else:
+                target_node_id = f"stubwork:{csid}"
+
+            rec["target_node_id"] = target_node_id
+            if csid in citespan_records:
+                citespan_records[csid]["target_node_id"] = target_node_id
+
+            # If we have a real ingested target, show it in the default view
+            # ("work only") even when the full work graph is hidden.
+            if not target_node_id.startswith("stubwork:"):
+                if target_node_id not in rendered_work_ids:
+                    meta = (
+                        ledger_work_by_id.get(target_node_id)
+                        if isinstance(ledger_work_by_id, dict)
+                        else None
+                    )
+                    short = None
+                    title = None
+                    if isinstance(meta, dict):
+                        short = str(meta.get("short") or "").strip() or None
+                        title = str(meta.get("title") or "").strip() or None
+                    label = short or str(target_node_id)
+                    hover = (label + ("\n" + title if title else "")).strip()
+                    elements.append(
+                        {
+                            "data": {
+                                "id": str(target_node_id),
+                                "type": "Work",
+                                "label": label,
+                                "hover": hover,
+                            }
+                        }
+                    )
+                    rendered_work_ids.add(str(target_node_id))
+                if str(target_node_id) not in work_by_id:
+                    work_by_id[str(target_node_id)] = {
+                        "id": str(target_node_id),
+                        "short": str(target_node_id),
+                        "title": str(target_node_id),
+                    }
+
+            # Only render stub target nodes when CiteSpan is expanded.
+            if target_node_id.startswith("stubwork:"):
+                if csid in expanded_cites and target_node_id not in rendered_work_ids:
+                    stub_label = str(rec.get("label") or "Cited work").strip()
+                    elements.append(
+                        {
+                            "data": {
+                                "id": target_node_id,
+                                "type": "Work",
+                                "stub": 1,
+                                "label": stub_label,
+                                "hover": f"Cited work (not ingested yet)\n{stub_label}",
+                            }
+                        }
+                    )
+                    rendered_work_ids.add(target_node_id)
+
+            # Show citespan->target edge only when citespan is not expanded,
+            # and only for resolved, ingested targets.
+            if (
+                target_node_id
+                and (not target_node_id.startswith("stubwork:"))
+                and csid not in expanded_cites
+            ):
+                state = (
+                    "explored"
+                    if str(target_node_id) in expanded_works
+                    else "unexplored"
+                )
+                elements.append(
+                    {
+                        "data": {
+                            "id": f"cs2work:{csid}->{target_node_id}",
+                            "source": csid,
+                            "target": target_node_id,
+                            "type": "CITES_TARGET",
+                            "arrow": "none",
+                            "state": state,
+                            "hover": f"CiteSpan targets Work\nstate={state}",
+                        }
+                    }
+                )
+
+        # TODO bucket (unfollowed).
+        todo_n = int(len(todo_rows))
+        if todo_n:
+            bucket_id = f"citespanbucket:{wid}:todo"
             elements.append(
                 {
                     "data": {
                         "id": bucket_id,
                         "type": "CiteSpanBucket",
-                        "count": int(len(citespans_by_doc.get(wid) or [])),
-                        "count_label": str(int(len(citespans_by_doc.get(wid) or []))),
+                        "bucket_kind": "todo",
+                        "count": int(todo_n),
+                        "count_label": str(int(todo_n)),
                         "hover": (
-                            f"CiteSpans: {len(citespans_by_doc.get(wid) or [])}\n"
-                            f"Needs claims: {unclaimed}"
+                            f"Unfollowed CiteSpans: {todo_n}\n" "Double-click to open."
                         ),
                         "doc_id": wid,
                     }
@@ -716,91 +1287,247 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
             elements.append(
                 {
                     "data": {
-                        "id": f"work2bucket:{wid}",
+                        "id": f"work2bucket:{wid}:todo",
                         "source": wid,
                         "target": bucket_id,
-                        "type": "HAS_CITESPANS",
+                        "type": "HAS_TODO_CITESPANS",
                         "arrow": "none",
                     }
                 }
             )
-        else:
-            cap = 40
-            visible = (citespans_by_doc.get(wid) or [])[:cap]
-            remainder = (citespans_by_doc.get(wid) or [])[cap:]
-            for rec in visible:
-                csid = str(rec.get("id") or "")
-                tgt_ingest = rec.get("target_ingest_id")
-                elements.append(
-                    {
-                        "data": {
-                            "id": csid,
-                            "type": "CiteSpan",
-                            "label": str(rec.get("label") or "citation"),
-                            "hover": str(rec.get("label") or "citation"),
-                            "doc_id": wid,
-                            "sentence_id": str(rec.get("sentence_id") or ""),
-                            "citation_index": int(rec.get("citation_index") or 0),
-                            "reference_id": str(rec.get("reference_id") or ""),
-                            "claim_count": int(rec.get("claim_count") or 0),
-                        }
-                    }
-                )
-                elements.append(
-                    {
-                        "data": {
-                            "id": f"work2cs:{wid}->{csid}",
-                            "source": wid,
-                            "target": csid,
-                            "type": "HAS_CITESPAN",
-                            "arrow": "none",
-                        }
-                    }
-                )
-                if tgt_ingest and tgt_ingest in work_by_id:
+
+            open_map = _as_dict(st.session_state.get("surf_live_open_todo_by_work"))
+            is_open = bool(open_map.get(wid))
+            if is_open:
+                cap_map = _as_dict(st.session_state.get("surf_live_todo_cap_by_work"))
+                cap = int(cap_map.get(wid) or 40)
+                visible_todo = todo_rows[:cap]
+                remainder = todo_rows[cap:]
+                for rec in visible_todo:
+                    csid = str(rec.get("id") or "")
+                    tgt_ingest = rec.get("target_ingest_id")
+                    claim_n = int(rec.get("claim_count") or 0)
+                    unresolved = not bool(str(tgt_ingest or "").strip())
+                    triage = _citespan_triage(
+                        citespan_id=csid,
+                        unresolved=bool(unresolved),
+                        claim_count=int(claim_n),
+                    )
+                    preview = str(rec.get("preview") or "").strip()
+                    hover_bits = [str(rec.get("label") or "citation").strip()]
+                    if preview:
+                        hover_bits.append(preview)
+                    hover_bits.append("follow-up: TODO")
+                    if unresolved:
+                        hover_bits.append("target: unresolved")
+                    hover = "\n".join(bit for bit in hover_bits if bit)
                     elements.append(
                         {
                             "data": {
-                                "id": f"cs2work:{csid}->{tgt_ingest}",
-                                "source": csid,
-                                "target": tgt_ingest,
-                                "type": "CITES_TARGET",
+                                "id": csid,
+                                "type": "CiteSpan",
+                                "label": str(rec.get("label") or "citation"),
+                                "hover": hover,
+                                "doc_id": wid,
+                                "sentence_id": str(rec.get("sentence_id") or ""),
+                                "citation_index": int(rec.get("citation_index") or 0),
+                                "reference_id": str(rec.get("reference_id") or ""),
+                                "claim_count": int(claim_n),
+                                "triage": triage,
+                                "resolved": 0 if unresolved else 1,
+                            }
+                        }
+                    )
+                    elements.append(
+                        {
+                            "data": {
+                                "id": f"work2cs:{wid}->{csid}",
+                                "source": wid,
+                                "target": csid,
+                                "type": "HAS_CITESPAN",
                                 "arrow": "none",
                             }
                         }
                     )
 
-            if remainder:
-                bucket_id = f"citespanbucket:{wid}:more"
-                elements.append(
-                    {
-                        "data": {
-                            "id": bucket_id,
-                            "type": "CiteSpanBucket",
-                            "count": int(len(remainder)),
-                            "count_label": str(int(len(remainder))),
-                            "hover": f"More CiteSpans: {len(remainder)}",
-                            "doc_id": wid,
+                    # Stable target node id (resolved or stub)
+                    if tgt_ingest and str(tgt_ingest).strip():
+                        target_node_id = str(tgt_ingest).strip()
+                    else:
+                        target_node_id = f"stubwork:{csid}"
+                    rec["target_node_id"] = target_node_id
+                    if csid in citespan_records:
+                        citespan_records[csid]["target_node_id"] = target_node_id
+                    if target_node_id.startswith("stubwork:"):
+                        if target_node_id not in rendered_work_ids:
+                            stub_label = str(rec.get("label") or "Cited work").strip()
+                            elements.append(
+                                {
+                                    "data": {
+                                        "id": target_node_id,
+                                        "type": "Work",
+                                        "stub": 1,
+                                        "label": stub_label,
+                                        "hover": f"Unresolved cited work\n{stub_label}",
+                                    }
+                                }
+                            )
+                            rendered_work_ids.add(target_node_id)
+
+                    if target_node_id and csid not in expanded_cites:
+                        if target_node_id.startswith("stubwork:"):
+                            state = "unresolved"
+                        else:
+                            state = (
+                                "explored"
+                                if str(target_node_id) in expanded_works
+                                else "unexplored"
+                            )
+                        elements.append(
+                            {
+                                "data": {
+                                    "id": f"cs2work:{csid}->{target_node_id}",
+                                    "source": csid,
+                                    "target": target_node_id,
+                                    "type": "CITES_TARGET",
+                                    "arrow": "none",
+                                    "state": state,
+                                    "hover": f"CiteSpan targets Work\nstate={state}",
+                                }
+                            }
+                        )
+
+                if remainder:
+                    more_id = f"citespanbucket:{wid}:todo:more"
+                    elements.append(
+                        {
+                            "data": {
+                                "id": more_id,
+                                "type": "CiteSpanBucket",
+                                "bucket_kind": "todo_more",
+                                "count": int(len(remainder)),
+                                "count_label": "+",
+                                "hover": f"Show {len(remainder)} more (increase cap)",
+                                "doc_id": wid,
+                            }
                         }
-                    }
-                )
-                elements.append(
-                    {
-                        "data": {
-                            "id": f"work2bucket:{wid}:more",
-                            "source": wid,
-                            "target": bucket_id,
-                            "type": "HAS_MORE_CITESPANS",
-                            "arrow": "none",
+                    )
+                    elements.append(
+                        {
+                            "data": {
+                                "id": f"work2bucket:{wid}:todo:more",
+                                "source": wid,
+                                "target": more_id,
+                                "type": "HAS_MORE_TODO_CITESPANS",
+                                "arrow": "none",
+                            }
                         }
+                    )
+
+        # Ignore bucket (kept collapsed for now).
+        if ignore_rows:
+            ignore_id = f"citespanbucket:{wid}:ignore"
+            elements.append(
+                {
+                    "data": {
+                        "id": ignore_id,
+                        "type": "CiteSpanBucket",
+                        "bucket_kind": "ignore",
+                        "count": int(len(ignore_rows)),
+                        "count_label": str(int(len(ignore_rows))),
+                        "hover": f"Do not follow up: {len(ignore_rows)}",
+                        "doc_id": wid,
                     }
-                )
+                }
+            )
+            elements.append(
+                {
+                    "data": {
+                        "id": f"work2bucket:{wid}:ignore",
+                        "source": wid,
+                        "target": ignore_id,
+                        "type": "HAS_IGNORED_CITESPANS",
+                        "arrow": "none",
+                    }
+                }
+            )
 
     # Expanded CiteSpans -> ClaimSpans
     for csid in sorted(expanded_cites):
         key = _parse_citespan_id(csid)
         if not key:
             continue
+
+        # Prefer the citespan-level target node id (resolved or stub) so the
+        # cite->work edge can transfer down to claimspans.
+        target_node_id = None
+        rec = citespan_records.get(csid) or {}
+        raw = str(rec.get("target_node_id") or "").strip()
+        if raw:
+            target_node_id = raw
+        else:
+            if str(key.reference_id or "").strip():
+                mapping = _resolve_reference_targets(
+                    citing_doc_id=key.doc_id,
+                    reference_ids=[str(key.reference_id)],
+                )
+                target_doc = mapping.get(str(key.reference_id))
+                if target_doc:
+                    target_node_id = str(target_doc)
+            if not target_node_id:
+                target_node_id = f"stubwork:{csid}"
+
+        if target_node_id.startswith("stubwork:"):
+            if target_node_id not in rendered_work_ids:
+                stub_label = str(
+                    (rec.get("label") or "Cited work")
+                    if isinstance(rec, dict)
+                    else "Cited work"
+                ).strip()
+                elements.append(
+                    {
+                        "data": {
+                            "id": target_node_id,
+                            "type": "Work",
+                            "stub": 1,
+                            "label": stub_label,
+                            "hover": f"Unresolved cited work\n{stub_label}",
+                        }
+                    }
+                )
+                rendered_work_ids.add(target_node_id)
+        else:
+            if target_node_id and target_node_id not in rendered_work_ids:
+                meta = (
+                    ledger_work_by_id.get(target_node_id)
+                    if isinstance(ledger_work_by_id, dict)
+                    else None
+                )
+                short = None
+                title = None
+                if isinstance(meta, dict):
+                    short = str(meta.get("short") or "").strip() or None
+                    title = str(meta.get("title") or "").strip() or None
+                label = short or str(target_node_id)
+                hover = (label + ("\n" + title if title else "")).strip()
+                elements.append(
+                    {
+                        "data": {
+                            "id": str(target_node_id),
+                            "type": "Work",
+                            "label": label,
+                            "hover": hover,
+                        }
+                    }
+                )
+                rendered_work_ids.add(str(target_node_id))
+                # Make the work expandable (event handler uses work_by_id).
+                if str(target_node_id) not in work_by_id:
+                    work_by_id[str(target_node_id)] = {
+                        "id": str(target_node_id),
+                        "short": label,
+                        "title": title or label,
+                    }
 
         span_id = _get_span_id(
             api_url=api_url,
@@ -814,7 +1541,7 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
         bundle = _get_span_bundle_cached(
             api_url=api_url,
             span_id=span_id,
-            reviewer_uid=str(st.session_state.get("active_reviewer_uid") or "default"),
+            reviewer_uid=str(reviewer_uid),
         )
         claim_spans = bundle.get("claim_spans") or []
         span = bundle.get("span") or {}
@@ -841,7 +1568,20 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
 
             status = str(cs.get("status") or "").strip() or "unknown"
             label = f"#{oi}" if oi else "claim"
+            parsed_text = ""
+            if key.doc_id and key.reference_id:
+                parsed_text = claim_text_by_citespan_order.get(
+                    (
+                        key.doc_id,
+                        int(key.citation_index),
+                        str(key.reference_id),
+                        int(oi),
+                    ),
+                    "",
+                )
             hover = f"ClaimSpan {label}\nstatus={status}"
+            if parsed_text:
+                hover = hover + "\n\n" + parsed_text
 
             elements.append(
                 {
@@ -868,35 +1608,30 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
 
             current = cs.get("current") or {}
             verdict = str((current or {}).get("verdict") or "").strip() or None
-            evidence_work_id = str(
-                (current or {}).get("evidence_work_id") or ""
-            ).strip()
+            if not verdict:
+                if status == "supported":
+                    verdict = "support"
+                elif status == "contradicted":
+                    verdict = "contradict"
+                elif status in {"contested", "unknown"}:
+                    verdict = "uncertain"
+                else:
+                    verdict = "neutral"
 
-            # If we can identify the counterparty doc, draw a directional edge.
-            target_doc = None
-            if evidence_work_id.startswith("ingest:"):
-                target_doc = evidence_work_id.split(":", 1)[-1].strip()
-            elif evidence_work_id.startswith("ref:"):
-                parts = evidence_work_id.split(":")
-                if len(parts) >= 3:
-                    ref_id = parts[2]
-                    mapping = _resolve_reference_targets(
-                        citing_doc_id=key.doc_id,
-                        reference_ids=[ref_id],
-                    )
-                    target_doc = mapping.get(ref_id)
-
-            if target_doc and target_doc in work_by_id:
-                edge_id = f"claim2work:{claim_span_id}->{target_doc}"
+            # When claimspans are visible, transfer the cite->target edge down to
+            # work->claimspan edges (evidence direction: cited supports/contradicts).
+            if target_node_id and target_node_id in rendered_work_ids:
+                edge_id = f"work2claim:{target_node_id}->{claim_span_id}"
                 elements.append(
                     {
                         "data": {
                             "id": edge_id,
-                            "source": claim_span_id,
-                            "target": target_doc,
+                            "source": target_node_id,
+                            "target": claim_span_id,
                             "type": "ASSERTS",
                             "arrow": "triangle",
                             "verdict": verdict or "unknown",
+                            "hover": f"ASSERTS\nverdict={verdict or 'unknown'}",
                         }
                     }
                 )
@@ -908,6 +1643,7 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
             st.markdown("**Expanded**")
             st.checkbox("Show labels (debug)", key="surf_live_show_labels")
             st.checkbox("Debug Surfing", key="surf_live_debug")
+            st.checkbox("Show work graph", key="surf_live_show_work_graph")
             st.checkbox(
                 "Follow active citation",
                 key="surf_live_follow_active_citation",
@@ -918,9 +1654,26 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
                 expanded_work_citespans = set()
                 st.session_state["surf_live_active_citespan_doc"] = ""
 
+            if st.button("Re-layout", key="surf-live-relayout"):
+                st.session_state["surf_live_layout_nonce"] = (
+                    int(st.session_state.get("surf_live_layout_nonce") or 0) + 1
+                )
+
             st.caption(f"Works expanded: {len(expanded_works)}")
             st.caption(f"CiteSpans expanded: {len(expanded_cites)}")
             st.caption(f"CiteSpan lists: {len(expanded_work_citespans)}")
+
+            with st.expander("Legend", expanded=False):
+                st.caption("CiteSpan nodes")
+                st.write("diamond = follow up (TODO)")
+                st.write("triangle = do not follow up")
+                st.caption("Edges")
+                st.write("CiteSpan -> Work dashed grey = target not yet explored")
+                st.write("CiteSpan -> Work solid grey = target explored")
+                st.write("ClaimSpan -> Work (ASSERTS) triangle arrow = supports")
+                st.write("ClaimSpan -> Work (ASSERTS) tee arrow = contradicts")
+                st.write("ClaimSpan -> Work (ASSERTS) dotted = neutral")
+                st.write("ClaimSpan -> Work (ASSERTS) dashed + diamond = uncertain")
 
             if bool(st.session_state.get("surf_live_debug")):
                 st.divider()
@@ -947,6 +1700,18 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
                     },
                     expanded=False,
                 )
+
+                if st.button(
+                    "Reindex documents (graph)",
+                    key="surf-live-reindex-docs",
+                    help="Rebuild DOI/bib aliases from ingestion store.",
+                ):
+                    try:
+                        graph_api.reindex_docs()
+                    except Exception:
+                        pass
+                    st.session_state["surf_live_ref_cache"] = {}
+                    st.rerun()
 
             st.divider()
             st.markdown("**Work list**")
@@ -991,9 +1756,177 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
                     expanded_work_citespans.discard(sel_id)
             elif sel_id.startswith("citespan:"):
                 rec = citespan_records.get(sel_id) or {}
+                doc_id = str(rec.get("doc_id") or "").strip()
+                sentence_id = str(rec.get("sentence_id") or "").strip() or None
+                try:
+                    citation_index = int(rec.get("citation_index") or 0)
+                except Exception:
+                    citation_index = 0
+                reference_id = str(rec.get("reference_id") or "").strip() or None
+                target_ingest_id = (
+                    str(rec.get("target_ingest_id") or "").strip() or None
+                )
+
                 st.caption("CiteSpan")
                 st.write(str(rec.get("label") or sel_id))
                 st.caption(f"claims confirmed: {int(rec.get('claim_count') or 0)}")
+                if doc_id:
+                    st.caption(f"citing: `{doc_id}`  cite_index: `{citation_index}`")
+                if reference_id:
+                    st.caption(f"reference_id: `{reference_id}`")
+                if target_ingest_id:
+                    st.caption(f"resolved target: `{target_ingest_id}`")
+                else:
+                    st.caption("resolved target: (unresolved)")
+
+                follow_map = _as_dict(
+                    st.session_state.get("surf_live_citespan_followup")
+                )
+                raw_choice = str(follow_map.get(sel_id) or "").strip().lower()
+                choice_labels = ["Auto", "Follow up", "Do not follow up"]
+                if raw_choice == "todo":
+                    idx = 1
+                elif raw_choice == "ignore":
+                    idx = 2
+                else:
+                    idx = 0
+                picked = st.selectbox(
+                    "Follow-up",
+                    choice_labels,
+                    index=idx,
+                    key=f"surf-live-followup:{sel_id}",
+                    help=(
+                        "Affects Surfing styling only; resolution/claims happen in "
+                        "Chasing."
+                    ),
+                )
+                next_raw = ""
+                if picked == "Follow up":
+                    next_raw = "todo"
+                elif picked == "Do not follow up":
+                    next_raw = "ignore"
+                if next_raw != raw_choice:
+                    if next_raw:
+                        follow_map[sel_id] = next_raw
+                    else:
+                        follow_map.pop(sel_id, None)
+                    st.session_state["surf_live_citespan_followup"] = follow_map
+                    st.rerun()
+
+                row = st.columns([1, 1, 1], gap="small")
+                with row[0]:
+                    if st.button(
+                        "Open in Reading",
+                        key=f"surf-live-open-reading:{sel_id}",
+                        disabled=not bool(doc_id),
+                    ):
+                        if doc_id:
+                            _set_active_callout(
+                                doc_id=doc_id,
+                                sentence_id=sentence_id,
+                                citation_index=int(citation_index),
+                                target_id=reference_id,
+                            )
+                            st.session_state[
+                                WORKSPACE_ACTIVE_TAB
+                            ] = WORKSPACE_TAB_DOCUMENT
+                            st.rerun()
+                with row[1]:
+                    if st.button(
+                        "Open in Chasing",
+                        key=f"surf-live-open-chasing:{sel_id}",
+                        disabled=not bool(doc_id),
+                    ):
+                        if doc_id:
+                            _set_active_callout(
+                                doc_id=doc_id,
+                                sentence_id=sentence_id,
+                                citation_index=int(citation_index),
+                                target_id=reference_id,
+                            )
+                            st.session_state[
+                                WORKSPACE_ACTIVE_TAB
+                            ] = WORKSPACE_TAB_REVIEW
+                            st.rerun()
+                with row[2]:
+                    if st.button(
+                        "Jump to Target",
+                        key=f"surf-live-jump-target:{sel_id}",
+                        disabled=not bool(target_ingest_id),
+                        help=(
+                            "Requires resolved target ingest id."
+                            if not target_ingest_id
+                            else None
+                        ),
+                    ):
+                        if target_ingest_id:
+                            st.session_state["selected_doc_id"] = target_ingest_id
+                            st.session_state[WORKSPACE_ACTIVE_TAB] = WORKSPACE_TAB_GRAPH
+                            st.session_state["surf_live_seed_doc"] = target_ingest_id
+                            st.session_state["surf_live_pending_focus"] = {
+                                "node_id": target_ingest_id
+                            }
+                            st.rerun()
+
+                if doc_id and reference_id and not target_ingest_id:
+                    if st.button(
+                        "Re-run reference resolution",
+                        key=f"surf-live-reresolve:{sel_id}",
+                        help=(
+                            "Runs /ingest/{doc_id}/resolve and clears Surfing's "
+                            "ref cache."
+                        ),
+                    ):
+                        try:
+                            trigger_resolution(api_url, doc_id)
+                        except Exception:
+                            pass
+                        cache = _as_dict(st.session_state.get("surf_live_ref_cache"))
+                        prefix = f"{doc_id}::"
+                        cache = {
+                            k: v
+                            for k, v in cache.items()
+                            if not str(k).startswith(prefix)
+                        }
+                        st.session_state["surf_live_ref_cache"] = cache
+                        st.rerun()
+
+                if doc_id:
+                    # ClaimSpan generation lives in Chasing (confirm_claims).
+                    span_id = _get_span_id(
+                        api_url=api_url,
+                        ingest_id=doc_id,
+                        citation_index=int(citation_index),
+                        target_id=str(reference_id or ""),
+                    )
+                    if not span_id:
+                        st.caption(
+                            "No citation-window span yet. Create it in Chasing by "
+                            "confirming claims."
+                        )
+                    else:
+                        if st.button(
+                            "Refresh claim spans",
+                            key=f"surf-live-refresh-claims:{sel_id}",
+                            help=(
+                                "Clears Surfing bundle cache for this span and "
+                                "expands the CiteSpan."
+                            ),
+                        ):
+                            bundle_cache = _as_dict(
+                                st.session_state.get("surf_live_bundle_cache")
+                            )
+                            reviewer_uid = (
+                                str(
+                                    st.session_state.get("active_reviewer_uid")
+                                    or "default"
+                                ).strip()
+                                or "default"
+                            )
+                            bundle_cache.pop(f"{span_id}::{reviewer_uid}", None)
+                            st.session_state["surf_live_bundle_cache"] = bundle_cache
+                            expanded_cites.add(sel_id)
+                            st.rerun()
 
                 is_exp = sel_id in expanded_cites
                 next_exp = st.toggle(
@@ -1006,6 +1939,34 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
                         expanded_cites.add(sel_id)
                     else:
                         expanded_cites.discard(sel_id)
+            elif sel_id.startswith("stubwork:"):
+                st.caption("Cited work (stub)")
+                st.write(str(selection.get("label") or sel_id))
+                # Offer a recovery path: jump back to the originating citespan.
+                parent_csid = sel_id.split(":", 1)[-1].strip()
+                rec = citespan_records.get(parent_csid) or {}
+                doc_id = str(rec.get("doc_id") or "").strip()
+                sentence_id = str(rec.get("sentence_id") or "").strip() or None
+                try:
+                    citation_index = int(rec.get("citation_index") or 0)
+                except Exception:
+                    citation_index = 0
+                reference_id = str(rec.get("reference_id") or "").strip() or None
+                if st.button(
+                    "Open in Chasing",
+                    key=f"surf-live-open-chasing-stub:{sel_id}",
+                    disabled=not bool(doc_id),
+                    help="Resolve/ingest the cited work in Chasing.",
+                ):
+                    if doc_id:
+                        _set_active_callout(
+                            doc_id=doc_id,
+                            sentence_id=sentence_id,
+                            citation_index=int(citation_index),
+                            target_id=reference_id,
+                        )
+                        st.session_state[WORKSPACE_ACTIVE_TAB] = WORKSPACE_TAB_REVIEW
+                        st.rerun()
 
                 if st.button("Expand claim spans", key="surf-live-expand-cs"):
                     expanded_cites.add(sel_id)
@@ -1033,11 +1994,16 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
     cytoscape_panel.render(
         elements,
         style=style,
+        layout={"name": "dagre", "rankDir": "LR", "fit": True, "padding": 30},
         height=720,
-        key="surf-live",
+        key=component_key,
         selection=selection,
         focus=focus,
-        options={"showLabels": bool(st.session_state.get("surf_live_show_labels"))},
+        options={
+            "showLabels": bool(st.session_state.get("surf_live_show_labels")),
+            "stableLayout": True,
+            "layoutNonce": int(st.session_state.get("surf_live_layout_nonce") or 0),
+        },
     )
 
     active_doc = str(

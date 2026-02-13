@@ -99,6 +99,7 @@ def create_ingested_document(
         "status": "uploaded",
         "aliases": [],
         "extraction": _default_stage("extracted_at"),
+        "body_extraction": _default_stage("body_extracted_at"),
         "resolution": _default_stage("resolved_at"),
     }
 
@@ -201,7 +202,9 @@ def update_ingested_document(
 
     merged = dict(existing)
     for key, value in updates.items():
-        if key in ("extraction", "resolution") and isinstance(value, dict):
+        if key in ("extraction", "resolution", "body_extraction") and isinstance(
+            value, dict
+        ):
             nested = dict(merged.get(key, {}))
             nested.update(value)
             merged[key] = nested

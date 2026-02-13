@@ -168,12 +168,36 @@ def parse_metadata(tei_root: etree._Element) -> Dict[str, Any]:
         )
     )
 
+    doi = _first_text(
+        tei_root,
+        "//tei:teiHeader//tei:fileDesc//tei:sourceDesc" "//tei:idno[@type='DOI']",
+    ) or _first_text(
+        tei_root,
+        "//tei:teiHeader//tei:sourceDesc//tei:biblStruct" "//tei:idno[@type='DOI']",
+    )
+    url = (
+        _first_text(
+            tei_root,
+            "//tei:teiHeader//tei:fileDesc//tei:sourceDesc" "//tei:idno[@type='URL']",
+        )
+        or _first_text(
+            tei_root,
+            "//tei:teiHeader//tei:sourceDesc//tei:biblStruct" "//tei:idno[@type='URL']",
+        )
+        or _first_text(
+            tei_root,
+            "//tei:teiHeader//tei:fileDesc//tei:sourceDesc" "//tei:ptr/@target",
+        )
+    )
+
     return {
         "title": title,
         "authors": authors,
         "year": _extract_year(date_value),
         "journal": journal,
         "container": container,
+        "doi": doi,
+        "url": url,
     }
 
 

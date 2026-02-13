@@ -1382,6 +1382,165 @@ class SpanGraphStore:
                 )
         return out
 
+    # --- ClaimAtoms -------------------------------------------------------
+
+    def create_claim_atom(
+        self,
+        *,
+        text: str,
+        created_by: str,
+        supersedes_id: Optional[str] = None,
+    ) -> dict:
+        """Create a claim atom (proposition text).
+
+        ClaimAtoms are reviewer-authored text objects that can supersede earlier
+        atoms. They are not automatically canonical; canonicalization happens via
+        topology edges + votes in the graph store.
+        """
+        created_by = str(created_by or "").strip() or "default"
+        atom_text = _norm_ws(text)
+        if not atom_text:
+            raise ValueError("text is required")
+        supersedes = str(supersedes_id or "").strip() or None
+
+        now = _now()
+        raw = "|".join(
+            [
+                "claim_atom",
+                created_by,
+                atom_text,
+                supersedes or "",
+                now,
+            ]
+        )
+        claim_atom_id = f"claimatom:{_sha256(raw)}"
+
+        with self._conn:
+            self._conn.execute(
+                """
+                    INSERT INTO claim_atoms(
+                        claim_atom_id,
+                        text,
+                        created_by,
+                        created_at,
+                        updated_at,
+                        supersedes_id
+                    ) VALUES(?, ?, ?, ?, ?, ?)
+                    """,
+                (claim_atom_id, atom_text, created_by, now, now, supersedes),
+            )
+
+        return self.get_claim_atom(claim_atom_id) or {
+            "claim_atom_id": claim_atom_id,
+            "text": atom_text,
+            "created_by": created_by,
+            "created_at": now,
+            "updated_at": now,
+            "supersedes_id": supersedes,
+        }
+
+    def get_claim_atom(self, claim_atom_id: str) -> Optional[dict]:
+        row = self._conn.execute(
+            """
+            SELECT
+                claim_atom_id,
+                text,
+                created_by,
+                created_at,
+                updated_at,
+                supersedes_id
+            FROM claim_atoms
+            WHERE claim_atom_id=?
+            """,
+            (str(claim_atom_id),),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def list_claim_atoms(self, *, created_by: Optional[str] = None) -> List[dict]:
+        if created_by:
+            rows = self._conn.execute(
+                """
+                SELECT
+                    claim_atom_id,
+                    text,
+                    created_by,
+                    created_at,
+                    updated_at,
+                    supersedes_id
+                FROM claim_atoms
+                WHERE created_by=?
+                ORDER BY updated_at DESC, created_at DESC
+                """,
+                (str(created_by),),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                """
+                SELECT
+                    claim_atom_id,
+                    text,
+                    created_by,
+                    created_at,
+                    updated_at,
+                    supersedes_id
+                FROM claim_atoms
+                ORDER BY updated_at DESC, created_at DESC
+                """,
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def link_claim_span_atom(self, *, claim_span_id: str, claim_atom_id: str) -> None:
+        csid = str(claim_span_id or "").strip()
+        aid = str(claim_atom_id or "").strip()
+        if not csid or not aid:
+            raise ValueError("claim_span_id and claim_atom_id are required")
+        now = _now()
+        with self._conn:
+            self._conn.execute(
+                """
+                INSERT OR IGNORE INTO claim_span_atoms(
+                    claim_span_id, claim_atom_id, created_at
+                ) VALUES(?, ?, ?)
+                """,
+                (csid, aid, now),
+            )
+
+    def unlink_claim_span_atom(self, *, claim_span_id: str, claim_atom_id: str) -> None:
+        csid = str(claim_span_id or "").strip()
+        aid = str(claim_atom_id or "").strip()
+        if not csid or not aid:
+            raise ValueError("claim_span_id and claim_atom_id are required")
+        with self._conn:
+            self._conn.execute(
+                (
+                    "DELETE FROM claim_span_atoms "
+                    "WHERE claim_span_id=? AND claim_atom_id=?"
+                ),
+                (csid, aid),
+            )
+
+    def list_claim_span_atoms(self, *, claim_span_id: str) -> List[dict]:
+        csid = str(claim_span_id or "").strip()
+        if not csid:
+            return []
+        rows = self._conn.execute(
+            """
+            SELECT
+                a.claim_atom_id,
+                a.text,
+                a.created_by,
+                a.created_at,
+                a.updated_at,
+                a.supersedes_id
+            FROM claim_span_atoms x
+            JOIN claim_atoms a ON a.claim_atom_id = x.claim_atom_id
+            WHERE x.claim_span_id=?
+            ORDER BY x.created_at DESC
+            """,
+            (csid,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
     # --- Assertions -------------------------------------------------------
 
     def create_assertion(self, *, payload: dict) -> dict:

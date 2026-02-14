@@ -1,0 +1,29 @@
+# Keep Docker build context small and deterministic.
+
+.git/
+.github/
+
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+.DS_Store
+
+# Local runtime artifacts / persistence
+data/
+
+# Python environments
+.venv/
+venv/
+env/
+
+# Not needed in images
+.planning/
+experiments/
+fixtures/

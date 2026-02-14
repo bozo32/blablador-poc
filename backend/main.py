@@ -85,6 +85,11 @@ from backend.spine.attempts import (
 )
 from backend.spine.artifacts import create_artifact
 from backend.spine.jobs import create_job, set_job_state
+from backend.spine.documents import (
+    ensure_project_document,
+    get_or_create_document,
+    upsert_document_version,
+)
 from backend.claim_store import claim_store
 from backend.reference_retrieval import build_retrieval_dossier
 from backend.graph_store import GraphStore
@@ -257,6 +262,25 @@ async def ingest_document(
         )
     except Exception as exc:
         logger.exception("Postgres upsert failed for work_id=%s", work_id)
+        raise HTTPException(status_code=503, detail="Postgres unavailable") from exc
+
+    # Identity split scaffolding (transition): treat doc_id/work_id as both
+    # document_id and document_version_id until reconciliation/merge exists.
+    try:
+        get_or_create_document(doc_id, created_by_user_id=user_id)
+        upsert_document_version(
+            doc_id,
+            document_id=doc_id,
+            sha256=sha256,
+            size_bytes=size_bytes,
+            pdf_object_key=pdf_object_key,
+            created_by_user_id=user_id,
+        )
+        ensure_project_document(
+            project_id, document_id=doc_id, added_by_user_id=user_id
+        )
+    except Exception as exc:
+        logger.exception("Identity upsert failed for doc_id=%s", doc_id)
         raise HTTPException(status_code=503, detail="Postgres unavailable") from exc
 
     try:

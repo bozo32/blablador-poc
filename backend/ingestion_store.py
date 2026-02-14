@@ -79,6 +79,10 @@ def create_ingested_document(
         if aliases:
             existing["aliases"] = aliases
             meta_path.write_text(json.dumps(existing, indent=2, sort_keys=True))
+
+        if not str(existing.get("project_id") or "").strip():
+            existing["project_id"] = str(settings.DEFAULT_PROJECT_ID)
+            meta_path.write_text(json.dumps(existing, indent=2, sort_keys=True))
         return existing
 
     doc_id = str(uuid4())

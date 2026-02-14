@@ -588,6 +588,7 @@ numpy==1.26.4 \
     #   faiss-cpu
     #   pandas
     #   pydeck
+    #   rank-bm25
     #   scikit-learn
     #   scipy
     #   sentence-transformers
@@ -1059,6 +1060,10 @@ pyyaml==6.0.3 \
     # via
     #   huggingface-hub
     #   transformers
+rank-bm25==0.2.2 \
+    --hash=sha256:096ccef76f8188563419aaf384a02f0ea459503fdf77901378d4fd9d87e5e51d \
+    --hash=sha256:7bd4a95571adadfc271746fa146a4bcfd89c0cf731e49c3d1ad863290adbe8ae
+    # via -r requirements/app.in
 rdflib==7.6.0 \
     --hash=sha256:30c0a3ebf4c0e09215f066be7246794b6492e054e782d7ac2a34c9f70a15e0dd \
     --hash=sha256:6c831288d5e4a5a7ece85d0ccde9877d512a3d0f02d7c06455d00d6d0ea379df

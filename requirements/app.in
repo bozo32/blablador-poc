@@ -21,6 +21,8 @@ sentence-transformers
 torch
 transformers
 
+rank-bm25
+
 streamlit
 streamlit-agraph
 streamlit-autorefresh

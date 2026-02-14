@@ -10,6 +10,8 @@ from backend.db import connect
 _WORK_COLUMNS = (
     "work_id",
     "created_at",
+    "project_id",
+    "created_by_user_id",
     "filename",
     "sha256",
     "size_bytes",
@@ -19,20 +21,25 @@ _WORK_COLUMNS = (
 )
 
 
-def get_work(work_id: str) -> Optional[Dict[str, Any]]:
+def get_work(work_id: str, *, project_id: str) -> Optional[Dict[str, Any]]:
     wid = str(work_id or "").strip()
     if not wid:
         raise ValueError("work_id is required")
+    pid = str(project_id or "").strip()
+    if not pid:
+        raise ValueError("project_id is required")
     with connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT work_id, created_at, filename, sha256, size_bytes,
+                SELECT work_id, created_at, project_id, created_by_user_id,
+                       filename, sha256, size_bytes,
                        pdf_object_key, active_attempt_id, tags
                   FROM works
                  WHERE work_id = %s
+                   AND project_id = %s
                 """,
-                (wid,),
+                (wid, pid),
             )
             row = cur.fetchone()
             if row is None:
@@ -42,6 +49,8 @@ def get_work(work_id: str) -> Optional[Dict[str, Any]]:
 
 def upsert_work_from_pdf(
     work_id: str,
+    project_id: str,
+    created_by_user_id: str,
     filename: str,
     sha256: str,
     size_bytes: int,
@@ -50,6 +59,12 @@ def upsert_work_from_pdf(
     wid = str(work_id or "").strip()
     if not wid:
         raise ValueError("work_id is required")
+    pid = str(project_id or "").strip()
+    if not pid:
+        raise ValueError("project_id is required")
+    uid = str(created_by_user_id or "").strip()
+    if not uid:
+        raise ValueError("created_by_user_id is required")
     fname = str(filename or "").strip() or "document.pdf"
     digest = str(sha256 or "").strip().lower()
     if not digest:
@@ -61,7 +76,7 @@ def upsert_work_from_pdf(
     if not obj_key:
         raise ValueError("pdf_object_key is required")
 
-    existing = get_work(wid)
+    existing = get_work(wid, project_id=pid)
     if existing is not None and str(existing.get("sha256") or "").lower() != digest:
         raise ValueError(
             "work_id already exists with different sha256; refusing to overwrite"
@@ -73,22 +88,27 @@ def upsert_work_from_pdf(
                 """
                 INSERT INTO works (
                     work_id,
+                    project_id,
+                    created_by_user_id,
                     filename,
                     sha256,
                     size_bytes,
                     pdf_object_key
                 )
-                VALUES (%s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (work_id)
                 DO UPDATE SET
+                  project_id = EXCLUDED.project_id,
+                  created_by_user_id = EXCLUDED.created_by_user_id,
                   filename = EXCLUDED.filename,
                   sha256 = EXCLUDED.sha256,
                   size_bytes = EXCLUDED.size_bytes,
                   pdf_object_key = EXCLUDED.pdf_object_key
-                RETURNING work_id, created_at, filename, sha256, size_bytes,
-                          pdf_object_key, active_attempt_id, tags
+                RETURNING work_id, created_at, project_id, created_by_user_id,
+                          filename, sha256, size_bytes,
+                           pdf_object_key, active_attempt_id, tags
                 """,
-                (wid, fname, digest, bytes_n, obj_key),
+                (wid, pid, uid, fname, digest, bytes_n, obj_key),
             )
             row = cur.fetchone()
             if row is None:

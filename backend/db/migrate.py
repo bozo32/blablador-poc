@@ -10,6 +10,8 @@ _DDL_STATEMENTS: list[str] = [
     CREATE TABLE IF NOT EXISTS works (
       work_id text PRIMARY KEY,
       created_at timestamptz NOT NULL DEFAULT now(),
+      project_id text NOT NULL DEFAULT 'default',
+      created_by_user_id text NOT NULL DEFAULT 'local',
       filename text NOT NULL,
       sha256 text NOT NULL,
       size_bytes bigint NOT NULL,
@@ -22,6 +24,8 @@ _DDL_STATEMENTS: list[str] = [
     CREATE TABLE IF NOT EXISTS attempts (
       attempt_id text PRIMARY KEY,
       work_id text NOT NULL REFERENCES works(work_id) ON DELETE CASCADE,
+      project_id text NOT NULL DEFAULT 'default',
+      created_by_user_id text NOT NULL DEFAULT 'local',
       kind text NOT NULL,
       state text NOT NULL,
       created_at timestamptz NOT NULL DEFAULT now(),
@@ -40,6 +44,8 @@ _DDL_STATEMENTS: list[str] = [
     CREATE TABLE IF NOT EXISTS jobs (
       job_id text PRIMARY KEY,
       attempt_id text NOT NULL REFERENCES attempts(attempt_id) ON DELETE CASCADE,
+      project_id text NOT NULL DEFAULT 'default',
+      created_by_user_id text NOT NULL DEFAULT 'local',
       worker text NOT NULL,
       state text NOT NULL,
       progress_json jsonb NOT NULL DEFAULT '{}'::jsonb,
@@ -51,6 +57,8 @@ _DDL_STATEMENTS: list[str] = [
     CREATE TABLE IF NOT EXISTS artifacts (
       artifact_id text PRIMARY KEY,
       attempt_id text NOT NULL REFERENCES attempts(attempt_id) ON DELETE CASCADE,
+      project_id text NOT NULL DEFAULT 'default',
+      created_by_user_id text NOT NULL DEFAULT 'local',
       artifact_type text NOT NULL,
       object_key text NOT NULL,
       bytes bigint NULL,
@@ -58,14 +66,56 @@ _DDL_STATEMENTS: list[str] = [
       created_at timestamptz NOT NULL DEFAULT now()
     );
     """,
+    # Idempotent alters for existing databases.
+    """
+    ALTER TABLE works
+      ADD COLUMN IF NOT EXISTS project_id text NOT NULL DEFAULT 'default';
+    """,
+    """
+    ALTER TABLE works
+      ADD COLUMN IF NOT EXISTS created_by_user_id text NOT NULL DEFAULT 'local';
+    """,
+    """
+    ALTER TABLE attempts
+      ADD COLUMN IF NOT EXISTS project_id text NOT NULL DEFAULT 'default';
+    """,
+    """
+    ALTER TABLE attempts
+      ADD COLUMN IF NOT EXISTS created_by_user_id text NOT NULL DEFAULT 'local';
+    """,
+    """
+    ALTER TABLE jobs
+      ADD COLUMN IF NOT EXISTS project_id text NOT NULL DEFAULT 'default';
+    """,
+    """
+    ALTER TABLE jobs
+      ADD COLUMN IF NOT EXISTS created_by_user_id text NOT NULL DEFAULT 'local';
+    """,
+    """
+    ALTER TABLE artifacts
+      ADD COLUMN IF NOT EXISTS project_id text NOT NULL DEFAULT 'default';
+    """,
+    """
+    ALTER TABLE artifacts
+      ADD COLUMN IF NOT EXISTS created_by_user_id text NOT NULL DEFAULT 'local';
+    """,
     """
     CREATE INDEX IF NOT EXISTS attempts_work_id_idx ON attempts(work_id);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS attempts_project_id_idx ON attempts(project_id);
     """,
     """
     CREATE INDEX IF NOT EXISTS jobs_attempt_id_idx ON jobs(attempt_id);
     """,
     """
+    CREATE INDEX IF NOT EXISTS jobs_project_id_idx ON jobs(project_id);
+    """,
+    """
     CREATE INDEX IF NOT EXISTS artifacts_attempt_id_idx ON artifacts(attempt_id);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS artifacts_project_id_idx ON artifacts(project_id);
     """,
 ]
 

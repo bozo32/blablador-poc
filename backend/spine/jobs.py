@@ -19,14 +19,22 @@ def _json_dumps(value: Any) -> str:
 
 
 def create_job(
+    project_id: str,
+    created_by_user_id: str,
     attempt_id: str,
     worker: str,
     *,
     state: str = "running",
     progress_json: Optional[dict] = None,
 ) -> str:
+    pid = str(project_id or "").strip()
+    uid = str(created_by_user_id or "").strip()
     aid = str(attempt_id or "").strip()
     w = str(worker or "").strip()
+    if not pid:
+        raise ValueError("project_id is required")
+    if not uid:
+        raise ValueError("created_by_user_id is required")
     if not aid:
         raise ValueError("attempt_id is required")
     if not w:
@@ -41,14 +49,25 @@ def create_job(
                 INSERT INTO jobs (
                   job_id,
                   attempt_id,
+                  project_id,
+                  created_by_user_id,
                   worker,
                   state,
                   progress_json,
                   heartbeat_at
                 )
-                VALUES (%s, %s, %s, %s, %s::jsonb, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s)
                 """,
-                (job_id, aid, w, str(state or "running"), progress_blob, _utc_now()),
+                (
+                    job_id,
+                    aid,
+                    pid,
+                    uid,
+                    w,
+                    str(state or "running"),
+                    progress_blob,
+                    _utc_now(),
+                ),
             )
         conn.commit()
     return job_id
@@ -130,6 +149,8 @@ def get_job(job_id: str) -> Optional[Dict[str, Any]]:
     cols = (
         "job_id",
         "attempt_id",
+        "project_id",
+        "created_by_user_id",
         "worker",
         "state",
         "progress_json",
@@ -140,7 +161,8 @@ def get_job(job_id: str) -> Optional[Dict[str, Any]]:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT job_id, attempt_id, worker, state, progress_json,
+                SELECT job_id, attempt_id, project_id, created_by_user_id,
+                       worker, state, progress_json,
                        heartbeat_at, created_at
                   FROM jobs
                  WHERE job_id = %s
@@ -150,7 +172,7 @@ def get_job(job_id: str) -> Optional[Dict[str, Any]]:
             row = cur.fetchone()
             if row is None:
                 return None
-            out = dict(zip(cols, row))
+            out: Dict[str, Any] = {str(k): v for k, v in zip(cols, row)}
             if isinstance(out.get("progress_json"), str):
                 try:
                     out["progress_json"] = json.loads(out["progress_json"]) or {}

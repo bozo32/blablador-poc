@@ -28,6 +28,7 @@ from backend.spine.attempts import (
 from backend.spine.artifacts import create_artifact
 from backend.spine.jobs import create_job, set_job_state
 from backend.reference_resolver import resolve_references
+from backend.settings import settings as app_settings
 
 
 logger = logging.getLogger(__name__)
@@ -81,10 +82,17 @@ def run_full_ingest_pipeline(
         spine_meta = spine_meta if isinstance(spine_meta, dict) else {}
         work_id = str(spine_meta.get("work_id") or "").strip() or str(doc_id)
 
+        project_id = str(document.get("project_id") or "").strip() or str(
+            app_settings.DEFAULT_PROJECT_ID
+        )
+        user_id = str(app_settings.DEFAULT_USER_ID)
+
         attempt_id: Optional[str] = None
         job_id: Optional[str] = None
         try:
             attempt_id, _state = create_or_get_attempt(
+                project_id,
+                user_id,
                 work_id,
                 "primary",
                 settings_json={},
@@ -98,19 +106,22 @@ def run_full_ingest_pipeline(
             except Exception:
                 pass
 
-            try:
-                mark_attempt_running(attempt_id)
-            except Exception:
-                pass
-            try:
-                job_id = create_job(
-                    attempt_id,
-                    worker="grobid",
-                    state="running",
-                    progress_json={"stage": "extract"},
-                )
-            except Exception:
-                job_id = None
+            if attempt_id:
+                try:
+                    mark_attempt_running(attempt_id)
+                except Exception:
+                    pass
+                try:
+                    job_id = create_job(
+                        project_id,
+                        user_id,
+                        attempt_id,
+                        worker="grobid",
+                        state="running",
+                        progress_json={"stage": "extract"},
+                    )
+                except Exception:
+                    job_id = None
 
             try:
                 update_ingested_document(
@@ -145,6 +156,8 @@ def run_full_ingest_pipeline(
                     content_type="application/xml",
                 )
                 create_artifact(
+                    project_id,
+                    user_id,
                     attempt_id,
                     "tei.xml",
                     tei_key,
@@ -167,6 +180,8 @@ def run_full_ingest_pipeline(
                     content_type="application/json",
                 )
                 create_artifact(
+                    project_id,
+                    user_id,
                     attempt_id,
                     "extraction.json",
                     extraction_key,

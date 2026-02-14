@@ -19,7 +19,15 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Dict, Literal, Optional
 
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import (
+    BackgroundTasks,
+    FastAPI,
+    File,
+    Header,
+    HTTPException,
+    Query,
+    UploadFile,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
@@ -207,12 +215,16 @@ async def ingest_document(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     auto_process: bool = Query(True),
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
 ):
     if not _is_pdf_upload(file):
         raise HTTPException(status_code=400, detail="Only PDF uploads are supported")
 
     file_bytes = await file.read()
     metadata = create_ingested_document(file_bytes, file.filename or "document.pdf")
+
+    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
+    user_id = str(app_settings.DEFAULT_USER_ID)
 
     doc_id = str(metadata.get("id") or "").strip()
     if not doc_id:
@@ -236,6 +248,8 @@ async def ingest_document(
     try:
         upsert_work_from_pdf(
             work_id=work_id,
+            project_id=project_id,
+            created_by_user_id=user_id,
             filename=str(metadata.get("filename") or file.filename or "document.pdf"),
             sha256=sha256,
             size_bytes=size_bytes,
@@ -248,7 +262,10 @@ async def ingest_document(
     try:
         metadata = update_ingested_document(
             doc_id,
-            {"spine": {"work_id": work_id, "pdf_object_key": pdf_object_key}},
+            {
+                "project_id": project_id,
+                "spine": {"work_id": work_id, "pdf_object_key": pdf_object_key},
+            },
         )
     except Exception as exc:
         logger.exception("Failed to persist spine metadata for doc_id=%s", doc_id)
@@ -1572,10 +1589,19 @@ def get_claim_status(
 
 
 @app.post("/ingest/{doc_id}/extract", response_model=schemas.ExtractionResponse)
-def extract_ingested_document(doc_id: str):
+def extract_ingested_document(
+    doc_id: str,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
     document = get_ingested_document(doc_id)
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found")
+
+    project_id = str(x_project_id or "").strip() or str(
+        (document.get("project_id") if isinstance(document, dict) else None)
+        or app_settings.DEFAULT_PROJECT_ID
+    )
+    user_id = str(app_settings.DEFAULT_USER_ID)
 
     spine_meta = document.get("spine") if isinstance(document, dict) else None
     spine_meta = spine_meta if isinstance(spine_meta, dict) else {}
@@ -1601,7 +1627,13 @@ def extract_ingested_document(doc_id: str):
     attempt_id: Optional[str] = None
     job_id: Optional[str] = None
     try:
-        attempt_id, _state = create_or_get_attempt(work_id, "primary", settings_json={})
+        attempt_id, _state = create_or_get_attempt(
+            project_id,
+            user_id,
+            work_id,
+            "primary",
+            settings_json={},
+        )
         try:
             update_ingested_document(
                 doc_id,
@@ -1610,19 +1642,22 @@ def extract_ingested_document(doc_id: str):
         except Exception:
             pass
 
-        try:
-            mark_attempt_running(attempt_id)
-        except Exception:
-            pass
-        try:
-            job_id = create_job(
-                attempt_id,
-                worker="grobid",
-                state="running",
-                progress_json={"stage": "extract"},
-            )
-        except Exception:
-            job_id = None
+        if attempt_id:
+            try:
+                mark_attempt_running(attempt_id)
+            except Exception:
+                pass
+            try:
+                job_id = create_job(
+                    project_id,
+                    user_id,
+                    attempt_id,
+                    worker="grobid",
+                    state="running",
+                    progress_json={"stage": "extract"},
+                )
+            except Exception:
+                job_id = None
 
         pdf_path = get_document_source_path(doc_id)
         mode = "fulltext"
@@ -1645,6 +1680,8 @@ def extract_ingested_document(doc_id: str):
                 tei_key, tei_bytes, content_type="application/xml"
             )
             create_artifact(
+                project_id,
+                user_id,
                 attempt_id,
                 "tei.xml",
                 tei_key,
@@ -1667,6 +1704,8 @@ def extract_ingested_document(doc_id: str):
                 content_type="application/json",
             )
             create_artifact(
+                project_id,
+                user_id,
                 attempt_id,
                 "extraction.json",
                 extraction_key,

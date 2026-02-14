@@ -92,6 +92,7 @@ def create_ingested_document(
 
     metadata: Dict[str, Any] = {
         "id": doc_id,
+        "project_id": str(settings.DEFAULT_PROJECT_ID),
         "filename": filename,
         "size_bytes": len(file_bytes),
         "sha256": sha256,

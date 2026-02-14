@@ -9,15 +9,23 @@ from backend.db import connect
 
 
 def create_artifact(
+    project_id: str,
+    created_by_user_id: str,
     attempt_id: str,
     artifact_type: str,
     object_key: str,
     bytes: Optional[int],
     content_type: Optional[str],
 ) -> str:
+    pid = str(project_id or "").strip()
+    uid = str(created_by_user_id or "").strip()
     aid = str(attempt_id or "").strip()
     at = str(artifact_type or "").strip()
     key = str(object_key or "").lstrip("/")
+    if not pid:
+        raise ValueError("project_id is required")
+    if not uid:
+        raise ValueError("created_by_user_id is required")
     if not aid:
         raise ValueError("attempt_id is required")
     if not at:
@@ -53,14 +61,16 @@ def create_artifact(
                 INSERT INTO artifacts (
                   artifact_id,
                   attempt_id,
+                  project_id,
+                  created_by_user_id,
                   artifact_type,
                   object_key,
                   bytes,
                   content_type
                 )
-                VALUES (%s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 """,
-                (artifact_id, aid, at, key, size, ctype),
+                (artifact_id, aid, pid, uid, at, key, size, ctype),
             )
         conn.commit()
 
@@ -75,6 +85,8 @@ def list_artifacts_for_attempt(attempt_id: str) -> List[Dict[str, Any]]:
     cols = (
         "artifact_id",
         "attempt_id",
+        "project_id",
+        "created_by_user_id",
         "artifact_type",
         "object_key",
         "bytes",
@@ -85,7 +97,8 @@ def list_artifacts_for_attempt(attempt_id: str) -> List[Dict[str, Any]]:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT artifact_id, attempt_id, artifact_type, object_key,
+                SELECT artifact_id, attempt_id, project_id, created_by_user_id,
+                       artifact_type, object_key,
                        bytes, content_type, created_at
                   FROM artifacts
                  WHERE attempt_id = %s
@@ -94,4 +107,4 @@ def list_artifacts_for_attempt(attempt_id: str) -> List[Dict[str, Any]]:
                 (aid,),
             )
             rows = cur.fetchall() or []
-            return [dict(zip(cols, row)) for row in rows]
+            return [{str(k): v for k, v in zip(cols, row)} for row in rows]

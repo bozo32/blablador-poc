@@ -310,6 +310,7 @@ class ClaimConfirmationResponse(BaseModel):
 
 class IngestedDocument(BaseModel):
     id: str
+    project_id: Optional[str] = None
     filename: str
     size_bytes: int
     sha256: str

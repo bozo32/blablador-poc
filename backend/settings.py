@@ -101,6 +101,16 @@ class AppSettings(PydanticBaseSettings):
         description="Shared bearer token for internal services (workers, gateways)",
     )
 
+    # — Scope plumbing (project/user)
+    DEFAULT_PROJECT_ID: str = Field(
+        "default",
+        description="Default project scope for single-user/POC mode",
+    )
+    DEFAULT_USER_ID: str = Field(
+        "local",
+        description="Default user scope for single-user/POC mode",
+    )
+
     GROBID_CONSOLIDATE_CITATIONS: bool = Field(
         False,
         description="Ask GROBID to consolidate citations (calls external services)",

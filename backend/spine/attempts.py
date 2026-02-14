@@ -84,6 +84,8 @@ def _advisory_lock_id(settings_hash: str) -> int:
 
 
 def create_or_get_attempt(
+    project_id: str,
+    created_by_user_id: str,
     work_id: str,
     kind: str,
     settings_json: Any,
@@ -95,7 +97,13 @@ def create_or_get_attempt(
     Returns: (attempt_id, state)
     """
     wid = str(work_id or "").strip()
+    pid = str(project_id or "").strip()
+    uid = str(created_by_user_id or "").strip()
     k = str(kind or "").strip()
+    if not pid:
+        raise ValueError("project_id is required")
+    if not uid:
+        raise ValueError("created_by_user_id is required")
     if not wid:
         raise ValueError("work_id is required")
     if not k:
@@ -115,13 +123,14 @@ def create_or_get_attempt(
                 """
                 SELECT attempt_id, state
                   FROM attempts
-                 WHERE work_id = %s
-                   AND kind = %s
-                   AND settings_hash = %s
-                 ORDER BY created_at DESC
-                 LIMIT 1
+                 WHERE project_id = %s
+                   AND work_id = %s
+                    AND kind = %s
+                    AND settings_hash = %s
+                  ORDER BY created_at DESC
+                  LIMIT 1
                 """,
-                (wid, k, h),
+                (pid, wid, k, h),
             )
             row = cur.fetchone()
             if row is not None:
@@ -134,16 +143,28 @@ def create_or_get_attempt(
                 INSERT INTO attempts (
                   attempt_id,
                   work_id,
+                  project_id,
+                  created_by_user_id,
                   kind,
                   state,
                   schema_version,
                   settings_hash,
                   settings_json
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
                 RETURNING attempt_id, state
                 """,
-                (attempt_id, wid, k, "queued", int(schema_version), h, settings_blob),
+                (
+                    attempt_id,
+                    wid,
+                    pid,
+                    uid,
+                    k,
+                    "queued",
+                    int(schema_version),
+                    h,
+                    settings_blob,
+                ),
             )
             created = cur.fetchone()
             if created is None:
@@ -160,6 +181,8 @@ def get_attempt(attempt_id: str) -> Optional[Dict[str, Any]]:
     cols = (
         "attempt_id",
         "work_id",
+        "project_id",
+        "created_by_user_id",
         "kind",
         "state",
         "created_at",
@@ -177,7 +200,8 @@ def get_attempt(attempt_id: str) -> Optional[Dict[str, Any]]:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT attempt_id, work_id, kind, state, created_at, started_at,
+                SELECT attempt_id, work_id, project_id, created_by_user_id,
+                       kind, state, created_at, started_at,
                        finished_at, schema_version, settings_hash, settings_json,
                        provenance_json, quality_json, failure_reason, failure_detail
                   FROM attempts
@@ -188,7 +212,7 @@ def get_attempt(attempt_id: str) -> Optional[Dict[str, Any]]:
             row = cur.fetchone()
             if row is None:
                 return None
-            out: Dict[str, Any] = dict(zip(cols, row))
+            out: Dict[str, Any] = {str(k): v for k, v in zip(cols, row)}
             for key in ("settings_json", "provenance_json", "quality_json"):
                 out[key] = _json_loads(out.get(key)) or {}
             return out

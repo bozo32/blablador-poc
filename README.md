@@ -59,6 +59,36 @@ pip install -e .
 
 ## Usage
 
+### Docker Compose Quickstart
+
+The easiest way to run the full stack (API + UI + GROBID + Postgres + MinIO) is via Docker Compose:
+
+```bash
+bash scripts/dev/up.sh
+```
+
+Key URLs:
+
+- UI: `http://localhost:8501`
+- API: `http://localhost:8000`
+- API docs: `http://localhost:8000/docs`
+- GROBID: `http://localhost:8070`
+- MinIO console: `http://localhost:9001`
+
+Note: Compose already starts GROBID on port 8070. If you also run a local GROBID service, you'll see an "Address already in use" error.
+
+Smoke test (upload + extract):
+
+```bash
+bash scripts/dev/smoke_ingest.sh fixtures/sample.pdf
+```
+
+To remove the stack (including volumes / persisted data):
+
+```bash
+bash scripts/dev/down.sh
+```
+
 1. Drag and drop your CSV and TEI XML files into the sidebar.
 2. Wait for the backend to process and report available models.
 3. Choose segmentation and pipeline options as needed:

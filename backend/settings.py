@@ -49,7 +49,10 @@ class AppSettings(PydanticBaseSettings):
     # — GROBID extraction defaults
     GROBID_URL: str = Field(
         "http://localhost:8070",
-        description="Base URL for the GROBID service",
+        description=(
+            "Base URL for the GROBID service. Host-run dev defaults to localhost; "
+            "in Docker/Compose set GROBID_URL=http://grobid:8070."
+        ),
     )
     GROBID_TIMEOUT: int = Field(
         120,

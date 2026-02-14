@@ -85,6 +85,11 @@ Recent decisions affecting current work:
 - Use local citation graph data when DOI resolution is unavailable to avoid OpenAlex 404s (02-02).
 - Prefer GROBID consolidation when resolver sources disagree; warn that OpenAlex may return citing articles (02-06).
 
+### Roadmap Evolution
+
+- Phase 9.1 inserted after Phase 9: Ingestion replumbing + solid spine (prerequisite for resilient automation).
+- Prior Phase 9.1 renumbered to Phase 9.2: Ingestion automation robustness + fallback extraction.
+
 ### Pending Todos
 
 - Run full cleanup protocol pass (see `.planning/CLEANUP_PROTOCOL.md`) and re-verify UI flows.

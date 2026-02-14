@@ -23,6 +23,8 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 8.1: Recursive Retrieval + Node Graph** (INSERTED) - Multi-document citation chasing with an integrated graph view.
 - [ ] **Phase 8.2: Demo Dataset + Trace Replay** (INSERTED) - A packaged synthetic corpus + replayable review traces for a distributed-system tech demo.
 - [ ] **Phase 9: Claim Graph + Multi-User Consensus** - Local multi-user judgments and an interactive claim graph showing consensus/disagreement.
+- [ ] **Phase 9.1: Ingestion replumbing + solid spine** (INSERTED) - Make the system runnable/distributable and ingestion automatable via a robust job/attempt spine (containers, Postgres, object store, worker services).
+- [ ] **Phase 9.2: Ingestion automation robustness + fallback extraction** (INSERTED) - Make ingestion runs resilient and automatable, with deterministic fallback extraction when TEI/GROBID fails.
 
 ## Phase Details
 
@@ -200,10 +202,37 @@ Plans:
 - [x] 09-06-PLAN.md — Compare mode + end-to-end multi-user consensus verification checkpoint
 - [x] 09-07-PLAN.md — Cytoscape Surfing POC: graph as architecture + plural segmentation + heat
 
+### Phase 9.1: Ingestion replumbing + solid spine (INSERTED)
+**Goal**: Ingestion has a stable execution spine (jobs/attempts/provenance/artifacts) and a portable runtime (Docker/Compose) so the system runs cleanly across host platforms and can move heavy services to remote Linux boxes.
+**Depends on**: Phase 9
+**Plans**: 6 plans
+
+Plans:
+- [ ] 09.1-01-PLAN.md — Containerize API + UI with Compose (no behavior changes)
+- [ ] 09.1-02-PLAN.md — Add GROBID service to Compose + wire API config
+- [ ] 09.1-03-PLAN.md — Add Postgres + MinIO + DB/S3 wrappers + migrations
+- [ ] 09.1-04-PLAN.md — Dual-write ingest upload: filesystem + S3 + Postgres works
+- [ ] 09.1-05-PLAN.md — Primary extraction attempts/jobs + S3 artifacts + idempotency
+- [ ] 09.1-06-PLAN.md — Dev scripts + README + end-to-end verification checkpoint
+
+**Details:**
+- See `.planning/V2-REPLUMBING-PLAN.md` and `.planning/V2-PLANNING.md`.
+
+### Phase 9.2: Ingestion automation robustness + fallback extraction (INSERTED)
+**Goal**: Ingestion is resilient and automatable: background runs are idempotent and retry-safe, failures surface clearly, and extraction has a deterministic fallback path when primary parsing fails.
+**Depends on**: Phase 9.1
+**Plans**: 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 9.2 to break down)
+
+**Details:**
+[To be added during planning]
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 8.1 → 8.2 → 9
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 8.1 → 8.2 → 9 → 9.1 → 9.2
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -218,3 +247,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 8.1. Recursive Retrieval + Node Graph | 0/TBD | Not started | - |
 | 8.2. Demo Dataset + Trace Replay | 0/TBD | Not started | - |
 | 9. Claim Graph + Multi-User Consensus | 7/7 | Complete | 2026-02-09 |
+| 9.1. Ingestion replumbing + solid spine | 0/TBD | Not started | - |
+| 9.2. Ingestion automation robustness + fallback extraction | 0/TBD | Not started | - |

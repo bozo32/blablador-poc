@@ -1590,7 +1590,11 @@ def render_documents_panel() -> None:
 
         if not extraction_done:
             with st.spinner("Extracting..."):
-                trigger_extraction(api_url, str(ingest_id))
+                try:
+                    trigger_extraction(api_url, str(ingest_id))
+                except RuntimeError as exc:
+                    st.error(str(exc))
+                    return
             doc = load_selected_document(show_error=False) or doc
         if not resolution_done:
             with st.spinner("Resolving references..."):

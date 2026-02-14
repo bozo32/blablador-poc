@@ -1534,7 +1534,23 @@ def extract_ingested_document(doc_id: str):
             logger.exception("Graph index failed for extraction")
     except Exception as exc:
         logger.exception("Extraction failed for document %s", doc_id)
-        raise HTTPException(status_code=500, detail=f"Extraction failed: {exc}")
+        try:
+            update_ingested_document(
+                doc_id,
+                {
+                    "extraction": {"status": "error", "error": str(exc), "data": None},
+                    "body_extraction": {
+                        "status": "error",
+                        "error": str(exc),
+                        "data": None,
+                    },
+                },
+            )
+        except Exception:
+            pass
+
+        status = 503 if isinstance(exc, grobid_client.GrobidError) else 500
+        raise HTTPException(status_code=status, detail=f"Extraction failed: {exc}")
 
     return {"document_id": doc_id, "extraction": stored.get("extraction")}
 

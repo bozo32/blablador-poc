@@ -33,18 +33,27 @@ def _post_grobid(*, endpoint: str, pdf_path: Path) -> str:
     last_resp = None
     while True:
         attempt += 1
-        with _SEM:
-            with pdf_path.open("rb") as pdf_file:
-                files = {"input": (pdf_path.name, pdf_file, "application/pdf")}
-                last_resp = requests.post(
-                    url,
-                    files=files,
-                    data={
-                        "consolidateCitations": "1" if consolidate_citations else "0",
-                        "consolidateHeader": "1" if consolidate_header else "0",
-                    },
-                    timeout=settings.GROBID_TIMEOUT,
-                )
+        try:
+            with _SEM:
+                with pdf_path.open("rb") as pdf_file:
+                    files = {"input": (pdf_path.name, pdf_file, "application/pdf")}
+                    last_resp = requests.post(
+                        url,
+                        files=files,
+                        data={
+                            "consolidateCitations": "1"
+                            if consolidate_citations
+                            else "0",
+                            "consolidateHeader": "1" if consolidate_header else "0",
+                        },
+                        timeout=settings.GROBID_TIMEOUT,
+                    )
+        except requests.RequestException as exc:
+            if attempt <= retries:
+                backoff = min(8.0, (2 ** (attempt - 1)) * 0.5) + random.random() * 0.25
+                time.sleep(backoff)
+                continue
+            raise GrobidError(f"GROBID request failed ({url}): {exc}") from exc
 
         if last_resp.status_code == 503 and attempt <= retries:
             backoff = min(8.0, (2 ** (attempt - 1)) * 0.5) + random.random() * 0.25

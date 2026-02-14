@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-01-23)
 
 **Core value:** Readers can validate a citation by linking a claim to supporting (or contradicting) evidence from the cited source, with the judgment captured and reusable.
-**Current focus:** Phase 9 - Claim Graph + Multi-User Consensus
+**Current focus:** Phase 9.1 - Ingestion replumbing + solid spine
 
 ## Current Position
 
-Phase: 9 of 11 (Claim Graph + Multi-User Consensus)
-Plan: 7 of 7 in current phase
-Status: Complete
-Last activity: 2026-02-09 — Completed 09-07-PLAN.md
+Phase: 9.1 of 11 (Ingestion replumbing + solid spine)
+Plan: 1 of 6 in current phase
+Status: In progress
+Last activity: 2026-02-14 — Completed 09.1-01-PLAN.md
 
-Progress: ██████████░░ 86%
+Progress: ██████████░░ 81%
 
 ## Performance Metrics
 
@@ -101,6 +101,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-02-09
-Stopped at: Completed 09-07-PLAN.md
+Last session: 2026-02-14T12:09:23Z
+Stopped at: Completed 09.1-01-PLAN.md
 Resume file: None

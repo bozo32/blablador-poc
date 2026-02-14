@@ -60,6 +60,18 @@ V2 is intentionally split into separable tracks so we can ship robustness before
 3) Operations UI (Works Manager + top-menu shell)
 4) UX Polish Backlog (attachment/workspace ergonomics)
 
+5) Legacy Hygiene (deprecate filesystem ingestion store)
+
+Goal: make Postgres + object store the source of truth so no shared filesystem is required.
+
+Scope:
+
+- Move ingest listing + dedupe to Postgres (no directory scans)
+- Run extraction from S3 PDF objects (not local `source.pdf`)
+- Serve extraction artifacts from S3 via the artifacts table (not local `extraction/tei.xml`)
+- Update UI to read spine-backed status/artifacts
+- Remove dual-write and `data/ingestion/**` dependence once compatibility is no longer needed
+
 ## Deployment + Development Strategy
 
 ### Distribution (Primary)

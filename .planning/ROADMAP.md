@@ -205,15 +205,20 @@ Plans:
 ### Phase 9.1: Ingestion replumbing + solid spine (INSERTED)
 **Goal**: Ingestion has a stable execution spine (jobs/attempts/provenance/artifacts) and a portable runtime (Docker/Compose) so the system runs cleanly across host platforms and can move heavy services to remote Linux boxes.
 **Depends on**: Phase 9
-**Plans**: 6 plans
+**Plans**: 11 plans
 
 Plans:
-- [ ] 09.1-01-PLAN.md — Containerize API + UI with Compose (no behavior changes)
-- [ ] 09.1-02-PLAN.md — Add GROBID service to Compose + wire API config
-- [ ] 09.1-03-PLAN.md — Add Postgres + MinIO + DB/S3 wrappers + migrations
-- [ ] 09.1-04-PLAN.md — Dual-write ingest upload: filesystem + S3 + Postgres works
-- [ ] 09.1-05-PLAN.md — Primary extraction attempts/jobs + S3 artifacts + idempotency
-- [ ] 09.1-06-PLAN.md — Dev scripts + README + end-to-end verification checkpoint
+- [x] 09.1-01-PLAN.md — Containerize API + UI with Compose (no behavior changes)
+- [x] 09.1-02-PLAN.md — Add GROBID service to Compose + wire API config
+- [x] 09.1-03-PLAN.md — Add Postgres + MinIO + DB/S3 wrappers + migrations
+- [x] 09.1-04-PLAN.md — Dual-write ingest upload: filesystem + S3 + Postgres works
+- [x] 09.1-05-PLAN.md — Primary extraction attempts/jobs + S3 artifacts + idempotency
+- [x] 09.1-06-PLAN.md — Dev scripts + README + end-to-end verification checkpoint
+- [ ] 09.1-07-PLAN.md — Scope plumbing (project_id + user_id propagation)
+- [ ] 09.1-08-PLAN.md — Identity split (Work vs Document vs DocumentVersion)
+- [ ] 09.1-09-PLAN.md — Spine read default + legacy fallback
+- [ ] 09.1-10-PLAN.md — Settings/workflow versioning + safe edit surface
+- [ ] 09.1-11-PLAN.md — Stable locators primitives (entailment-ready)
 
 **Details:**
 - See `.planning/V2-REPLUMBING-PLAN.md` and `.planning/V2-PLANNING.md`.
@@ -247,5 +252,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 8.1. Recursive Retrieval + Node Graph | 0/TBD | Not started | - |
 | 8.2. Demo Dataset + Trace Replay | 0/TBD | Not started | - |
 | 9. Claim Graph + Multi-User Consensus | 7/7 | Complete | 2026-02-09 |
-| 9.1. Ingestion replumbing + solid spine | 0/TBD | Not started | - |
+| 9.1. Ingestion replumbing + solid spine | 6/11 | In progress | - |
 | 9.2. Ingestion automation robustness + fallback extraction | 0/TBD | Not started | - |

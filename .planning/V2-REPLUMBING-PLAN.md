@@ -221,6 +221,61 @@ Expected:
 
 ## Implementation Plan (Sequenced, With Bullshit Checks)
 
+## Cleanup: Eliminating Legacy Filesystem Dependence (Post-09.1)
+
+Phase 09.1 intentionally keeps the legacy ingestion store under `data/ingestion/` as a compatibility surface for the existing UI and API.
+
+To eliminate dependence on the legacy filesystem store, the system must make Postgres + S3 the source of truth for all ingest/extract reads and writes.
+
+### What Must Change (Precise)
+
+1) **Upload dedupe + listing must move to Postgres**
+
+- Today: upload dedupe and listing are implemented by scanning `data/ingestion/*/metadata.json` in `backend/ingestion_store.py`.
+- Required:
+  - Add a durable mapping from `sha256 -> work_id` (e.g., unique index on `works.sha256` and a lookup path) so re-uploads return the existing work.
+  - Add a durable per-upload record (or extend `works`) to support:
+    - `uploaded_at`, `filename`, `aliases`
+    - list ordering for `GET /ingest`
+  - Switch `GET /ingest` and `GET /ingest/{doc_id}` to read from Postgres.
+
+2) **Extraction inputs must come from S3 (not local `source.pdf`)**
+
+- Today: extraction reads `data/ingestion/{doc_id}/source.pdf`.
+- Required:
+  - Resolve `{work_id, pdf_object_key}` from Postgres (works table) or the request payload.
+  - Download PDF bytes from S3 and run GROBID using a temp file (or update the GROBID client to accept bytes).
+  - This is the prerequisite to running extraction workers on remote hosts with no shared volume.
+
+3) **Extraction outputs must be served from S3 (not local `extraction/tei.xml`)**
+
+- Today: `GET /ingest/{doc_id}/body` and similar paths read TEI from `data/ingestion/...`.
+- Required:
+  - Add backend helpers to resolve the active attempt (from Postgres) and read TEI/extraction JSON from S3 via the artifacts table.
+  - Serve TEI body from S3-backed artifacts.
+
+4) **UI must stop depending on legacy ingestion JSON shape**
+
+- Today: the UI expects legacy stages in the ingest record.
+- Required:
+  - Provide a stable API response that includes the spine state (work + active attempt + artifacts).
+  - Update the UI to render state from the spine response.
+
+5) **Remove transitional dual-write + metadata pointers**
+
+- Stop writing `data/ingestion/**` as a primary store.
+- Remove `metadata.json.spine.*` as a compatibility bridge once the UI/API are fully spine-backed.
+
+### Recommended Intermediate Step (Minimizes Breakage)
+
+Keep the existing `/ingest*` endpoints, but re-implement them as views over Postgres + S3:
+
+- `POST /ingest`: writes to Postgres + S3; returns the same response shape the UI already consumes.
+- `GET /ingest`: lists from Postgres.
+- `GET /ingest/{doc_id}`: reads from Postgres (and includes derived stage status from attempts/jobs).
+
+Then remove `backend/ingestion_store.py` usage incrementally.
+
 ### Repository Changes (Expected Files/Paths)
 
 This plan assumes we will add the following new files/directories:

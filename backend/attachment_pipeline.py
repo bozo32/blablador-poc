@@ -25,9 +25,6 @@ from backend.settings import settings
 logger = logging.getLogger(__name__)
 
 
-graph_store = GraphStore(settings.GRAPH_DB_PATH)
-
-
 def _maybe_ingest_matched_attachment(record: dict) -> None:
     """Ensure a placed attachment's PDF is ingested as a Work.
 
@@ -60,6 +57,8 @@ def _maybe_ingest_matched_attachment(record: dict) -> None:
     ingest_id = str(metadata.get("id") or "").strip()
     if not ingest_id:
         return
+
+    graph_store = GraphStore(settings.GRAPH_DB_PATH)
 
     try:
         graph_store.index_ingest_upload(metadata)

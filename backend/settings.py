@@ -75,6 +75,17 @@ class AppSettings(PydanticBaseSettings):
         description="Ask GROBID to consolidate header (calls external services)",
     )
 
+    INGEST_PIPELINE_WORKERS: int = Field(
+        2,
+        ge=1,
+        description="Background workers for ingestion (extract+resolve)",
+    )
+    INGEST_PIPELINE_QUEUE_MAX: int = Field(
+        256,
+        ge=1,
+        description="Max queued ingestion jobs before dropping",
+    )
+
     CROSSREF_MAILTO: str = Field(
         "",
         description="Contact email for Crossref REST API requests",

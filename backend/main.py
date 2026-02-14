@@ -12,7 +12,6 @@ from backend import utils
 
 utils.set_sane_threads()
 import logging
-import threading
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -67,6 +66,7 @@ from backend.claim_store import claim_store
 from backend.reference_retrieval import build_retrieval_dossier
 from backend.graph_store import GraphStore
 from backend.span_graph_store import SpanGraphStore
+from backend.ingest_pipeline import IngestWorkerPool
 from backend import project_io
 
 # Configure logging.
@@ -89,6 +89,12 @@ logger = logging.getLogger(__name__)
 
 graph_store = GraphStore(app_settings.GRAPH_DB_PATH)
 span_graph_store = SpanGraphStore(app_settings.GRAPH_DB_PATH)
+
+ingest_pool = IngestWorkerPool(
+    graph_db_path=app_settings.GRAPH_DB_PATH,
+    max_workers=app_settings.INGEST_PIPELINE_WORKERS,
+    max_queue=app_settings.INGEST_PIPELINE_QUEUE_MAX,
+)
 
 # Setup pipeline via registry and settings
 build_all = get_pipeline(app_settings)
@@ -146,92 +152,10 @@ def _is_pdf_upload(file: UploadFile) -> bool:
     return filename.endswith(".pdf") and content_type == "application/pdf"
 
 
-def _set_ingest_stage_error(doc_id: str, *, stage: str, error: str) -> None:
-    try:
-        patch = {stage: {"status": "error", "error": str(error), "data": None}}
-        update_ingested_document(doc_id, patch)
-    except Exception:
-        logger.exception("Unable to persist %s error for %s", stage, doc_id)
-
-
-def _run_full_ingest_pipeline(doc_id: str) -> None:
-    """Run extraction + resolution for an ingested document.
-
-    This is intended to be used in background tasks after upload.
-    """
-    doc_id = str(doc_id or "").strip()
-    if not doc_id:
+def _enqueue_ingest_pipeline(doc_id: str) -> None:
+    if background_state.get_state().get("paused"):
         return
-
-    document = get_ingested_document(doc_id)
-    if document is None:
-        return
-
-    # --- Extraction ---
-    extraction_stage = document.get("extraction") or {}
-    extraction_data = (
-        (extraction_stage.get("data") or {})
-        if isinstance(extraction_stage, dict)
-        else {}
-    )
-    if not extraction_data:
-        try:
-            try:
-                update_ingested_document(
-                    doc_id,
-                    {"extraction": {"status": "running", "error": None}},
-                )
-            except Exception:
-                pass
-            pdf_path = get_document_source_path(doc_id)
-            tei_xml = grobid_client.extract_tei(pdf_path)
-            extraction_payload = extraction.parse_tei(tei_xml)
-            stored = store_extraction(doc_id, tei_xml, extraction_payload)
-            try:
-                graph_store.index_extraction(
-                    ingest_meta=stored,
-                    extraction_data=extraction_payload,
-                )
-            except Exception:
-                logger.exception("Graph index failed for extraction")
-            document = stored
-        except Exception as exc:
-            logger.exception("Extraction failed for %s", doc_id)
-            _set_ingest_stage_error(doc_id, stage="extraction", error=str(exc))
-            return
-
-    # --- Resolution ---
-    resolution_stage = document.get("resolution") or {}
-    resolution_data = (
-        (resolution_stage.get("data") or [])
-        if isinstance(resolution_stage, dict)
-        else []
-    )
-    if not resolution_data:
-        try:
-            try:
-                update_ingested_document(
-                    doc_id,
-                    {"resolution": {"status": "running", "error": None}},
-                )
-            except Exception:
-                pass
-            extraction_data2 = (document.get("extraction") or {}).get("data") or {}
-            references = extraction_data2.get("references")
-            if references:
-                resolved = resolve_references(references)
-                stored = store_resolution(doc_id, resolved)
-                try:
-                    graph_store.index_resolution(
-                        ingest_meta=stored,
-                        resolution_data=resolved,
-                    )
-                except Exception:
-                    logger.exception("Graph index failed for resolution")
-        except Exception as exc:
-            logger.exception("Resolution failed for %s", doc_id)
-            _set_ingest_stage_error(doc_id, stage="resolution", error=str(exc))
-            return
+    ingest_pool.enqueue(str(doc_id))
 
 
 def _serialize_attachment(record: Optional[dict]) -> schemas.AttachmentStatus:
@@ -256,17 +180,10 @@ async def ingest_document(
     except Exception:
         logger.exception("Graph index failed for ingest upload")
 
-    if bool(auto_process) and not background_state.get_state().get("paused"):
-        # Run in our own thread so multiple uploads don't block request workers;
-        # GROBID concurrency is throttled in grobid_client.
+    if bool(auto_process):
         doc_id = str(metadata.get("id") or "").strip()
         if doc_id:
-            threading.Thread(
-                target=_run_full_ingest_pipeline,
-                args=(doc_id,),
-                daemon=True,
-                name=f"ingest-pipeline-{doc_id}",
-            ).start()
+            _enqueue_ingest_pipeline(doc_id)
     return {"document": metadata}
 
 
@@ -721,12 +638,14 @@ def reextract_all_ingested_documents(
     doc_ids = [
         str(d.get("id") or "").strip() for d in docs if str(d.get("id") or "").strip()
     ]
+    queued = 0
+    dropped = 0
     for doc_id in doc_ids:
-        if background_tasks is not None:
-            background_tasks.add_task(_run_full_ingest_pipeline, doc_id)
+        if ingest_pool.enqueue(doc_id):
+            queued += 1
         else:
-            _run_full_ingest_pipeline(doc_id)
-    return {"ok": True, "queued": int(len(doc_ids))}
+            dropped += 1
+    return {"ok": True, "queued": int(queued), "dropped": int(dropped)}
 
 
 @app.get(

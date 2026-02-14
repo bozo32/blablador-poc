@@ -1,9 +1,10 @@
+# pyright: reportCallIssue=false
 # backend/settings.py
 
 from pydantic import Field
 from pydantic_settings import BaseSettings as PydanticBaseSettings
 from pydantic_settings import SettingsConfigDict
-from typing import Any, Literal, List, Tuple
+from typing import Any, Literal, List, Tuple, cast
 from pathlib import Path
 
 NLI_BATCH_SIZE = 50
@@ -67,6 +68,37 @@ class AppSettings(PydanticBaseSettings):
     GROBID_RETRY_503: int = Field(
         3,
         description="Retry count for transient GROBID 503 errors",
+    )
+
+    # — Durable ingestion spine (Postgres + S3)
+    POSTGRES_DSN: str = Field(
+        "postgresql://app:app@localhost:5432/app",
+        description=(
+            "Postgres DSN for V2 ingestion metadata (Compose uses host 'postgres')"
+        ),
+    )
+
+    S3_ENDPOINT_URL: str = Field(
+        "http://localhost:9000",
+        description="S3-compatible endpoint URL (Compose uses host 'minio')",
+    )
+    S3_ACCESS_KEY: str = Field(
+        "minio", description="S3 access key (MinIO root user for dev)"
+    )
+    S3_SECRET_KEY: str = Field(
+        "minio12345", description="S3 secret key (MinIO root password for dev)"
+    )
+    S3_BUCKET_WORKS: str = Field(
+        "works", description="Bucket for Work PDFs and ingestion artifacts"
+    )
+    S3_REGION: str = Field(
+        "us-east-1", description="S3 region (MinIO ignores but boto3 wants)"
+    )
+    S3_USE_SSL: bool = Field(False, description="Use SSL/TLS for S3 endpoint")
+
+    INTERNAL_SERVICE_TOKEN: str = Field(
+        "dev-internal-token",
+        description="Shared bearer token for internal services (workers, gateways)",
     )
 
     GROBID_CONSOLIDATE_CITATIONS: bool = Field(
@@ -366,6 +398,11 @@ def apply_execution_profile(
 
 
 # ---------------------------------------------------------------------------
-#  Canonical, application‑wide settings object
+#  Canonical, application-wide settings object
 # ---------------------------------------------------------------------------
-settings = AppSettings()  # type: ignore[call-arg]
+
+# NOTE: Pydantic's `Field(...)` defaults confuse some type checkers into
+# thinking every settings attribute is required in `__init__`. We load settings
+# via an `Any` cast to keep runtime behavior (env loading) while keeping the
+# module import type-checker clean.
+settings: AppSettings = cast(AppSettings, cast(Any, AppSettings)())

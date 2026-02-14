@@ -13,6 +13,10 @@ pydantic-settings
 python-dotenv
 requests
 
+# V2 ingestion spine: Postgres + S3
+psycopg[binary]
+boto3
+
 lxml
 tqdm
 

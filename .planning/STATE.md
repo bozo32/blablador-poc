@@ -10,16 +10,16 @@ See: .planning/PROJECT.md (updated 2026-01-23)
 ## Current Position
 
 Phase: 9.1 of 11 (Ingestion replumbing + solid spine)
-Plan: 3 of 6 in current phase
+Plan: 4 of 6 in current phase
 Status: In progress
-Last activity: 2026-02-14 — Completed 09.1-03-PLAN.md
+Last activity: 2026-02-14 — Completed 09.1-04-PLAN.md
 
-Progress: ██████████░░ 85%
+Progress: ██████████░░ 87%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 44
+- Total plans completed: 45
 - Average duration: 14 min
 - Total execution time: 3.6 hours
 
@@ -59,6 +59,8 @@ Recent decisions affecting current work:
   - Use POSTGRES_DSN as the single Postgres config surface for the ingestion spine (09.1-03).
 
   - Use boto3 path-style S3 addressing to ensure MinIO compatibility (09.1-03).
+
+  - Apply Postgres migrations and ensure the works bucket exists on API startup (09.1-04).
 
  - Evidence pipeline caches attachment sentences centrally so deterministic windows reuse a single source of truth (05-01).
  - BM25 seeding now carries provenance/badge metadata with spaCy tokenization and regex fallback for deterministic output (05-01).
@@ -105,6 +107,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-02-14T12:35:54Z
-Stopped at: Completed 09.1-03-PLAN.md
+Last session: 2026-02-14T12:48:41Z
+Stopped at: Completed 09.1-04-PLAN.md
 Resume file: None

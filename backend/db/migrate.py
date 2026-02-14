@@ -117,6 +117,50 @@ _DDL_STATEMENTS: list[str] = [
     """
     CREATE INDEX IF NOT EXISTS artifacts_project_id_idx ON artifacts(project_id);
     """,
+    # ---------------------------------------------------------------------
+    # Identity split scaffolding (Work vs Document vs DocumentVersion)
+    # ---------------------------------------------------------------------
+    """
+    CREATE TABLE IF NOT EXISTS documents (
+      document_id text PRIMARY KEY,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      created_by_user_id text NOT NULL DEFAULT 'local',
+      biblio_work_id text NULL
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS document_versions (
+      document_version_id text PRIMARY KEY,
+      document_id text NOT NULL REFERENCES documents(document_id) ON DELETE CASCADE,
+      sha256 text NOT NULL,
+      size_bytes bigint NOT NULL,
+      pdf_object_key text NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      created_by_user_id text NOT NULL DEFAULT 'local'
+    );
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS document_versions_sha256_uniq
+      ON document_versions(sha256);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS document_versions_document_id_idx
+      ON document_versions(document_id);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS project_documents (
+      project_id text NOT NULL,
+      document_id text NOT NULL REFERENCES documents(document_id) ON DELETE CASCADE,
+      added_at timestamptz NOT NULL DEFAULT now(),
+      added_by_user_id text NOT NULL DEFAULT 'local',
+      tags jsonb NOT NULL DEFAULT '{}'::jsonb,
+      PRIMARY KEY(project_id, document_id)
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS project_documents_project_id_idx
+      ON project_documents(project_id);
+    """,
 ]
 
 

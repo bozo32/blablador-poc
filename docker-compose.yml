@@ -9,8 +9,23 @@ services:
       # In Docker/Compose, talk to the internal grobid service.
       # (Host-run dev keeps backend/settings.py default: http://localhost:8070)
       GROBID_URL: http://grobid:8070
+      # Postgres (V2 ingestion spine)
+      POSTGRES_DSN: postgresql://app:app@postgres:5432/app
+      # S3-compatible object store (MinIO)
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_ACCESS_KEY: minio
+      S3_SECRET_KEY: minio12345
+      S3_BUCKET_WORKS: works
+      S3_REGION: us-east-1
+      S3_USE_SSL: "false"
+      AWS_EC2_METADATA_DISABLED: "true"
+
+      # Internal service auth (shared bearer token)
+      INTERNAL_SERVICE_TOKEN: dev-internal-token
     depends_on:
       - grobid
+      - postgres
+      - minio
     volumes:
       - ./data:/app/data
 
@@ -19,6 +34,56 @@ services:
     ports:
       - "8070:8070"
     restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: app
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio12345
+    volumes:
+      - minio-data:/data
+    restart: unless-stopped
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        until mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}"; do
+          sleep 1
+        done
+        mc mb -p "local/$${S3_BUCKET_WORKS}" || true
+        mc anonymous set none "local/$${S3_BUCKET_WORKS}" || true
+        mc ls local >/dev/null
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio12345
+      S3_BUCKET_WORKS: works
+    restart: "no"
 
   app-ui:
     build:
@@ -32,3 +97,7 @@ services:
       - app-api
     volumes:
       - ./data:/app/data
+
+volumes:
+  postgres-data:
+  minio-data:

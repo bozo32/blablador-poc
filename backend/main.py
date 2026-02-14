@@ -3,6 +3,7 @@
 import os
 import re
 import shutil
+import asyncio
 
 # Transformers v5 removes TRANSFORMERS_CACHE; use HF_HOME.
 os.environ.setdefault("HF_HOME", str(os.path.expanduser("~/.cache/huggingface")))
@@ -52,6 +53,8 @@ except ImportError:
 from backend.pipeline_registry import get_pipeline
 from backend.reference_resolver import apply_resolution_selection, resolve_references
 from backend.settings import settings as app_settings  # global default settings
+from backend.db import apply_migrations
+from backend.object_store import s3 as object_store_s3
 from backend.ingestion_store import (
     create_ingested_document,
     get_document_source_path,
@@ -62,6 +65,8 @@ from backend.ingestion_store import (
     store_resolution,
     update_ingested_document,
 )
+from backend.spine.ids import pdf_object_key_for_work_pdf, work_id_from_doc_id
+from backend.spine.works import upsert_work_from_pdf
 from backend.claim_store import claim_store
 from backend.reference_retrieval import build_retrieval_dossier
 from backend.graph_store import GraphStore
@@ -109,6 +114,29 @@ SOURCE_DIR = Path(os.environ.get("SOURCE_DIR", CSV_PATH.parent / "source")).reso
 
 @app.on_event("startup")
 async def startup_event():
+    # Ensure V2 spine infra is usable before serving requests.
+    for attempt in range(1, 31):
+        try:
+            apply_migrations()
+            break
+        except Exception:
+            if attempt >= 30:
+                logger.exception("Postgres migrations failed; giving up")
+                raise
+            logger.warning("Postgres not ready; retrying migrations (%s/30)", attempt)
+            await asyncio.sleep(1)
+
+    for attempt in range(1, 31):
+        try:
+            object_store_s3.ensure_bucket()
+            break
+        except Exception:
+            if attempt >= 30:
+                logger.exception("S3 bucket check failed; giving up")
+                raise
+            logger.warning("S3 not ready; retrying bucket check (%s/30)", attempt)
+            await asyncio.sleep(1)
+
     if background_state.get_state().get("paused"):
         logger.info("Background work is paused; skipping resumable attachment startup")
         return
@@ -175,6 +203,48 @@ async def ingest_document(
 
     file_bytes = await file.read()
     metadata = create_ingested_document(file_bytes, file.filename or "document.pdf")
+
+    doc_id = str(metadata.get("id") or "").strip()
+    if not doc_id:
+        raise HTTPException(status_code=500, detail="Ingestion metadata missing id")
+    sha256 = str(metadata.get("sha256") or "").strip().lower()
+    if not sha256:
+        raise HTTPException(status_code=500, detail="Ingestion metadata missing sha256")
+    size_bytes = int(metadata.get("size_bytes") or len(file_bytes))
+
+    work_id = work_id_from_doc_id(doc_id)
+    pdf_object_key = pdf_object_key_for_work_pdf(work_id, sha256)
+
+    try:
+        object_store_s3.put_bytes(
+            pdf_object_key, file_bytes, content_type="application/pdf"
+        )
+    except Exception as exc:
+        logger.exception("S3 upload failed for work_id=%s", work_id)
+        raise HTTPException(status_code=503, detail="Object store unavailable") from exc
+
+    try:
+        upsert_work_from_pdf(
+            work_id=work_id,
+            filename=str(metadata.get("filename") or file.filename or "document.pdf"),
+            sha256=sha256,
+            size_bytes=size_bytes,
+            pdf_object_key=pdf_object_key,
+        )
+    except Exception as exc:
+        logger.exception("Postgres upsert failed for work_id=%s", work_id)
+        raise HTTPException(status_code=503, detail="Postgres unavailable") from exc
+
+    try:
+        metadata = update_ingested_document(
+            doc_id,
+            {"spine": {"work_id": work_id, "pdf_object_key": pdf_object_key}},
+        )
+    except Exception as exc:
+        logger.exception("Failed to persist spine metadata for doc_id=%s", doc_id)
+        raise HTTPException(
+            status_code=500, detail="Failed to persist metadata"
+        ) from exc
     try:
         graph_store.index_ingest_upload(metadata)
     except Exception:

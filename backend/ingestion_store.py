@@ -202,9 +202,12 @@ def update_ingested_document(
 
     merged = dict(existing)
     for key, value in updates.items():
-        if key in ("extraction", "resolution", "body_extraction") and isinstance(
-            value, dict
-        ):
+        if key in (
+            "extraction",
+            "resolution",
+            "body_extraction",
+            "spine",
+        ) and isinstance(value, dict):
             nested = dict(merged.get(key, {}))
             nested.update(value)
             merged[key] = nested

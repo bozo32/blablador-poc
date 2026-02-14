@@ -5,8 +5,20 @@ services:
       dockerfile: docker/app-api/Dockerfile
     ports:
       - "8000:8000"
+    environment:
+      # In Docker/Compose, talk to the internal grobid service.
+      # (Host-run dev keeps backend/settings.py default: http://localhost:8070)
+      GROBID_URL: http://grobid:8070
+    depends_on:
+      - grobid
     volumes:
       - ./data:/app/data
+
+  grobid:
+    image: lfoppiano/grobid:0.8.0
+    ports:
+      - "8070:8070"
+    restart: unless-stopped
 
   app-ui:
     build:

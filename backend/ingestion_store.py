@@ -175,7 +175,7 @@ def store_extraction(
 
 def store_resolution(
     doc_id: str,
-    resolution_data: Dict[str, Any],
+    resolution_data: Any,
     ingestion_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
     target_dir = ingestion_dir or DEFAULT_INGESTION_DIR

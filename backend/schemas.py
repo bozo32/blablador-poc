@@ -316,6 +316,7 @@ class IngestedDocument(BaseModel):
     uploaded_at: str
     status: str
     extraction: IngestionStage
+    body_extraction: Optional[IngestionStage] = None
     resolution: IngestionStage
 
 

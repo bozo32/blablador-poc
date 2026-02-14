@@ -1,0 +1,30 @@
+# Runtime dependencies for container images (app-api + app-ui).
+# Keep this intentionally small and let pip-compile resolve transitive pins.
+
+numpy<2
+
+fastapi
+uvicorn
+python-multipart
+
+pydantic>=2
+pydantic-settings
+
+python-dotenv
+requests
+
+lxml
+tqdm
+
+faiss-cpu
+sentence-transformers
+torch
+transformers
+
+streamlit
+streamlit-agraph
+streamlit-autorefresh
+
+pandas
+graphviz
+watchdog

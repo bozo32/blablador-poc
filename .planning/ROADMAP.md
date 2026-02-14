@@ -214,7 +214,7 @@ Plans:
 - [x] 09.1-04-PLAN.md — Dual-write ingest upload: filesystem + S3 + Postgres works
 - [x] 09.1-05-PLAN.md — Primary extraction attempts/jobs + S3 artifacts + idempotency
 - [x] 09.1-06-PLAN.md — Dev scripts + README + end-to-end verification checkpoint
-- [ ] 09.1-07-PLAN.md — Scope plumbing (project_id + user_id propagation)
+- [x] 09.1-07-PLAN.md — Scope plumbing (project_id + user_id propagation)
 - [ ] 09.1-08-PLAN.md — Identity split (Work vs Document vs DocumentVersion)
 - [ ] 09.1-09-PLAN.md — Spine read default + legacy fallback
 - [ ] 09.1-10-PLAN.md — Settings/workflow versioning + safe edit surface

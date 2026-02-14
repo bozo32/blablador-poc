@@ -33,6 +33,23 @@ def create_artifact(
         with conn.cursor() as cur:
             cur.execute(
                 """
+                SELECT artifact_id
+                  FROM artifacts
+                 WHERE attempt_id = %s
+                   AND artifact_type = %s
+                   AND object_key = %s
+                 ORDER BY created_at DESC
+                 LIMIT 1
+                """,
+                (aid, at, key),
+            )
+            row = cur.fetchone()
+            if row is not None:
+                conn.commit()
+                return str(row[0])
+
+            cur.execute(
+                """
                 INSERT INTO artifacts (
                   artifact_id,
                   attempt_id,

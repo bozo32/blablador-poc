@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import queue
 import threading
@@ -16,6 +17,16 @@ from backend.ingestion_store import (
     store_resolution,
     update_ingested_document,
 )
+from backend.object_store import s3 as object_store_s3
+from backend.spine.attempts import (
+    create_or_get_attempt,
+    mark_attempt_failed,
+    mark_attempt_partial,
+    mark_attempt_running,
+    mark_attempt_succeeded,
+)
+from backend.spine.artifacts import create_artifact
+from backend.spine.jobs import create_job, set_job_state
 from backend.reference_resolver import resolve_references
 
 
@@ -66,7 +77,41 @@ def run_full_ingest_pipeline(
         else {}
     )
     if not extraction_data:
+        spine_meta = document.get("spine") if isinstance(document, dict) else None
+        spine_meta = spine_meta if isinstance(spine_meta, dict) else {}
+        work_id = str(spine_meta.get("work_id") or "").strip() or str(doc_id)
+
+        attempt_id: Optional[str] = None
+        job_id: Optional[str] = None
         try:
+            attempt_id, _state = create_or_get_attempt(
+                work_id,
+                "primary",
+                settings_json={},
+            )
+            try:
+                update_ingested_document(
+                    doc_id,
+                    {"spine": {"work_id": work_id, "active_attempt_id": attempt_id}},
+                    ingestion_dir,
+                )
+            except Exception:
+                pass
+
+            try:
+                mark_attempt_running(attempt_id)
+            except Exception:
+                pass
+            try:
+                job_id = create_job(
+                    attempt_id,
+                    worker="grobid",
+                    state="running",
+                    progress_json={"stage": "extract"},
+                )
+            except Exception:
+                job_id = None
+
             try:
                 update_ingested_document(
                     doc_id,
@@ -90,6 +135,45 @@ def run_full_ingest_pipeline(
                 )
 
             extraction_payload = extraction.parse_tei(tei_xml)
+
+            if attempt_id:
+                tei_key = f"extract/{work_id}/attempts/{attempt_id}/primary/tei.xml"
+                tei_bytes = tei_xml.encode("utf-8", errors="ignore")
+                object_store_s3.put_bytes(
+                    tei_key,
+                    tei_bytes,
+                    content_type="application/xml",
+                )
+                create_artifact(
+                    attempt_id,
+                    "tei.xml",
+                    tei_key,
+                    len(tei_bytes),
+                    "application/xml",
+                )
+
+                extraction_key = (
+                    f"extract/{work_id}/attempts/{attempt_id}/primary/extraction.json"
+                )
+                extraction_bytes = json.dumps(
+                    extraction_payload,
+                    sort_keys=True,
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+                object_store_s3.put_bytes(
+                    extraction_key,
+                    extraction_bytes,
+                    content_type="application/json",
+                )
+                create_artifact(
+                    attempt_id,
+                    "extraction.json",
+                    extraction_key,
+                    len(extraction_bytes),
+                    "application/json",
+                )
+
             stored = store_extraction(
                 doc_id, tei_xml, extraction_payload, ingestion_dir
             )
@@ -121,8 +205,46 @@ def run_full_ingest_pipeline(
                 )
             except Exception:
                 logger.exception("Graph index failed for extraction")
+
+            if attempt_id:
+                try:
+                    if mode == "fulltext":
+                        mark_attempt_succeeded(attempt_id)
+                    else:
+                        mark_attempt_partial(attempt_id)
+                except Exception:
+                    pass
+            if job_id:
+                try:
+                    set_job_state(
+                        job_id,
+                        "succeeded" if mode == "fulltext" else "partial",
+                        progress_json={"stage": "done", "mode": mode},
+                    )
+                except Exception:
+                    pass
         except Exception as exc:
             logger.exception("Extraction failed for %s", doc_id)
+
+            if attempt_id:
+                try:
+                    mark_attempt_failed(
+                        attempt_id,
+                        failure_reason=type(exc).__name__,
+                        failure_detail=str(exc),
+                    )
+                except Exception:
+                    pass
+            if job_id:
+                try:
+                    set_job_state(
+                        job_id,
+                        "failed",
+                        progress_json={"stage": "error", "error": str(exc)},
+                    )
+                except Exception:
+                    pass
+
             _set_ingest_stage_error(
                 doc_id,
                 stage="extraction",

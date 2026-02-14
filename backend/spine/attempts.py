@@ -72,6 +72,17 @@ def settings_hash_for_attempt(work_id: str, kind: str, settings_json: Any) -> st
     return hashlib.sha256(blob).hexdigest()
 
 
+def _advisory_lock_id(settings_hash: str) -> int:
+    """Return a stable signed bigint for pg_advisory_xact_lock."""
+    h = str(settings_hash or "").strip().lower()
+    if not h:
+        raise ValueError("settings_hash is required")
+    n = int(h[:16], 16)
+    if n >= 2**63:
+        n -= 2**64
+    return n
+
+
 def create_or_get_attempt(
     work_id: str,
     kind: str,
@@ -98,6 +109,8 @@ def create_or_get_attempt(
 
     with connect() as conn:
         with conn.cursor() as cur:
+            # Prevent concurrent duplicate inserts for the same logical attempt.
+            cur.execute("SELECT pg_advisory_xact_lock(%s)", (_advisory_lock_id(h),))
             cur.execute(
                 """
                 SELECT attempt_id, state
@@ -236,23 +249,15 @@ def transition_attempt_state(
                    SET state = %s,
                        started_at = COALESCE(started_at, %s),
                        finished_at = COALESCE(finished_at, %s),
-                       failure_reason = CASE
-                           WHEN %s IS NULL THEN failure_reason
-                           ELSE %s
-                       END,
-                       failure_detail = CASE
-                           WHEN %s IS NULL THEN failure_detail
-                           ELSE %s
-                       END
-                 WHERE attempt_id = %s
+                       failure_reason = COALESCE(%s::text, failure_reason),
+                       failure_detail = COALESCE(%s::text, failure_detail)
+                  WHERE attempt_id = %s
                 """,
                 (
                     target,
                     started_at,
                     finished_at,
                     failure_reason,
-                    failure_reason,
-                    failure_detail,
                     failure_detail,
                     aid,
                 ),

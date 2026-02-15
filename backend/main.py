@@ -105,6 +105,11 @@ from backend.spine.workflow_store import (
     get_latest_workflow_version,
     list_workflows,
 )
+from backend.spine.locators import (
+    create_locator,
+    get_locator,
+    list_locators_for_document_version,
+)
 from backend.claim_store import claim_store
 from backend.reference_retrieval import build_retrieval_dossier
 from backend.graph_store import GraphStore
@@ -566,6 +571,56 @@ def spine_append_workflow_version(
         workflow_id=str(workflow_id), project_id=project_id
     )
     return {"workflow_id": workflow_id, "version": ver, "latest": latest}
+
+
+class SpineLocatorCreateRequest(BaseModel):
+    document_version_id: str
+    type: str
+    payload: dict = {}
+
+
+@app.post("/spine/locators")
+def spine_create_locator(
+    payload: SpineLocatorCreateRequest,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
+    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
+    user_id = str(app_settings.DEFAULT_USER_ID)
+    loc = create_locator(
+        project_id=project_id,
+        created_by_user_id=user_id,
+        document_version_id=str(payload.document_version_id),
+        type=str(payload.type),
+        payload_json=dict(payload.payload or {}),
+    )
+    return {"locator_id": loc["locator_id"], "locator": loc}
+
+
+@app.get("/spine/locators/{locator_id}")
+def spine_get_locator(
+    locator_id: str,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
+    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
+    loc = get_locator(locator_id=str(locator_id), project_id=project_id)
+    if loc is None:
+        raise HTTPException(status_code=404, detail="Locator not found")
+    return {"locator": loc}
+
+
+@app.get("/spine/document-versions/{document_version_id}/locators")
+def spine_list_locators_for_document_version(
+    document_version_id: str,
+    limit: int = 200,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
+    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
+    locs = list_locators_for_document_version(
+        project_id=project_id,
+        document_version_id=str(document_version_id),
+        limit=int(limit),
+    )
+    return {"locators": locs}
 
 
 @app.get("/project/export")

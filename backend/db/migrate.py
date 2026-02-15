@@ -246,6 +246,31 @@ _DDL_STATEMENTS: list[str] = [
     CREATE INDEX IF NOT EXISTS workflow_versions_project_id_idx
       ON workflow_versions(project_id);
     """,
+    # ---------------------------------------------------------------------
+    # Stable locators (project-scoped) for evidence/span addressing
+    # ---------------------------------------------------------------------
+    """
+    CREATE TABLE IF NOT EXISTS locators (
+      locator_id text PRIMARY KEY,
+      project_id text NOT NULL,
+      created_by_user_id text NOT NULL DEFAULT 'local',
+      document_version_id text NOT NULL REFERENCES document_versions(
+        document_version_id
+      )
+        ON DELETE CASCADE,
+      type text NOT NULL,
+      payload_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS locators_project_docver_idx
+      ON locators(project_id, document_version_id);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS locators_project_type_idx
+      ON locators(project_id, type);
+    """,
 ]
 
 

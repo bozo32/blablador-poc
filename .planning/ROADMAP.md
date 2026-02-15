@@ -218,7 +218,7 @@ Plans:
 - [x] 09.1-08-PLAN.md — Identity split (Work vs Document vs DocumentVersion)
 - [x] 09.1-09-PLAN.md — Spine read default + legacy fallback
 - [x] 09.1-10-PLAN.md — Settings/workflow versioning + safe edit surface
-- [ ] 09.1-11-PLAN.md — Stable locators primitives (entailment-ready)
+- [x] 09.1-11-PLAN.md — Stable locators primitives (entailment-ready)
 
 **Details:**
 - See `.planning/V2-REPLUMBING-PLAN.md` and `.planning/V2-PLANNING.md`.

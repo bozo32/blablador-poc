@@ -94,6 +94,17 @@ from backend.spine.documents import (
     get_or_create_document,
     upsert_document_version,
 )
+from backend.spine.settings_store import (
+    append_settings_version,
+    get_latest_settings_version,
+    get_or_create_settings_bundle,
+)
+from backend.spine.workflow_store import (
+    append_workflow_version,
+    create_workflow_definition,
+    get_latest_workflow_version,
+    list_workflows,
+)
 from backend.claim_store import claim_store
 from backend.reference_retrieval import build_retrieval_dossier
 from backend.graph_store import GraphStore
@@ -443,8 +454,118 @@ def put_project_meta(payload: ProjectMetaUpdate):
     patch = payload.model_dump(exclude_unset=True)
     try:
         return project_io.write_project_meta_update(patch)
-    except (ValidationError, ValueError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+#  Spine: versioned settings + workflows (additive endpoints)
+# ---------------------------------------------------------------------------
+
+
+class SpineSettingsUpsertRequest(BaseModel):
+    config: dict = {}
+    schema_version: int = 1
+    name: str = "default"
+
+
+@app.get("/spine/settings")
+def spine_get_settings(
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
+    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
+    user_id = str(app_settings.DEFAULT_USER_ID)
+    bundle = get_or_create_settings_bundle(
+        project_id=project_id,
+        name="default",
+        created_by_user_id=user_id,
+    )
+    latest = get_latest_settings_version(
+        bundle_id=str(bundle["bundle_id"]),
+        project_id=project_id,
+    )
+    return {"bundle_id": bundle["bundle_id"], "latest": latest}
+
+
+@app.post("/spine/settings")
+def spine_post_settings(
+    payload: SpineSettingsUpsertRequest,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
+    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
+    user_id = str(app_settings.DEFAULT_USER_ID)
+    name = str(payload.name or "default").strip() or "default"
+    bundle = get_or_create_settings_bundle(
+        project_id=project_id,
+        name=name,
+        created_by_user_id=user_id,
+    )
+    version = append_settings_version(
+        bundle_id=str(bundle["bundle_id"]),
+        project_id=project_id,
+        created_by_user_id=user_id,
+        config_json=dict(payload.config or {}),
+        schema_version=int(payload.schema_version or 1),
+    )
+    return {"bundle_id": bundle["bundle_id"], "version": version}
+
+
+class SpineWorkflowCreateRequest(BaseModel):
+    name: str
+    graph: dict = {}
+
+
+class SpineWorkflowVersionRequest(BaseModel):
+    graph: dict = {}
+
+
+@app.get("/spine/workflows")
+def spine_list_workflows(
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
+    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
+    return {"workflows": list_workflows(project_id=project_id)}
+
+
+@app.post("/spine/workflows")
+def spine_create_workflow(
+    payload: SpineWorkflowCreateRequest,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
+    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
+    user_id = str(app_settings.DEFAULT_USER_ID)
+    wf = create_workflow_definition(
+        project_id=project_id,
+        name=str(payload.name or "").strip(),
+        created_by_user_id=user_id,
+    )
+    ver = append_workflow_version(
+        workflow_id=str(wf["workflow_id"]),
+        project_id=project_id,
+        created_by_user_id=user_id,
+        graph_json=dict(payload.graph or {}),
+    )
+    return {"workflow_id": wf["workflow_id"], "version": ver}
+
+
+@app.post("/spine/workflows/{workflow_id}/versions")
+def spine_append_workflow_version(
+    workflow_id: str,
+    payload: SpineWorkflowVersionRequest,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
+    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
+    user_id = str(app_settings.DEFAULT_USER_ID)
+    ver = append_workflow_version(
+        workflow_id=str(workflow_id),
+        project_id=project_id,
+        created_by_user_id=user_id,
+        graph_json=dict(payload.graph or {}),
+    )
+    latest = get_latest_workflow_version(
+        workflow_id=str(workflow_id), project_id=project_id
+    )
+    return {"workflow_id": workflow_id, "version": ver, "latest": latest}
 
 
 @app.get("/project/export")

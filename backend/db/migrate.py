@@ -161,6 +161,91 @@ _DDL_STATEMENTS: list[str] = [
     CREATE INDEX IF NOT EXISTS project_documents_project_id_idx
       ON project_documents(project_id);
     """,
+    # ---------------------------------------------------------------------
+    # Versioned settings + workflows (project-scoped)
+    # ---------------------------------------------------------------------
+    """
+    CREATE TABLE IF NOT EXISTS settings_bundles (
+      bundle_id text PRIMARY KEY,
+      project_id text NOT NULL,
+      name text NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      created_by_user_id text NOT NULL DEFAULT 'local'
+    );
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS settings_bundles_project_name_uniq
+      ON settings_bundles(project_id, name);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS settings_versions (
+      version_id text PRIMARY KEY,
+      bundle_id text NOT NULL REFERENCES settings_bundles(bundle_id) ON DELETE CASCADE,
+      project_id text NOT NULL,
+      version int NOT NULL,
+      schema_version int NOT NULL,
+      config_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      created_by_user_id text NOT NULL DEFAULT 'local',
+      locked boolean NOT NULL DEFAULT false
+    );
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS settings_versions_bundle_version_uniq
+      ON settings_versions(bundle_id, version);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS settings_versions_project_id_idx
+      ON settings_versions(project_id);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS settings_field_policies (
+      policy_id text PRIMARY KEY,
+      schema_version int NOT NULL,
+      json_path text NOT NULL,
+      editable boolean NOT NULL,
+      constraints_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS settings_field_policies_schema_idx
+      ON settings_field_policies(schema_version);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS workflow_definitions (
+      workflow_id text PRIMARY KEY,
+      project_id text NOT NULL,
+      name text NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      created_by_user_id text NOT NULL DEFAULT 'local'
+    );
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS workflow_definitions_project_name_uniq
+      ON workflow_definitions(project_id, name);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS workflow_versions (
+      workflow_version_id text PRIMARY KEY,
+      workflow_id text NOT NULL REFERENCES workflow_definitions(workflow_id)
+        ON DELETE CASCADE,
+      project_id text NOT NULL,
+      version int NOT NULL,
+      graph_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      created_by_user_id text NOT NULL DEFAULT 'local',
+      locked boolean NOT NULL DEFAULT false
+    );
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS workflow_versions_workflow_version_uniq
+      ON workflow_versions(workflow_id, version);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS workflow_versions_project_id_idx
+      ON workflow_versions(project_id);
+    """,
 ]
 
 

@@ -5,13 +5,13 @@
 See: .planning/PROJECT.md (updated 2026-01-23)
 
 **Core value:** Readers can validate a citation by linking a claim to supporting (or contradicting) evidence from the cited source, with the judgment captured and reusable.
-**Current focus:** Phase 9.1 - Ingestion replumbing + solid spine
+**Current focus:** Phase 9.2 - Ingestion automation robustness + fallback extraction
 
 ## Current Position
 
 Phase: 9.1 of 11 (Ingestion replumbing + solid spine)
 Plan: 11 of 11 in current phase
-Status: In progress
+Status: Completed
 Last activity: 2026-02-15 — Completed 09.1-11-PLAN.md
 
 Progress: ████████████ 100%

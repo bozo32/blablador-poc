@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-01-23)
 
 **Core value:** Readers can validate a citation by linking a claim to supporting (or contradicting) evidence from the cited source, with the judgment captured and reusable.
-**Current focus:** Phase 9.2 - Ingestion automation robustness + fallback extraction
+**Current focus:** Phase 9.1 - Spine flip completion (remove legacy ingestion runtime)
 
 ## Current Position
 
 Phase: 9.1 of 11 (Ingestion replumbing + solid spine)
-Plan: 11 of 11 in current phase
-Status: Completed
-Last activity: 2026-02-15 — Completed 09.1-11-PLAN.md
+Plan: 11 of 15 in current phase
+Status: In progress
+Last activity: 2026-02-15 — Extended Phase 09.1 with spine-only flip plans (09.1-12..15)
 
-Progress: ████████████ 100%
+Progress: ██████████░░ 73%
 
 ## Performance Metrics
 

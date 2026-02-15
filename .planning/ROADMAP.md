@@ -23,7 +23,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 8.1: Recursive Retrieval + Node Graph** (INSERTED) - Multi-document citation chasing with an integrated graph view.
 - [ ] **Phase 8.2: Demo Dataset + Trace Replay** (INSERTED) - A packaged synthetic corpus + replayable review traces for a distributed-system tech demo.
 - [ ] **Phase 9: Claim Graph + Multi-User Consensus** - Local multi-user judgments and an interactive claim graph showing consensus/disagreement.
-- [x] **Phase 9.1: Ingestion replumbing + solid spine** (INSERTED) - Make the system runnable/distributable and ingestion automatable via a robust job/attempt spine (containers, Postgres, object store, worker services).
+- [ ] **Phase 9.1: Ingestion replumbing + solid spine** (INSERTED) - Make the system runnable/distributable and ingestion automatable via a robust job/attempt spine (containers, Postgres, object store, worker services).
 - [ ] **Phase 9.2: Ingestion automation robustness + fallback extraction** (INSERTED) - Make ingestion runs resilient and automatable, with deterministic fallback extraction when TEI/GROBID fails.
 
 ## Phase Details
@@ -205,7 +205,7 @@ Plans:
 ### Phase 9.1: Ingestion replumbing + solid spine (INSERTED)
 **Goal**: Ingestion has a stable execution spine (jobs/attempts/provenance/artifacts) and a portable runtime (Docker/Compose) so the system runs cleanly across host platforms and can move heavy services to remote Linux boxes.
 **Depends on**: Phase 9
-**Plans**: 11 plans
+**Plans**: 15 plans
 
 Plans:
 - [x] 09.1-01-PLAN.md — Containerize API + UI with Compose (no behavior changes)
@@ -219,6 +219,10 @@ Plans:
 - [x] 09.1-09-PLAN.md — Spine read default + legacy fallback
 - [x] 09.1-10-PLAN.md — Settings/workflow versioning + safe edit surface
 - [x] 09.1-11-PLAN.md — Stable locators primitives (entailment-ready)
+- [ ] 09.1-12-PLAN.md — Extraction reads PDFs from S3 (remove source.pdf runtime dependency)
+- [ ] 09.1-13-PLAN.md — Resolution artifacts in spine + spine-first resolution reads
+- [ ] 09.1-14-PLAN.md — Project membership list (project_documents) replaces filesystem scan
+- [ ] 09.1-15-PLAN.md — Spine-only mode + remove remaining filesystem read tails + wipe-all UX
 
 **Details:**
 - See `.planning/V2-REPLUMBING-PLAN.md` and `.planning/V2-PLANNING.md`.
@@ -252,5 +256,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 8.1. Recursive Retrieval + Node Graph | 0/TBD | Not started | - |
 | 8.2. Demo Dataset + Trace Replay | 0/TBD | Not started | - |
 | 9. Claim Graph + Multi-User Consensus | 7/7 | Complete | 2026-02-09 |
-| 9.1. Ingestion replumbing + solid spine | 11/11 | Complete | 2026-02-15 |
+| 9.1. Ingestion replumbing + solid spine | 11/15 | In progress | - |
 | 9.2. Ingestion automation robustness + fallback extraction | 0/TBD | Not started | - |

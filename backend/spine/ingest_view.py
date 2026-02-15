@@ -65,6 +65,25 @@ def build_ingested_document_from_spine(
     attempt = get_latest_attempt_for_work(project_id=pid, work_id=wid, kind="primary")
     extraction = _attempt_to_stage(attempt)
 
+    resolution = {"status": "pending", "resolved_at": None, "data": None}
+    if attempt:
+        artifact = get_artifact_for_attempt(
+            attempt_id=str(attempt.get("attempt_id")),
+            artifact_type="resolution.json",
+        )
+        if artifact and artifact.get("object_key"):
+            resolution = {
+                "status": "complete",
+                "resolved_at": _iso(artifact.get("created_at")),
+                "data": None,
+            }
+            if include_extraction_data:
+                try:
+                    raw = object_store_s3.get_bytes(str(artifact["object_key"]))
+                    resolution["data"] = json.loads(raw.decode("utf-8"))
+                except Exception:
+                    resolution["data"] = None
+
     if include_extraction_data and attempt and extraction.get("status") == "complete":
         artifact = get_artifact_for_attempt(
             attempt_id=str(attempt.get("attempt_id")),
@@ -89,7 +108,7 @@ def build_ingested_document_from_spine(
         "status": "uploaded",
         "extraction": extraction,
         "body_extraction": {"status": "pending", "extracted_at": None, "data": None},
-        "resolution": {"status": "pending", "resolved_at": None, "data": None},
+        "resolution": resolution,
     }
 
 
@@ -110,5 +129,27 @@ def get_tei_xml_from_spine(*, work_id: str, project_id: str) -> Optional[str]:
     try:
         raw = object_store_s3.get_bytes(str(artifact["object_key"]))
         return raw.decode("utf-8", errors="ignore")
+    except Exception:
+        return None
+
+
+def get_resolution_from_spine(*, work_id: str, project_id: str) -> Optional[list]:
+    wid = str(work_id or "").strip()
+    pid = str(project_id or "").strip()
+    if not wid or not pid:
+        return None
+    attempt = get_latest_attempt_for_work(project_id=pid, work_id=wid, kind="primary")
+    if not attempt:
+        return None
+    artifact = get_artifact_for_attempt(
+        attempt_id=str(attempt.get("attempt_id")),
+        artifact_type="resolution.json",
+    )
+    if not artifact or not artifact.get("object_key"):
+        return None
+    try:
+        raw = object_store_s3.get_bytes(str(artifact["object_key"]))
+        data = json.loads(raw.decode("utf-8"))
+        return data if isinstance(data, list) else None
     except Exception:
         return None

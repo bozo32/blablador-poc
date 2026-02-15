@@ -78,6 +78,7 @@ from backend.spine.ids import pdf_object_key_for_work_pdf, work_id_from_doc_id
 from backend.spine.ingest_view import (
     build_ingested_document_from_spine,
     get_tei_xml_from_spine,
+    get_resolution_from_spine,
 )
 from backend.spine.works import list_works, upsert_work_from_pdf
 from backend.spine.attempts import (
@@ -110,6 +111,7 @@ from backend.spine.locators import (
     get_locator,
     list_locators_for_document_version,
 )
+from backend.spine.pdf_source import cleanup_temp_path, get_pdf_temp_path
 from backend.claim_store import claim_store
 from backend.reference_retrieval import build_retrieval_dossier
 from backend.graph_store import GraphStore
@@ -1925,18 +1927,35 @@ def extract_ingested_document(
             except Exception:
                 job_id = None
 
-        pdf_path = get_document_source_path(doc_id)
+        use_legacy_pdf = (
+            str(os.environ.get("SPINE_PDF_SOURCE", "")).strip().lower() == "legacy"
+        )
+        tmp_pdf_path = None
+        if use_legacy_pdf:
+            pdf_path = get_document_source_path(doc_id)
+        else:
+            tmp_pdf_path = get_pdf_temp_path(
+                doc_id=doc_id,
+                work_id=work_id,
+                project_id=project_id,
+                document=document,
+            )
+            pdf_path = tmp_pdf_path
+
         mode = "fulltext"
         try:
-            tei_xml = grobid_client.extract_tei_fulltext(pdf_path)
-        except grobid_client.GrobidError:
-            mode = "header+references"
-            header_xml = grobid_client.extract_tei_header(pdf_path)
-            refs_xml = grobid_client.extract_tei_references(pdf_path)
-            tei_xml = grobid_client.merge_header_and_references_tei(
-                header_xml=header_xml,
-                references_xml=refs_xml,
-            )
+            try:
+                tei_xml = grobid_client.extract_tei_fulltext(pdf_path)
+            except grobid_client.GrobidError:
+                mode = "header+references"
+                header_xml = grobid_client.extract_tei_header(pdf_path)
+                refs_xml = grobid_client.extract_tei_references(pdf_path)
+                tei_xml = grobid_client.merge_header_and_references_tei(
+                    header_xml=header_xml,
+                    references_xml=refs_xml,
+                )
+        finally:
+            cleanup_temp_path(tmp_pdf_path)
         extraction_payload = extraction.parse_tei(tei_xml)
 
         if attempt_id:
@@ -2126,22 +2145,96 @@ def get_ingested_body(
 
 
 @app.post("/ingest/{doc_id}/resolve", response_model=schemas.ResolutionResponse)
-def resolve_ingested_references(doc_id: str):
+def resolve_ingested_references(
+    doc_id: str,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
     document = get_ingested_document(doc_id)
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found")
 
+    project_id = str(x_project_id or "").strip() or str(
+        (document.get("project_id") if isinstance(document, dict) else None)
+        or app_settings.DEFAULT_PROJECT_ID
+    )
+    user_id = str(app_settings.DEFAULT_USER_ID)
+
+    spine_meta = document.get("spine") if isinstance(document, dict) else None
+    spine_meta = spine_meta if isinstance(spine_meta, dict) else {}
+    work_id = str(spine_meta.get("work_id") or "").strip() or work_id_from_doc_id(
+        doc_id
+    )
+    attempt_id = str(spine_meta.get("active_attempt_id") or "").strip() or None
+
     extraction = document.get("extraction") or {}
     extraction_data = extraction.get("data") or {}
     references = extraction_data.get("references")
-    if not references:
-        raise HTTPException(
-            status_code=404, detail="Extraction data not found for document"
-        )
+    if references is None:
+        references = []
+    if not isinstance(references, list):
+        raise HTTPException(status_code=422, detail="Invalid extraction references")
 
     try:
         resolved = resolve_references(references)
-        stored = store_resolution(doc_id, resolved)
+
+        # Ensure we have a stable attempt id to attach artifacts to.
+        if not attempt_id:
+            try:
+                attempt_id, _state = create_or_get_attempt(
+                    project_id,
+                    user_id,
+                    work_id,
+                    "primary",
+                    settings_json={},
+                )
+                try:
+                    update_ingested_document(
+                        doc_id,
+                        {
+                            "spine": {
+                                "work_id": work_id,
+                                "active_attempt_id": attempt_id,
+                            }
+                        },
+                    )
+                except Exception:
+                    pass
+            except Exception:
+                attempt_id = None
+
+        # Persist to legacy store (best-effort) for compatibility.
+        stored = None
+        try:
+            stored = store_resolution(doc_id, resolved)
+        except Exception:
+            stored = None
+
+        # Persist to the spine (S3 + artifacts table).
+        if attempt_id:
+            resolution_key = (
+                f"resolve/{work_id}/attempts/{attempt_id}/primary/resolution.json"
+            )
+            resolution_bytes = json.dumps(
+                resolved,
+                sort_keys=True,
+                ensure_ascii=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            object_store_s3.put_bytes(
+                resolution_key,
+                resolution_bytes,
+                content_type="application/json",
+            )
+            create_artifact(
+                project_id,
+                user_id,
+                attempt_id,
+                "resolution.json",
+                resolution_key,
+                len(resolution_bytes),
+                "application/json",
+            )
+
         try:
             graph_store.index_resolution(ingest_meta=document, resolution_data=resolved)
         except Exception:
@@ -2152,11 +2245,48 @@ def resolve_ingested_references(doc_id: str):
             status_code=500, detail=f"Reference resolution failed: {exc}"
         )
 
-    return {"document_id": doc_id, "resolution": stored.get("resolution")}
+    if stored and isinstance(stored, dict) and stored.get("resolution"):
+        return {"document_id": doc_id, "resolution": stored.get("resolution")}
+    # Spine-only / best-effort response.
+    resolved_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return {
+        "document_id": doc_id,
+        "resolution": {
+            "status": "complete",
+            "resolved_at": resolved_at,
+            "data": resolved,
+        },
+    }
 
 
 @app.get("/ingest/{doc_id}/resolution", response_model=schemas.ResolutionResult)
-def get_ingested_resolution(doc_id: str):
+def get_ingested_resolution(
+    doc_id: str,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
+    spine_reads = str(os.environ.get("SPINE_READS", "1")).strip().lower() not in {
+        "0",
+        "false",
+        "no",
+    }
+    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
+
+    if spine_reads:
+        try:
+            data = get_resolution_from_spine(work_id=str(doc_id), project_id=project_id)
+            if data is not None:
+                # Best-effort timestamp; artifacts carry created_at but this endpoint
+                # only needs to return a ResolutionResult payload.
+                resolved_at = (
+                    datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                )
+                return {"status": "complete", "resolved_at": resolved_at, "data": data}
+        except Exception:
+            logger.exception(
+                "Spine resolution read failed for doc_id=%s; falling back to legacy",
+                doc_id,
+            )
+
     document = get_ingested_document(doc_id)
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found")

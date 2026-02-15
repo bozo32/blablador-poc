@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import queue
 import threading
 from datetime import datetime, timezone
@@ -18,6 +19,7 @@ from backend.ingestion_store import (
     update_ingested_document,
 )
 from backend.object_store import s3 as object_store_s3
+from backend.spine.pdf_source import cleanup_temp_path, get_pdf_temp_path
 from backend.spine.attempts import (
     create_or_get_attempt,
     mark_attempt_failed,
@@ -132,7 +134,21 @@ def run_full_ingest_pipeline(
             except Exception:
                 pass
 
-            pdf_path = get_document_source_path(doc_id, ingestion_dir)
+            use_legacy_pdf = (
+                str(os.environ.get("SPINE_PDF_SOURCE", "")).strip().lower() == "legacy"
+            )
+            tmp_pdf_path = None
+            if use_legacy_pdf:
+                pdf_path = get_document_source_path(doc_id, ingestion_dir)
+            else:
+                tmp_pdf_path = get_pdf_temp_path(
+                    doc_id=doc_id,
+                    work_id=work_id,
+                    project_id=project_id,
+                    document=document,
+                    ingestion_dir=ingestion_dir,
+                )
+                pdf_path = tmp_pdf_path
             mode = "fulltext"
             try:
                 tei_xml = grobid_client.extract_tei_fulltext(pdf_path)
@@ -144,6 +160,8 @@ def run_full_ingest_pipeline(
                     header_xml=header_xml,
                     references_xml=refs_xml,
                 )
+            finally:
+                cleanup_temp_path(tmp_pdf_path)
 
             extraction_payload = extraction.parse_tei(tei_xml)
 
@@ -290,6 +308,55 @@ def run_full_ingest_pipeline(
             references = extraction_data2.get("references")
             if references:
                 resolved = resolve_references(references)
+
+                # Persist resolution to the spine (S3 + artifacts table) so spine
+                # reads can reconstruct without local metadata.json.
+                attempt_id2 = None
+                spine_meta2 = (
+                    document.get("spine") if isinstance(document, dict) else None
+                )
+                spine_meta2 = spine_meta2 if isinstance(spine_meta2, dict) else {}
+                attempt_id2 = (
+                    str(spine_meta2.get("active_attempt_id") or "").strip() or None
+                )
+                if not attempt_id2:
+                    try:
+                        attempt_id2, _state = create_or_get_attempt(
+                            project_id,
+                            user_id,
+                            work_id,
+                            "primary",
+                            settings_json={},
+                        )
+                    except Exception:
+                        attempt_id2 = None
+
+                if attempt_id2:
+                    resolution_key = (
+                        "resolve/"
+                        f"{work_id}/attempts/{attempt_id2}/primary/resolution.json"
+                    )
+                    resolution_bytes = json.dumps(
+                        resolved,
+                        sort_keys=True,
+                        ensure_ascii=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                    object_store_s3.put_bytes(
+                        resolution_key,
+                        resolution_bytes,
+                        content_type="application/json",
+                    )
+                    create_artifact(
+                        project_id,
+                        user_id,
+                        attempt_id2,
+                        "resolution.json",
+                        resolution_key,
+                        len(resolution_bytes),
+                        "application/json",
+                    )
+
                 stored2 = store_resolution(doc_id, resolved, ingestion_dir)
                 try:
                     graph_store.index_resolution(

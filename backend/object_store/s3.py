@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -88,6 +89,36 @@ def get_bytes(object_key: str) -> bytes:
     if body is None:
         raise RuntimeError("S3 response missing Body")
     return body.read()
+
+
+def download_to_path(object_key: str, dest_path: Path) -> None:
+    """Download an object to a local path.
+
+    Prefer this over `get_bytes` for large PDFs to avoid holding the entire
+    object in memory.
+    """
+    key = str(object_key or "").lstrip("/")
+    if not key:
+        raise ValueError("object_key is required")
+    dest = Path(dest_path)
+    ensure_bucket()
+    resp = _client().get_object(Bucket=str(settings.S3_BUCKET_WORKS), Key=key)
+    body = resp.get("Body")
+    if body is None:
+        raise RuntimeError("S3 response missing Body")
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        with dest.open("wb") as f:
+            while True:
+                chunk = body.read(1024 * 1024)
+                if not chunk:
+                    break
+                f.write(chunk)
+    finally:
+        try:
+            body.close()
+        except Exception:
+            pass
 
 
 def exists(object_key: str) -> bool:

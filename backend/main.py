@@ -77,10 +77,11 @@ from backend.ingestion_store import (
 from backend.spine.ids import pdf_object_key_for_work_pdf, work_id_from_doc_id
 from backend.spine.ingest_view import (
     build_ingested_document_from_spine,
+    list_ingests_from_spine,
     get_tei_xml_from_spine,
     get_resolution_from_spine,
 )
-from backend.spine.works import list_works, upsert_work_from_pdf
+from backend.spine.works import upsert_work_from_pdf
 from backend.spine.attempts import (
     create_or_get_attempt,
     mark_attempt_failed,
@@ -296,6 +297,7 @@ async def ingest_document(
             sha256=sha256,
             size_bytes=size_bytes,
             pdf_object_key=pdf_object_key,
+            filename=str(metadata.get("filename") or file.filename or "document.pdf"),
             created_by_user_id=user_id,
         )
         ensure_project_document(
@@ -346,15 +348,7 @@ def list_ingest_documents(
 
     if spine_reads:
         try:
-            works = list_works(project_id=project_id, limit=200)
-            for w in works:
-                doc = build_ingested_document_from_spine(
-                    work_id=str(w.get("work_id")),
-                    project_id=project_id,
-                    include_extraction_data=False,
-                )
-                if doc is None:
-                    continue
+            for doc in list_ingests_from_spine(project_id=project_id, limit=200):
                 did = str(doc.get("id") or "").strip()
                 if did:
                     by_id[did] = doc

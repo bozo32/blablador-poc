@@ -135,9 +135,28 @@ _DDL_STATEMENTS: list[str] = [
       sha256 text NOT NULL,
       size_bytes bigint NOT NULL,
       pdf_object_key text NOT NULL,
+      filename text NOT NULL DEFAULT 'document.pdf',
       created_at timestamptz NOT NULL DEFAULT now(),
       created_by_user_id text NOT NULL DEFAULT 'local'
     );
+    """,
+    # Backfill/alter for existing databases.
+    """
+    ALTER TABLE document_versions
+      ADD COLUMN IF NOT EXISTS filename text;
+    """,
+    """
+    UPDATE document_versions
+       SET filename = 'document.pdf'
+     WHERE filename IS NULL;
+    """,
+    """
+    ALTER TABLE document_versions
+      ALTER COLUMN filename SET DEFAULT 'document.pdf';
+    """,
+    """
+    ALTER TABLE document_versions
+      ALTER COLUMN filename SET NOT NULL;
     """,
     """
     CREATE UNIQUE INDEX IF NOT EXISTS document_versions_sha256_uniq

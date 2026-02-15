@@ -218,6 +218,63 @@ def get_attempt(attempt_id: str) -> Optional[Dict[str, Any]]:
             return out
 
 
+def get_latest_attempt_for_work(
+    *, project_id: str, work_id: str, kind: str
+) -> Optional[Dict[str, Any]]:
+    pid = str(project_id or "").strip()
+    wid = str(work_id or "").strip()
+    k = str(kind or "").strip()
+    if not pid:
+        raise ValueError("project_id is required")
+    if not wid:
+        raise ValueError("work_id is required")
+    if not k:
+        raise ValueError("kind is required")
+
+    cols = (
+        "attempt_id",
+        "work_id",
+        "project_id",
+        "created_by_user_id",
+        "kind",
+        "state",
+        "created_at",
+        "started_at",
+        "finished_at",
+        "schema_version",
+        "settings_hash",
+        "settings_json",
+        "provenance_json",
+        "quality_json",
+        "failure_reason",
+        "failure_detail",
+    )
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT attempt_id, work_id, project_id, created_by_user_id,
+                       kind, state, created_at, started_at, finished_at,
+                       schema_version, settings_hash, settings_json,
+                       provenance_json, quality_json, failure_reason, failure_detail
+                  FROM attempts
+                 WHERE project_id = %s
+                   AND work_id = %s
+                   AND kind = %s
+                 ORDER BY created_at DESC
+                 LIMIT 1
+                """,
+                (pid, wid, k),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            out: Dict[str, Any] = {str(k2): v for k2, v in zip(cols, row)}
+            for key in ("settings_json", "provenance_json", "quality_json"):
+                out[key] = _json_loads(out.get(key)) or {}
+            return out
+
+
 def transition_attempt_state(
     attempt_id: str,
     to_state: str,

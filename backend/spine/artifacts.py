@@ -108,3 +108,44 @@ def list_artifacts_for_attempt(attempt_id: str) -> List[Dict[str, Any]]:
             )
             rows = cur.fetchall() or []
             return [{str(k): v for k, v in zip(cols, row)} for row in rows]
+
+
+def get_artifact_for_attempt(
+    *, attempt_id: str, artifact_type: str
+) -> Optional[Dict[str, Any]]:
+    aid = str(attempt_id or "").strip()
+    at = str(artifact_type or "").strip()
+    if not aid:
+        raise ValueError("attempt_id is required")
+    if not at:
+        raise ValueError("artifact_type is required")
+
+    cols = (
+        "artifact_id",
+        "attempt_id",
+        "project_id",
+        "created_by_user_id",
+        "artifact_type",
+        "object_key",
+        "bytes",
+        "content_type",
+        "created_at",
+    )
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT artifact_id, attempt_id, project_id, created_by_user_id,
+                       artifact_type, object_key, bytes, content_type, created_at
+                  FROM artifacts
+                 WHERE attempt_id = %s
+                   AND artifact_type = %s
+                 ORDER BY created_at DESC
+                 LIMIT 1
+                """,
+                (aid, at),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            return {str(k): v for k, v in zip(cols, row)}

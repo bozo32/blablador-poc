@@ -115,3 +115,30 @@ def upsert_work_from_pdf(
                 raise RuntimeError("upsert_work_from_pdf did not return a row")
         conn.commit()
     return dict(zip(_WORK_COLUMNS, row))
+
+
+def list_works(*, project_id: str, limit: int = 200) -> list[Dict[str, Any]]:
+    pid = str(project_id or "").strip()
+    if not pid:
+        raise ValueError("project_id is required")
+    n = int(limit)
+    if n <= 0:
+        return []
+
+    cols = _WORK_COLUMNS
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT work_id, created_at, project_id, created_by_user_id,
+                       filename, sha256, size_bytes, pdf_object_key,
+                       active_attempt_id, tags
+                  FROM works
+                 WHERE project_id = %s
+                 ORDER BY created_at DESC
+                 LIMIT %s
+                """,
+                (pid, n),
+            )
+            rows = cur.fetchall() or []
+            return [{str(k): v for k, v in zip(cols, row)} for row in rows]

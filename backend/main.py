@@ -75,7 +75,11 @@ from backend.ingestion_store import (
     update_ingested_document,
 )
 from backend.spine.ids import pdf_object_key_for_work_pdf, work_id_from_doc_id
-from backend.spine.works import upsert_work_from_pdf
+from backend.spine.ingest_view import (
+    build_ingested_document_from_spine,
+    get_tei_xml_from_spine,
+)
+from backend.spine.works import list_works, upsert_work_from_pdf
 from backend.spine.attempts import (
     create_or_get_attempt,
     mark_attempt_failed,
@@ -309,13 +313,75 @@ async def ingest_document(
 
 
 @app.get("/ingest", response_model=schemas.IngestListResponse)
-def list_ingest_documents():
-    documents = list_ingested_documents()
-    return {"documents": documents}
+def list_ingest_documents(
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
+    spine_reads = str(os.environ.get("SPINE_READS", "1")).strip().lower() not in {
+        "0",
+        "false",
+        "no",
+    }
+    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
+
+    out: list[dict] = []
+    by_id: dict[str, dict] = {}
+
+    if spine_reads:
+        try:
+            works = list_works(project_id=project_id, limit=200)
+            for w in works:
+                doc = build_ingested_document_from_spine(
+                    work_id=str(w.get("work_id")),
+                    project_id=project_id,
+                    include_extraction_data=False,
+                )
+                if doc is None:
+                    continue
+                did = str(doc.get("id") or "").strip()
+                if did:
+                    by_id[did] = doc
+        except Exception:
+            logger.exception("Spine list failed; falling back to legacy")
+
+    try:
+        legacy = list_ingested_documents()
+        for doc in legacy:
+            did = str(doc.get("id") or "").strip()
+            if did and did not in by_id:
+                by_id[did] = doc
+    except Exception:
+        logger.exception("Legacy list failed")
+
+    out = list(by_id.values())
+    out.sort(key=lambda item: str(item.get("uploaded_at") or ""), reverse=True)
+    return {"documents": out}
 
 
 @app.get("/ingest/{doc_id}", response_model=schemas.IngestedDocument)
-def get_ingest_document(doc_id: str):
+def get_ingest_document(
+    doc_id: str,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
+    spine_reads = str(os.environ.get("SPINE_READS", "1")).strip().lower() not in {
+        "0",
+        "false",
+        "no",
+    }
+    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
+    if spine_reads:
+        try:
+            doc = build_ingested_document_from_spine(
+                work_id=str(doc_id),
+                project_id=project_id,
+                include_extraction_data=True,
+            )
+            if doc is not None:
+                return doc
+        except Exception:
+            logger.exception(
+                "Spine get failed for doc_id=%s; falling back to legacy", doc_id
+            )
+
     document = get_ingested_document(doc_id)
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -1820,7 +1886,31 @@ def extract_ingested_document(
 
 
 @app.get("/ingest/{doc_id}/extraction", response_model=schemas.ExtractionResult)
-def get_ingested_extraction(doc_id: str):
+def get_ingested_extraction(
+    doc_id: str,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
+    spine_reads = str(os.environ.get("SPINE_READS", "1")).strip().lower() not in {
+        "0",
+        "false",
+        "no",
+    }
+    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
+    if spine_reads:
+        try:
+            doc = build_ingested_document_from_spine(
+                work_id=str(doc_id),
+                project_id=project_id,
+                include_extraction_data=True,
+            )
+            if doc is not None:
+                return doc.get("extraction")
+        except Exception:
+            logger.exception(
+                "Spine extraction read failed for doc_id=%s; falling back to legacy",
+                doc_id,
+            )
+
     document = get_ingested_document(doc_id)
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -1828,14 +1918,33 @@ def get_ingested_extraction(doc_id: str):
 
 
 @app.get("/ingest/{doc_id}/body", response_model=schemas.DocumentBodyResponse)
-def get_ingested_body(doc_id: str):
+def get_ingested_body(
+    doc_id: str,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
     document = get_ingested_document(doc_id)
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found")
-    try:
-        tei_xml = get_tei_xml(doc_id)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    spine_reads = str(os.environ.get("SPINE_READS", "1")).strip().lower() not in {
+        "0",
+        "false",
+        "no",
+    }
+    project_id = str(x_project_id or "").strip() or str(
+        (document.get("project_id") if isinstance(document, dict) else None)
+        or app_settings.DEFAULT_PROJECT_ID
+    )
+
+    tei_xml: Optional[str] = None
+    if spine_reads:
+        tei_xml = get_tei_xml_from_spine(work_id=str(doc_id), project_id=project_id)
+    if not tei_xml:
+        try:
+            tei_xml = get_tei_xml(doc_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
     payload = tei_body.build_document_body(tei_xml)
     return {"document_id": doc_id, **payload}
 

@@ -77,3 +77,23 @@ def import_zip(zip_bytes: bytes, *, overwrite: bool) -> Dict[str, Any]:
         if detail:
             msg = f"{msg} ({detail})"
         raise ProjectApiError(msg) from exc
+
+
+def wipe_everything(*, confirm: str) -> Dict[str, Any]:
+    url = f"{_api_root()}/dev/wipe"
+    payload = {"confirm": str(confirm or "")}
+    resp: Optional[requests.Response] = None
+    try:
+        resp = requests.post(url, json=payload, timeout=DEFAULT_TIMEOUT)
+        resp.raise_for_status()
+        return resp.json() if resp.text else {}
+    except requests.RequestException as exc:
+        detail = None
+        try:
+            detail = resp.text if resp is not None else None
+        except Exception:
+            detail = None
+        msg = str(exc)
+        if detail:
+            msg = f"{msg} ({detail})"
+        raise ProjectApiError(msg) from exc

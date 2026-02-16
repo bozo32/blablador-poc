@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -12,8 +13,14 @@ from backend.settings import settings
 DEFAULT_INGESTION_DIR = settings.INGESTION_DIR
 
 
+def _spine_mode() -> str:
+    mode = str(os.environ.get("SPINE_MODE", "spine")).strip().lower()
+    return mode if mode in {"legacy", "dual", "spine"} else "spine"
+
+
 def ensure_ingestion_dir(ingestion_dir: Path) -> Path:
-    ingestion_dir.mkdir(parents=True, exist_ok=True)
+    if _spine_mode() != "spine":
+        ingestion_dir.mkdir(parents=True, exist_ok=True)
     return ingestion_dir
 
 
@@ -52,6 +59,23 @@ def create_ingested_document(
     filename: str,
     ingestion_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
+    if _spine_mode() == "spine":
+        sha256 = hashlib.sha256(file_bytes).hexdigest()
+        uploaded_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        return {
+            "id": str(uuid4()),
+            "project_id": str(settings.DEFAULT_PROJECT_ID),
+            "filename": filename,
+            "size_bytes": len(file_bytes),
+            "sha256": sha256,
+            "uploaded_at": uploaded_at,
+            "status": "uploaded",
+            "aliases": [],
+            "extraction": _default_stage("extracted_at"),
+            "body_extraction": _default_stage("body_extracted_at"),
+            "resolution": _default_stage("resolved_at"),
+        }
+
     target_dir = ensure_ingestion_dir(ingestion_dir or DEFAULT_INGESTION_DIR)
 
     sha256 = hashlib.sha256(file_bytes).hexdigest()
@@ -117,6 +141,8 @@ def create_ingested_document(
 def get_ingested_document(
     doc_id: str, ingestion_dir: Optional[Path] = None
 ) -> Optional[Dict[str, Any]]:
+    if _spine_mode() == "spine":
+        return None
     target_dir = ingestion_dir or DEFAULT_INGESTION_DIR
     metadata_path = _metadata_path(target_dir, doc_id)
     if not metadata_path.exists():
@@ -127,6 +153,8 @@ def get_ingested_document(
 def list_ingested_documents(
     ingestion_dir: Optional[Path] = None,
 ) -> List[Dict[str, Any]]:
+    if _spine_mode() == "spine":
+        return []
     target_dir = ingestion_dir or DEFAULT_INGESTION_DIR
     if not target_dir.exists():
         return []
@@ -200,6 +228,8 @@ def update_ingested_document(
     updates: Dict[str, Any],
     ingestion_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
+    if _spine_mode() == "spine":
+        raise FileNotFoundError("Legacy ingestion store disabled (SPINE_MODE=spine)")
     target_dir = ingestion_dir or DEFAULT_INGESTION_DIR
     existing = get_ingested_document(doc_id, target_dir)
     if existing is None:

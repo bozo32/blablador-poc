@@ -6,6 +6,8 @@ services:
     ports:
       - "8000:8000"
     environment:
+      # Spine-only runtime by default.
+      SPINE_MODE: spine
       # In Docker/Compose, talk to the internal grobid service.
       # (Host-run dev keeps backend/settings.py default: http://localhost:8070)
       GROBID_URL: http://grobid:8070

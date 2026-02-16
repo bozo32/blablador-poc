@@ -135,3 +135,39 @@ def exists(object_key: str) -> bool:
         if code in {"404", "nosuchkey", "notfound"}:
             return False
         raise
+
+
+def delete_all() -> int:
+    """Delete all objects in the works bucket.
+
+    Returns number of keys deleted (best-effort).
+    """
+    ensure_bucket()
+    client = _client()
+    bucket = str(settings.S3_BUCKET_WORKS)
+
+    deleted = 0
+    token = None
+    while True:
+        kwargs = {"Bucket": bucket}
+        if token:
+            kwargs["ContinuationToken"] = token
+        resp = client.list_objects_v2(**kwargs)
+        contents = resp.get("Contents") or []
+        keys = [c.get("Key") for c in contents if isinstance(c, dict) and c.get("Key")]
+        if keys:
+            # delete_objects max is 1000
+            for i in range(0, len(keys), 1000):
+                chunk = keys[i : i + 1000]
+                out = client.delete_objects(
+                    Bucket=bucket,
+                    Delete={"Objects": [{"Key": k} for k in chunk], "Quiet": True},
+                )
+                deleted += len(out.get("Deleted") or chunk)
+
+        if not resp.get("IsTruncated"):
+            break
+        token = resp.get("NextContinuationToken")
+        if not token:
+            break
+    return int(deleted)

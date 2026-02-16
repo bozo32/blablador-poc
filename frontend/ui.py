@@ -2223,6 +2223,33 @@ def render_project_panel() -> None:
             else:
                 st.json(result)
 
+        st.divider()
+        st.markdown("**Danger zone**")
+        st.caption(
+            "Wipes Postgres spine tables, MinIO objects, and local data directories."
+        )
+        wipe_confirm = st.text_input(
+            "Type WIPE to confirm",
+            key="project-wipe-confirm",
+            placeholder="WIPE",
+        )
+        if st.button(
+            "Wipe everything",
+            key="project-wipe-everything",
+            use_container_width=True,
+            disabled=str(wipe_confirm or "").strip() != "WIPE",
+        ):
+            try:
+                result = project_api.wipe_everything(confirm=wipe_confirm)
+            except project_api.ProjectApiError as exc:
+                st.error(str(exc))
+            else:
+                st.json(result)
+                # Reset local UI state.
+                for key in list(st.session_state.keys()):
+                    st.session_state.pop(key, None)
+                _rerun()
+
     export_cols = st.columns([1, 1], gap="small")
     with export_cols[0]:
         if st.button(

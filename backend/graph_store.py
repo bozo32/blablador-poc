@@ -173,6 +173,13 @@ class GraphStore:
             for ddl in SCHEMA:
                 self._conn.execute(ddl)
 
+    def wipe(self) -> None:
+        """Delete all graph rows (keeps schema)."""
+        with self._conn:
+            # Order matters due to FKs.
+            for table in ("edge_votes", "edges", "nodes"):
+                self._conn.execute(f"DELETE FROM {table}")
+
     def _next_num(self) -> int:
         row = self._conn.execute(
             "SELECT COALESCE(MAX(num), 0) AS max_num FROM nodes"

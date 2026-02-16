@@ -244,6 +244,31 @@ def get_latest_document_version(*, document_id: str) -> Optional[Dict[str, Any]]
             return {str(k): v for k, v in zip(cols, row)}
 
 
+def get_document_version_by_sha256(*, sha256: str) -> Optional[Dict[str, Any]]:
+    digest = str(sha256 or "").strip().lower()
+    if not digest:
+        raise ValueError("sha256 is required")
+
+    cols = _VERSION_COLUMNS
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT document_version_id, document_id, sha256, size_bytes,
+                       pdf_object_key, filename, created_at, created_by_user_id
+                  FROM document_versions
+                 WHERE sha256 = %s
+                 ORDER BY created_at DESC
+                 LIMIT 1
+                """,
+                (digest,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            return {str(k): v for k, v in zip(cols, row)}
+
+
 def ensure_project_document(
     project_id: str,
     *,

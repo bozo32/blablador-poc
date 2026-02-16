@@ -315,6 +315,19 @@ class SpanGraphStore:
                 with self._conn:
                     self._conn.execute(f"ALTER TABLE assertions ADD COLUMN {col} TEXT")
 
+    def wipe(self) -> None:
+        """Delete all span-graph rows (keeps schema)."""
+        rows = self._conn.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()
+        with self._conn:
+            for row in rows or []:
+                name = str(row[0])
+                if not name:
+                    continue
+                self._conn.execute(f'DELETE FROM "{name}"')
+
     def compact_assertions(
         self, *, dry_run: bool = False, aggressive: bool = False
     ) -> dict:

@@ -79,6 +79,19 @@ class ClaimStore:
             self._conn.execute(ddl)
         self._conn.commit()
 
+    def wipe(self) -> None:
+        """Delete all claim-store rows (keeps schema)."""
+        rows = self._conn.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()
+        with self._conn:
+            for row in rows or []:
+                name = str(row[0])
+                if not name:
+                    continue
+                self._conn.execute(f'DELETE FROM "{name}"')
+
     def persist_confirmed_claims(self, payload: ClaimConfirmationRequest) -> int:
         if not payload.confirmed_claims:
             return 0

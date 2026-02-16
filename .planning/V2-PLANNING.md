@@ -112,7 +112,7 @@ V2 introduces a UI shell that supports operations.
     - Preview of extracted text + refs
   - Actions:
     - Cancel job
-    - Re-run fallback with settings (language candidates, thresholds, DPI policy)
+    - Re-run fallback with settings (OCR languages, thresholds, DPI policy)
     - Trigger/skip reference resolution (with "low-quality refs" prompt)
     - Mark "replace with higher-quality PDF" (and attach replacement)
     - Prune old attempts (keep last N)

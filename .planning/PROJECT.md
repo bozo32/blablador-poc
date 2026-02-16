@@ -57,6 +57,9 @@ Readers can validate a citation by linking a claim to supporting (or contradicti
 | Primary users are researchers | Design for scholarly review workflows | — Pending |
 | Persist attachment claim_text with metadata | Enables reruns to reuse the UI-provided text without manual seeding | Implemented (05-05) |
 | Resolve claim_text via attachment metadata before failing | Avoids 409 errors on the first evidence fetch when text already exists | Implemented (05-05) |
+| Spine dedupe is global by sha256 | Avoid duplicate storage and enable consistent re-use across projects | Adopted (09.1/09.3) |
+| Rights domains may require separate identical storage | Copyright/rights constraints may prevent cross-domain blob reuse even when sha256 matches; model as separate "rights ponds" later | Not implemented (note for future) |
+| OCR languages are a settings-backed parameter | Default English, but must be togglable via the central settings surface | Planned (09.2-05) |
 
 ---
 *Last updated: 2026-01-28 after 05-05 plan*

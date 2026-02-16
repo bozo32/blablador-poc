@@ -219,10 +219,10 @@ Plans:
 - [x] 09.1-09-PLAN.md — Spine read default + legacy fallback
 - [x] 09.1-10-PLAN.md — Settings/workflow versioning + safe edit surface
 - [x] 09.1-11-PLAN.md — Stable locators primitives (entailment-ready)
-- [ ] 09.1-12-PLAN.md — Extraction reads PDFs from S3 (remove source.pdf runtime dependency)
-- [ ] 09.1-13-PLAN.md — Resolution artifacts in spine + spine-first resolution reads
-- [ ] 09.1-14-PLAN.md — Project membership list (project_documents) replaces filesystem scan
-- [ ] 09.1-15-PLAN.md — Spine-only mode + remove remaining filesystem read tails + wipe-all UX
+- [x] 09.1-12-PLAN.md — Extraction reads PDFs from S3 (remove source.pdf runtime dependency)
+- [x] 09.1-13-PLAN.md — Resolution artifacts in spine + spine-first resolution reads
+- [x] 09.1-14-PLAN.md — Project membership list (project_documents) replaces filesystem scan
+- [x] 09.1-15-PLAN.md — Spine-only mode + remove remaining filesystem read tails + wipe-all UX
 
 **Details:**
 - See `.planning/V2-REPLUMBING-PLAN.md` and `.planning/V2-PLANNING.md`.
@@ -230,13 +230,40 @@ Plans:
 ### Phase 9.2: Ingestion automation robustness + fallback extraction (INSERTED)
 **Goal**: Ingestion is resilient and automatable: background runs are idempotent and retry-safe, failures surface clearly, and extraction has a deterministic fallback path when primary parsing fails.
 **Depends on**: Phase 9.1
-**Plans**: 0 plans
+**Plans**: 7 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 9.2 to break down)
+- [ ] 09.2-01-PLAN.md — Corpus + regression fixtures for extraction failures
+- [ ] 09.2-02-PLAN.md — Fallback attempt contract (quality flags + S3 artifacts + DB pointers)
+- [ ] 09.2-03-PLAN.md — "Header 500 but refs OK" resilience + quality flags
+- [ ] 09.2-04-PLAN.md — PyMuPDF fallback extractor (text-layer) persisted as fallback attempts
+- [ ] 09.2-05-PLAN.md — Hybrid OCR worker service (per-page policy + adaptive DPI)
+- [ ] 09.2-06-PLAN.md — Orchestration: auto fallback on primary failure + manual force fallback + polling
+- [ ] 09.2-07-PLAN.md — Resolution gating based on refs quality + UI prompt
+
+### Phase 9.3: Spine Everywhere + Legacy Removal (INSERTED)
+**Goal**: Remove remaining local-disk persistence requirements by moving attachments, evidence, judgments, and project metadata onto the spine, and delete legacy filesystem stores.
+**Depends on**: Phase 9.2
+**Plans**: 6 plans
+
+Plans:
+- [ ] 09.3-01-PLAN.md — Attachments persisted in spine (records in Postgres, blobs/artifacts in object store)
+- [ ] 09.3-02-PLAN.md — Judgments + exports persisted in spine (no data/judgments dependence)
+- [ ] 09.3-03-PLAN.md — Evidence runs + selections persisted in spine (history + artifacts)
+- [ ] 09.3-04-PLAN.md — Project metadata persisted in spine (reviewers/settings; no data/project.json)
+- [ ] 09.3-05-PLAN.md — Graph stores strategy (Postgres or rebuildable caches; no required local .db)
+- [ ] 09.3-06-PLAN.md — Delete legacy stores + remove compat flags; spine is the only runtime
 
 **Details:**
 [To be added during planning]
+
+### Post-9.2 Focus Notes
+
+After Phase 9.2 stabilizes ingestion/extraction robustness, return to product UX stabilization in this order:
+
+1) **Cytoscape reliability**: make the claim graph view fully functional and dependable (it was only partially working).
+2) **Single settings pane**: consolidate settings into one comprehensive panel backed by the versioned settings/workflow spine (support swapping models/parameters; keep it non-graphical unless trivial).
+3) **Real UX**: pursue a deliberate UX pass (and/or a UI stack upgrade) once the backend spine is boring and stable.
 
 ## Progress
 
@@ -256,5 +283,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 8.1. Recursive Retrieval + Node Graph | 0/TBD | Not started | - |
 | 8.2. Demo Dataset + Trace Replay | 0/TBD | Not started | - |
 | 9. Claim Graph + Multi-User Consensus | 7/7 | Complete | 2026-02-09 |
-| 9.1. Ingestion replumbing + solid spine | 11/15 | In progress | - |
-| 9.2. Ingestion automation robustness + fallback extraction | 0/TBD | Not started | - |
+| 9.1. Ingestion replumbing + solid spine | 15/15 | Complete | 2026-02-16 |
+| 9.2. Ingestion automation robustness + fallback extraction | 0/7 | Not started | - |
+| 9.3. Spine Everywhere + Legacy Removal | 0/6 | Not started | - |

@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-01-23)
 
 **Core value:** Readers can validate a citation by linking a claim to supporting (or contradicting) evidence from the cited source, with the judgment captured and reusable.
-**Current focus:** Phase 9.1 - Spine flip completion (remove legacy ingestion runtime)
+**Current focus:** Phase 9.2 - Ingestion automation robustness + fallback extraction
 
 ## Current Position
 
-Phase: 9.1 of 11 (Ingestion replumbing + solid spine)
-Plan: 11 of 15 in current phase
-Status: In progress
-Last activity: 2026-02-15 — Extended Phase 09.1 with spine-only flip plans (09.1-12..15)
+Phase: 9.2 of 12 (Ingestion automation robustness + fallback extraction)
+Plan: 0 of 7 in current phase
+Status: Not started
+Last activity: 2026-02-16 — Completed Phase 09.1 spine-only flip (plans 12..15)
 
-Progress: ██████████░░ 73%
+Progress: ░░░░░░░░░░░░ 0%
 
 ## Performance Metrics
 
@@ -99,6 +99,7 @@ Recent decisions affecting current work:
 ### Pending Todos
 
 - Run full cleanup protocol pass (see `.planning/CLEANUP_PROTOCOL.md`) and re-verify UI flows.
+- Plan Phase 9.2 into executable plan files and implement with small commits + verification scripts.
 
 ### Blockers/Concerns
 

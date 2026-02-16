@@ -68,7 +68,6 @@ from backend.db import apply_migrations, connect
 from backend.object_store import s3 as object_store_s3
 from backend.ingestion_store import (
     create_ingested_document,
-    get_document_source_path,
     get_ingested_document,
     get_tei_xml,
     store_extraction,
@@ -853,12 +852,26 @@ def auto_place_claim_source(
             ),
         )
 
+    tmp_pdf_path = None
     try:
-        source_path = get_document_source_path(cited_ingest_id)
+        tmp_pdf_path = get_pdf_temp_path(
+            doc_id=str(cited_ingest_id),
+            work_id=str(cited_ingest_id),
+            project_id=str(app_settings.DEFAULT_PROJECT_ID),
+            document=None,
+        )
+        source_path = tmp_pdf_path
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    cited_meta = get_ingested_document(cited_ingest_id) or {}
+    cited_meta = (
+        build_ingested_document_from_spine(
+            work_id=str(cited_ingest_id),
+            project_id=str(app_settings.DEFAULT_PROJECT_ID),
+            include_extraction_data=False,
+        )
+        or {}
+    )
     filename = cited_meta.get("filename") or source_path.name
 
     # Attempt to reuse parsed artifacts from any prior attachment for this cited doc.
@@ -883,6 +896,8 @@ def auto_place_claim_source(
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    finally:
+        cleanup_temp_path(tmp_pdf_path)
 
     # If a donor exists, clone artifacts and mark ready (skip reprocessing).
     if donor and donor.get("artifacts"):
@@ -2158,20 +2173,13 @@ def extract_ingested_document(
             except Exception:
                 job_id = None
 
-        use_legacy_pdf = (
-            str(os.environ.get("SPINE_PDF_SOURCE", "")).strip().lower() == "legacy"
+        tmp_pdf_path = get_pdf_temp_path(
+            doc_id=doc_id,
+            work_id=work_id,
+            project_id=project_id,
+            document=None,
         )
-        tmp_pdf_path = None
-        if use_legacy_pdf:
-            pdf_path = get_document_source_path(doc_id)
-        else:
-            tmp_pdf_path = get_pdf_temp_path(
-                doc_id=doc_id,
-                work_id=work_id,
-                project_id=project_id,
-                document=document if _legacy_ingestion_enabled() else None,
-            )
-            pdf_path = tmp_pdf_path
+        pdf_path = tmp_pdf_path
 
         mode = "fulltext"
         try:

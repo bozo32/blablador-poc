@@ -10,7 +10,6 @@ import tempfile
 from pathlib import Path
 from typing import Any, Optional
 
-from backend.ingestion_store import get_ingested_document
 from backend.object_store import s3 as object_store_s3
 from backend.settings import settings
 from backend.spine.works import get_work
@@ -32,8 +31,7 @@ def resolve_pdf_object_key(
 
     Preference order:
     1) `document["spine"]["pdf_object_key"]` (if provided)
-    2) `data/ingestion/**/metadata.json` spine fields (if doc_id provided)
-    3) Postgres `works.pdf_object_key` (requires project_id)
+    2) Postgres `works.pdf_object_key` (requires project_id)
     """
     doc_id2 = str(doc_id or "").strip() or None
     work_id2 = str(work_id or "").strip() or None
@@ -53,24 +51,6 @@ def resolve_pdf_object_key(
             pid = str(document.get("project_id") or "").strip()
             if pid:
                 project_id = pid
-
-    # (2) Legacy metadata file (still useful for transition).
-    if doc_id2:
-        meta = get_ingested_document(doc_id2, ingestion_dir)
-        if isinstance(meta, dict):
-            spine = meta.get("spine")
-            if isinstance(spine, dict):
-                key = _normalize_key(spine.get("pdf_object_key"))
-                if key:
-                    return key
-                if not work_id2:
-                    wid = str(spine.get("work_id") or "").strip()
-                    if wid:
-                        work_id2 = wid
-            if not project_id:
-                pid = str(meta.get("project_id") or "").strip()
-                if pid:
-                    project_id = pid
 
     # Default: during 09.1 transition, work_id == doc_id.
     if not work_id2 and doc_id2:

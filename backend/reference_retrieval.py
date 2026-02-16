@@ -13,7 +13,8 @@ import re
 from typing import Any, Dict, Optional
 
 from backend import schemas
-from backend.ingestion_store import get_ingested_document
+from backend.settings import settings
+from backend.spine.ingest_view import build_ingested_document_from_spine
 
 
 @dataclass
@@ -29,9 +30,17 @@ class RetrievalSource:
 
 
 def _load_document(doc_id: str) -> Dict[str, Any]:
-    document = get_ingested_document(doc_id)
+    did = str(doc_id or "").strip()
+    if not did:
+        raise FileNotFoundError("Document id is required")
+    project_id = str(settings.DEFAULT_PROJECT_ID)
+    document = build_ingested_document_from_spine(
+        work_id=did,
+        project_id=project_id,
+        include_extraction_data=True,
+    )
     if not document:
-        raise FileNotFoundError(f"Document {doc_id} not found")
+        raise FileNotFoundError(f"Document {did} not found")
     return document
 
 

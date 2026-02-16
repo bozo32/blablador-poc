@@ -11,15 +11,24 @@ from uuid import uuid4
 
 from lxml import etree
 
+import hashlib
+
 from backend import attachment_store, background_state, extraction, grobid_client, utils
 from backend.evidence_matching.service import evidence_service
 from backend.graph_store import GraphStore
-from backend.ingestion_store import (
-    create_ingested_document,
-    get_ingested_document,
-    store_extraction,
-)
+from backend.object_store import s3 as object_store_s3
 from backend.settings import settings
+from backend.spine.artifacts import create_artifact
+from backend.spine.attempts import create_or_get_attempt
+from backend.spine.documents import (
+    ensure_project_document,
+    get_document_version_by_sha256,
+    get_or_create_document,
+    upsert_document_version,
+)
+from backend.spine.ids import pdf_object_key_for_work_pdf
+from backend.spine.ingest_view import build_ingested_document_from_spine
+from backend.spine.works import upsert_work_from_pdf
 
 
 logger = logging.getLogger(__name__)
@@ -32,16 +41,12 @@ def _maybe_ingest_matched_attachment(record: dict) -> None:
     Surfing and work-level graphs depend on ingested docs (with extraction) to
     form stable work-work links and resolve reference targets.
 
-    This function is best-effort and safe under duplicates (ingestion_store
-    de-dupes by sha256).
+    This function is best-effort and safe under duplicates (spine de-dupes by
+    sha256).
     """
     if not isinstance(record, dict):
         return
     if str(record.get("source_ingest_id") or "").strip():
-        return
-    doc_id = str(record.get("doc_id") or "").strip()
-    target_id = str(record.get("target_id") or "").strip()
-    if not doc_id or not target_id:
         return
 
     try:
@@ -52,50 +57,143 @@ def _maybe_ingest_matched_attachment(record: dict) -> None:
         return
 
     file_bytes = pdf_path.read_bytes()
-    filename = str(record.get("filename") or pdf_path.name)
-    metadata = create_ingested_document(file_bytes, filename)
-    ingest_id = str(metadata.get("id") or "").strip()
-    if not ingest_id:
+    filename = str(record.get("filename") or pdf_path.name).strip() or pdf_path.name
+    sha256 = hashlib.sha256(file_bytes).hexdigest().lower()
+    size_bytes = int(len(file_bytes))
+
+    project_id = str(settings.DEFAULT_PROJECT_ID)
+    user_id = str(settings.DEFAULT_USER_ID)
+
+    existing = get_document_version_by_sha256(sha256=sha256)
+    if existing is not None:
+        ingest_id = str(existing.get("document_id") or "").strip()
+        pdf_object_key = str(existing.get("pdf_object_key") or "").strip()
+        if not ingest_id or not pdf_object_key:
+            return
+    else:
+        ingest_id = str(uuid4())
+        pdf_object_key = pdf_object_key_for_work_pdf(ingest_id, sha256)
+
+    try:
+        if not object_store_s3.exists(pdf_object_key):
+            object_store_s3.put_bytes(
+                pdf_object_key,
+                file_bytes,
+                content_type="application/pdf",
+            )
+    except Exception:
+        logger.exception("Object store upload failed for attachment ingest")
+        return
+
+    try:
+        upsert_work_from_pdf(
+            work_id=ingest_id,
+            project_id=project_id,
+            created_by_user_id=user_id,
+            filename=filename,
+            sha256=sha256,
+            size_bytes=size_bytes,
+            pdf_object_key=pdf_object_key,
+        )
+        get_or_create_document(ingest_id, created_by_user_id=user_id)
+        upsert_document_version(
+            ingest_id,
+            document_id=ingest_id,
+            sha256=sha256,
+            size_bytes=size_bytes,
+            pdf_object_key=pdf_object_key,
+            filename=filename,
+            created_by_user_id=user_id,
+        )
+        ensure_project_document(
+            project_id,
+            document_id=ingest_id,
+            added_by_user_id=user_id,
+        )
+    except Exception:
+        logger.exception("Spine upsert failed for attachment ingest")
         return
 
     graph_store = GraphStore(settings.GRAPH_DB_PATH)
+    ingest_meta = build_ingested_document_from_spine(
+        work_id=ingest_id,
+        project_id=project_id,
+        include_extraction_data=False,
+    ) or {"id": ingest_id, "project_id": project_id, "sha256": sha256}
 
     try:
-        graph_store.index_ingest_upload(metadata)
+        graph_store.index_ingest_upload(ingest_meta)
     except Exception:
         logger.exception("Graph index failed for attachment ingest upload")
 
-    # Reuse TEI artifacts produced by attachment processing if extraction isn't
-    # complete.
-    existing = get_ingested_document(ingest_id) or {}
-    extraction_stage = existing.get("extraction") or {}
-    has_extraction = bool(
-        (extraction_stage.get("data") or {})
-        if isinstance(extraction_stage, dict)
-        else {}
-    )
-    if not has_extraction:
-        artifacts = record.get("artifacts") or {}
-        tei_xml_path = artifacts.get("tei_xml")
-        tei_json_path = artifacts.get("tei_json")
-        if tei_xml_path and tei_json_path:
+    # Reuse TEI artifacts produced by attachment processing.
+    artifacts = record.get("artifacts") or {}
+    tei_xml_path = artifacts.get("tei_xml")
+    tei_json_path = artifacts.get("tei_json")
+    if tei_xml_path and tei_json_path:
+        try:
+            tei_xml = Path(str(tei_xml_path)).read_text(
+                encoding="utf-8", errors="ignore"
+            )
+            extraction_payload = json.loads(
+                Path(str(tei_json_path)).read_text(encoding="utf-8")
+            )
+
+            attempt_id, _state = create_or_get_attempt(
+                project_id,
+                user_id,
+                ingest_id,
+                "primary",
+                settings_json={},
+            )
+            tei_key = f"extract/{ingest_id}/attempts/{attempt_id}/primary/tei.xml"
+            tei_bytes = tei_xml.encode("utf-8", errors="ignore")
+            object_store_s3.put_bytes(
+                tei_key, tei_bytes, content_type="application/xml"
+            )
+            create_artifact(
+                project_id,
+                user_id,
+                attempt_id,
+                "tei.xml",
+                tei_key,
+                len(tei_bytes),
+                "application/xml",
+            )
+
+            extraction_key = (
+                f"extract/{ingest_id}/attempts/{attempt_id}/primary/extraction.json"
+            )
+            extraction_bytes = json.dumps(
+                extraction_payload,
+                sort_keys=True,
+                ensure_ascii=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            object_store_s3.put_bytes(
+                extraction_key,
+                extraction_bytes,
+                content_type="application/json",
+            )
+            create_artifact(
+                project_id,
+                user_id,
+                attempt_id,
+                "extraction.json",
+                extraction_key,
+                len(extraction_bytes),
+                "application/json",
+            )
+
             try:
-                tei_xml = Path(str(tei_xml_path)).read_text(
-                    encoding="utf-8", errors="ignore"
+                graph_store.index_extraction(
+                    ingest_meta=ingest_meta,
+                    extraction_data=extraction_payload,
                 )
-                extraction_payload = json.loads(
-                    Path(str(tei_json_path)).read_text(encoding="utf-8")
-                )
-                stored = store_extraction(ingest_id, tei_xml, extraction_payload)
-                try:
-                    graph_store.index_extraction(
-                        ingest_meta=stored,
-                        extraction_data=extraction_payload,
-                    )
-                except Exception:
-                    logger.exception("Graph index failed for attachment extraction")
             except Exception:
-                logger.exception("Unable to reuse attachment TEI artifacts for ingest")
+                logger.exception("Graph index failed for attachment extraction")
+        except Exception:
+            logger.exception("Unable to reuse attachment TEI artifacts for ingest")
 
     try:
         attachment_store.update_attachment(

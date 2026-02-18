@@ -1,15 +1,19 @@
-"""Attachment persistence utilities for claim evidence uploads."""
+"""Attachment persistence utilities.
+
+Phase 09.3: attachments are spine-backed (Postgres metadata + object-store blobs).
+"""
 
 from __future__ import annotations
 
+import hashlib
 import json
-import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, List, Optional, Tuple
 from uuid import uuid4
 
-from backend.settings import settings
+from backend.db.pg import connect
+from backend.object_store import s3 as object_store_s3
 
 
 STATUS_PENDING = "pending"
@@ -24,7 +28,7 @@ MAX_EVENTS_STORED = 25
 DEFAULT_MAX_ATTEMPTS = 2
 
 
-_SENTENCE_CACHE: dict[str, Tuple[float, List[dict]]] = {}
+_SENTENCE_CACHE: dict[str, Tuple[str, List[dict]]] = {}
 
 
 class AttachmentNotFound(RuntimeError):
@@ -35,44 +39,13 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _root() -> Path:
-    root = Path(settings.ATTACHMENT_DIR)
-    root.mkdir(parents=True, exist_ok=True)
-    return root
-
-
-def _attachment_dir(attachment_id: str) -> Path:
-    return _root() / attachment_id
-
-
-def _metadata_path(attachment_id: str) -> Path:
-    return _attachment_dir(attachment_id) / "metadata.json"
-
-
-def _load_record(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def _log_event(record: dict, event: str, detail: Optional[str] = None) -> None:
-    timeline: List[dict] = record.setdefault("timeline", [])
-    timeline.insert(0, {"event": event, "detail": detail, "at": _now()})
-    record["timeline"] = timeline[:MAX_EVENTS_STORED]
-
-
-def _write_record(record: dict) -> dict:
-    meta_path = _metadata_path(record["id"])
-    meta_path.parent.mkdir(parents=True, exist_ok=True)
-    meta_path.write_text(json.dumps(record, indent=2, sort_keys=True), encoding="utf-8")
-    return record
-
-
 def _sanitize_filename(filename: str) -> str:
-    name = filename.strip() or "attachment.pdf"
+    name = str(filename or "").strip() or "attachment.pdf"
     return name.replace("/", "_").replace("\\", "_")
 
 
 def _normalize_status(value: Optional[str]) -> str:
-    if value == "ready":  # legacy persisted value
+    if value == "ready":
         return STATUS_MATCHED
     if value in {
         STATUS_PENDING,
@@ -81,13 +54,66 @@ def _normalize_status(value: Optional[str]) -> str:
         STATUS_MATCHED,
         STATUS_ERROR,
     }:
-        return value
+        return str(value)
     return STATUS_PENDING
 
 
+def _log_event(
+    *,
+    attachment_id: str,
+    project_id: str,
+    user_id: str,
+    event: str,
+    detail: Optional[str] = None,
+) -> None:
+    eid = str(uuid4())
+    with connect(autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO attachment_events(
+                  event_id,
+                  attachment_id,
+                  project_id,
+                  created_by_user_id,
+                  event,
+                  detail,
+                  at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, now())
+                """,
+                (eid, attachment_id, project_id, user_id, event, detail),
+            )
+
+
+def _fetch_events(*, attachment_id: str) -> list[dict]:
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT event, detail, at
+                FROM attachment_events
+                WHERE attachment_id=%s
+                ORDER BY at DESC
+                LIMIT %s
+                """,
+                (attachment_id, int(MAX_EVENTS_STORED)),
+            )
+            rows = cur.fetchall() or []
+    out: list[dict] = []
+    for row in rows:
+        out.append(
+            {
+                "event": str(row[0] or ""),
+                "detail": row[1],
+                "at": row[2].isoformat().replace("+00:00", "Z") if row[2] else None,
+            }
+        )
+    return out
+
+
 def _public_view(record: dict) -> dict:
-    data = dict(record)
-    data.pop("file_path", None)
+    data = dict(record or {})
     data["status"] = _normalize_status(data.get("status"))
     data.setdefault("claim_id", None)
     data.setdefault("doc_id", None)
@@ -96,18 +122,19 @@ def _public_view(record: dict) -> dict:
     data.setdefault("source_ingest_id", None)
     data.setdefault("archived", False)
     data.setdefault("archived_at", None)
-    data["history"] = data.get("timeline", [])[:MAX_TIMELINE_EVENTS]
-    data["timeline"] = data["history"]
     data.setdefault("reference_hint", {})
+    timeline = data.get("timeline") or []
+    data["history"] = timeline[:MAX_TIMELINE_EVENTS]
+    data["timeline"] = data["history"]
     data["retry_available"] = (
-        data.get("attempts", 0) < data.get("max_attempts", DEFAULT_MAX_ATTEMPTS)
+        int(data.get("attempts", 0) or 0)
+        < int(data.get("max_attempts", DEFAULT_MAX_ATTEMPTS) or DEFAULT_MAX_ATTEMPTS)
         and data.get("status") != STATUS_MATCHED
     )
     return data
 
 
 def is_ready(record: dict) -> bool:
-    """Return True if the attachment record is ready for evidence matching."""
     return _normalize_status(record.get("status")) == STATUS_MATCHED
 
 
@@ -123,22 +150,34 @@ def create_attachment(
     citation_index: Optional[int] = None,
     target_id: Optional[str] = None,
     source_ingest_id: Optional[str] = None,
+    project_id: str = "default",
+    user_id: str = "local",
 ) -> dict:
     source_path = Path(local_path)
     if not source_path.exists():
         raise FileNotFoundError(f"Attachment source not found: {source_path}")
 
     attachment_id = str(uuid4())
-    dest_dir = _attachment_dir(attachment_id)
-    dest_dir.mkdir(parents=True, exist_ok=True)
     safe_name = _sanitize_filename(filename or source_path.name)
-    dest_path = dest_dir / safe_name
-    shutil.copy2(source_path, dest_path)
+    file_bytes = source_path.read_bytes()
+    digest = hashlib.sha256(file_bytes).hexdigest().lower()
 
-    size = size_bytes if size_bytes is not None else dest_path.stat().st_size
+    pdf_object_key = f"attachments/{attachment_id}/{digest}/{safe_name}"
+    object_store_s3.put_bytes(
+        pdf_object_key,
+        file_bytes,
+        content_type="application/pdf",
+    )
+
+    size = int(size_bytes if size_bytes is not None else len(file_bytes))
     now = _now()
-    record = {
+    rec = {
         "id": attachment_id,
+        "attachment_id": attachment_id,
+        "project_id": str(project_id or "default"),
+        "created_by_user_id": str(user_id or "local"),
+        "created_at": now,
+        "updated_at": now,
         "claim_id": claim_id,
         "doc_id": doc_id,
         "citation_index": citation_index,
@@ -146,31 +185,164 @@ def create_attachment(
         "source_ingest_id": source_ingest_id,
         "filename": safe_name,
         "size": size,
+        "size_bytes": size,
         "status": STATUS_PENDING,
         "error": None,
-        "uploaded_at": now,
-        "updated_at": now,
         "parsed_at": None,
         "archived": False,
         "archived_at": None,
-        "timeline": [],
-        "file_path": str(dest_path),
-        "reference_hint": reference_hint or {},
-        "claim_text": claim_text,
         "attempts": 0,
         "max_attempts": DEFAULT_MAX_ATTEMPTS,
+        "reference_hint": reference_hint or {},
+        "claim_text": claim_text,
+        "pdf_object_key": pdf_object_key,
         "artifacts": {},
     }
-    _log_event(record, "queued", "Attachment received")
-    return _write_record(record)
+
+    with connect(autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO attachments(
+                  attachment_id,
+                  project_id,
+                  created_by_user_id,
+                  claim_id,
+                  doc_id,
+                  citation_index,
+                  target_id,
+                  source_ingest_id,
+                  filename,
+                  size_bytes,
+                  status,
+                  error,
+                  parsed_at,
+                  archived,
+                  archived_at,
+                  attempts,
+                  max_attempts,
+                  reference_hint,
+                  claim_text,
+                  pdf_object_key,
+                  artifacts_json,
+                  created_at,
+                  updated_at
+                )
+                VALUES (
+                  %s, %s, %s, %s, %s, %s, %s, %s,
+                  %s, %s, %s, %s, NULL,
+                  false, NULL,
+                  0, %s,
+                  %s::jsonb, %s,
+                  %s,
+                  %s::jsonb,
+                  now(), now()
+                )
+                """,
+                (
+                    attachment_id,
+                    rec["project_id"],
+                    rec["created_by_user_id"],
+                    claim_id,
+                    doc_id,
+                    citation_index,
+                    target_id,
+                    source_ingest_id,
+                    safe_name,
+                    size,
+                    STATUS_PENDING,
+                    None,
+                    int(rec["max_attempts"]),
+                    json.dumps(rec["reference_hint"], ensure_ascii=True),
+                    claim_text,
+                    pdf_object_key,
+                    json.dumps({}, ensure_ascii=True),
+                ),
+            )
+
+    _log_event(
+        attachment_id=attachment_id,
+        project_id=rec["project_id"],
+        user_id=rec["created_by_user_id"],
+        event="queued",
+        detail="Attachment received",
+    )
+    return rec
 
 
 def get_attachment(attachment_id: str, public: bool = False) -> Optional[dict]:
-    meta_path = _metadata_path(attachment_id)
-    if not meta_path.exists():
+    aid = str(attachment_id or "").strip()
+    if not aid:
         return None
-    record = _load_record(meta_path)
-    return _public_view(record) if public else record
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                  attachment_id,
+                  project_id,
+                  created_by_user_id,
+                  created_at,
+                  updated_at,
+                  claim_id,
+                  doc_id,
+                  citation_index,
+                  target_id,
+                  source_ingest_id,
+                  filename,
+                  size_bytes,
+                  status,
+                  error,
+                  parsed_at,
+                  archived,
+                  archived_at,
+                  attempts,
+                  max_attempts,
+                  reference_hint,
+                  claim_text,
+                  pdf_object_key,
+                  artifacts_json
+                FROM attachments
+                WHERE attachment_id=%s
+                """,
+                (aid,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+
+    artifacts = row[22] if isinstance(row[22], dict) else json.loads(row[22] or "{}")
+    ref_hint = row[19] if isinstance(row[19], dict) else json.loads(row[19] or "{}")
+    timeline = _fetch_events(attachment_id=aid)
+
+    rec = {
+        "id": row[0],
+        "attachment_id": row[0],
+        "project_id": row[1],
+        "created_by_user_id": row[2],
+        "created_at": row[3].isoformat().replace("+00:00", "Z") if row[3] else None,
+        "updated_at": row[4].isoformat().replace("+00:00", "Z") if row[4] else None,
+        "claim_id": row[5],
+        "doc_id": row[6],
+        "citation_index": row[7],
+        "target_id": row[8],
+        "source_ingest_id": row[9],
+        "filename": row[10],
+        "size": int(row[11] or 0),
+        "status": row[12],
+        "error": row[13],
+        "parsed_at": row[14].isoformat().replace("+00:00", "Z") if row[14] else None,
+        "archived": bool(row[15]),
+        "archived_at": row[16].isoformat().replace("+00:00", "Z") if row[16] else None,
+        "attempts": int(row[17] or 0),
+        "max_attempts": int(row[18] or DEFAULT_MAX_ATTEMPTS),
+        "reference_hint": ref_hint,
+        "claim_text": row[20],
+        "pdf_object_key": row[21],
+        "artifacts": artifacts,
+        "timeline": timeline,
+    }
+    return _public_view(rec) if public else rec
 
 
 def list_attachments(
@@ -179,36 +351,61 @@ def list_attachments(
     archived: Optional[bool] = False,
     public: bool = False,
 ) -> List[dict]:
-    records: List[dict] = []
-    for meta_path in _root().glob("*/metadata.json"):
-        record = _load_record(meta_path)
-        if claim_id and record.get("claim_id") != claim_id:
-            continue
-        if archived is not None and bool(record.get("archived", False)) != archived:
-            continue
-        records.append(_public_view(record) if public else record)
-    records.sort(key=lambda rec: rec.get("uploaded_at", ""), reverse=True)
-    return records
+    where = []
+    params: list = []
+    if claim_id:
+        where.append("claim_id=%s")
+        params.append(str(claim_id))
+    if archived is not None:
+        where.append("archived=%s")
+        params.append(bool(archived))
+    clause = ("WHERE " + " AND ".join(where)) if where else ""
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT attachment_id
+                FROM attachments
+                {clause}
+                ORDER BY created_at DESC
+                """,
+                tuple(params),
+            )
+            rows = cur.fetchall() or []
+    out: list[dict] = []
+    for (aid,) in rows:
+        rec = get_attachment(str(aid), public=public)
+        if rec:
+            out.append(rec)
+    return out
 
 
 def set_archived(attachment_id: str, *, archived: bool) -> dict:
-    record = get_attachment(attachment_id)
-    if record is None:
+    rec = get_attachment(attachment_id)
+    if rec is None:
         raise AttachmentNotFound(f"Attachment {attachment_id} not found")
+    aid = str(attachment_id)
+    with connect(autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE attachments
+                   SET archived=%s,
+                       archived_at=CASE WHEN %s THEN now() ELSE NULL END,
+                       updated_at=now()
+                 WHERE attachment_id=%s
+                """,
+                (bool(archived), bool(archived), aid),
+            )
 
-    current = bool(record.get("archived", False))
-    if current == archived:
-        return record
-
-    record["archived"] = archived
-    record["archived_at"] = _now() if archived else None
-    record["updated_at"] = _now()
     _log_event(
-        record,
-        "archived" if archived else "unarchived",
-        "Archived" if archived else "Restored",
+        attachment_id=aid,
+        project_id=str(rec.get("project_id") or "default"),
+        user_id=str(rec.get("created_by_user_id") or "local"),
+        event="archive" if archived else "unarchive",
+        detail=None,
     )
-    return _write_record(record)
+    return get_attachment(aid) or rec
 
 
 def set_placement(
@@ -219,23 +416,38 @@ def set_placement(
     citation_index: Optional[int],
     target_id: Optional[str],
 ) -> dict:
-    record = get_attachment(attachment_id)
-    if record is None:
+    rec = get_attachment(attachment_id)
+    if rec is None:
         raise AttachmentNotFound(f"Attachment {attachment_id} not found")
-
-    record["claim_id"] = claim_id
-    record["doc_id"] = doc_id
-    record["citation_index"] = citation_index
-    record["target_id"] = target_id
-    record["updated_at"] = _now()
+    aid = str(attachment_id)
+    with connect(autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE attachments
+                   SET claim_id=%s,
+                       doc_id=%s,
+                       citation_index=%s,
+                       target_id=%s,
+                       updated_at=now()
+                 WHERE attachment_id=%s
+                """,
+                (claim_id, doc_id, citation_index, target_id, aid),
+            )
 
     detail = (
         f"claim_id={claim_id or 'null'} doc_id={doc_id or 'null'} "
         f"citation_index={citation_index if citation_index is not None else 'null'} "
         f"target_id={target_id or 'null'}"
     )
-    _log_event(record, "placement", detail)
-    return _write_record(record)
+    _log_event(
+        attachment_id=aid,
+        project_id=str(rec.get("project_id") or "default"),
+        user_id=str(rec.get("created_by_user_id") or "local"),
+        event="placement",
+        detail=detail,
+    )
+    return get_attachment(aid) or rec
 
 
 def update_attachment(
@@ -249,22 +461,66 @@ def update_attachment(
     artifacts: Optional[dict] = None,
     **extra_fields,
 ) -> dict:
-    record = get_attachment(attachment_id)
-    if record is None:
+    rec = get_attachment(attachment_id)
+    if rec is None:
         raise AttachmentNotFound(f"Attachment {attachment_id} not found")
-    if status:
-        record["status"] = status
+
+    aid = str(attachment_id)
+    updates: dict[str, object] = {}
+    if status is not None:
+        updates["status"] = str(status)
     if error is not None:
-        record["error"] = error
+        updates["error"] = error
     if parsed_at is not None:
-        record["parsed_at"] = parsed_at
-    if artifacts:
-        record["artifacts"] = artifacts
-    record.update(extra_fields)
-    record["updated_at"] = _now()
+        updates["parsed_at"] = parsed_at
+    if artifacts is not None:
+        updates["artifacts_json"] = json.dumps(artifacts, ensure_ascii=True)
+
+    allowed = {
+        "source_ingest_id",
+        "claim_id",
+        "doc_id",
+        "citation_index",
+        "target_id",
+        "attempts",
+        "max_attempts",
+    }
+    for k, v in (extra_fields or {}).items():
+        if k in allowed:
+            updates[k] = v
+
+    if updates:
+        cols = []
+        params = []
+        for k, v in updates.items():
+            if k == "artifacts_json":
+                cols.append("artifacts_json=%s::jsonb")
+                params.append(v)
+            elif k == "reference_hint":
+                cols.append("reference_hint=%s::jsonb")
+                params.append(json.dumps(v, ensure_ascii=True))
+            else:
+                cols.append(f"{k}=%s")
+                params.append(v)
+        cols.append("updated_at=now()")
+        params.append(aid)
+        with connect(autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"UPDATE attachments SET {', '.join(cols)} WHERE attachment_id=%s",
+                    tuple(params),
+                )
+
     if timeline_event:
-        _log_event(record, timeline_event, timeline_detail)
-    return _write_record(record)
+        _log_event(
+            attachment_id=aid,
+            project_id=str(rec.get("project_id") or "default"),
+            user_id=str(rec.get("created_by_user_id") or "local"),
+            event=str(timeline_event),
+            detail=timeline_detail,
+        )
+    clear_sentence_cache(aid)
+    return get_attachment(aid) or rec
 
 
 def save_artifacts(
@@ -274,34 +530,120 @@ def save_artifacts(
     tei_json: dict,
     sentences: Iterable[dict],
 ) -> dict:
-    record = get_attachment(attachment_id)
-    if record is None:
+    rec = get_attachment(attachment_id)
+    if rec is None:
         raise AttachmentNotFound(f"Attachment {attachment_id} not found")
-    dest_dir = _attachment_dir(attachment_id)
-    tei_xml_path = dest_dir / "tei.xml"
-    tei_json_path = dest_dir / "tei.json"
-    sentences_path = dest_dir / "sentences.ndjson"
 
-    tei_xml_path.write_text(tei_xml, encoding="utf-8")
-    tei_json_path.write_text(json.dumps(tei_json, indent=2), encoding="utf-8")
-    with sentences_path.open("w", encoding="utf-8") as handle:
-        for sentence in sentences:
-            handle.write(json.dumps(sentence) + "\n")
+    aid = str(attachment_id)
+    pid = str(rec.get("project_id") or "default")
+    uid = str(rec.get("created_by_user_id") or "local")
 
-    return {
-        "tei_xml": str(tei_xml_path),
-        "tei_json": str(tei_json_path),
-        "sentences": str(sentences_path),
+    tei_xml_key = f"attachments/{aid}/tei.xml"
+    tei_json_key = f"attachments/{aid}/tei.json"
+    sentences_key = f"attachments/{aid}/sentences.ndjson"
+
+    tei_xml_bytes = (tei_xml or "").encode("utf-8", errors="ignore")
+    tei_json_bytes = json.dumps(
+        tei_json or {},
+        indent=2,
+        ensure_ascii=True,
+        sort_keys=True,
+    ).encode("utf-8")
+    lines: list[str] = []
+    for row in sentences:
+        if not isinstance(row, dict):
+            continue
+        lines.append(json.dumps(row, ensure_ascii=True, separators=(",", ":")))
+    sentences_bytes = ("\n".join(lines) + ("\n" if lines else "")).encode("utf-8")
+
+    object_store_s3.put_bytes(
+        tei_xml_key, tei_xml_bytes, content_type="application/xml"
+    )
+    object_store_s3.put_bytes(
+        tei_json_key,
+        tei_json_bytes,
+        content_type="application/json",
+    )
+    object_store_s3.put_bytes(
+        sentences_key,
+        sentences_bytes,
+        content_type="application/x-ndjson",
+    )
+
+    arts = {
+        "tei_xml": tei_xml_key,
+        "tei_json": tei_json_key,
+        "sentences": sentences_key,
     }
+    with connect(autocommit=True) as conn:
+        with conn.cursor() as cur:
+            for typ, key, blob, ctype in (
+                ("tei.xml", tei_xml_key, tei_xml_bytes, "application/xml"),
+                ("tei.json", tei_json_key, tei_json_bytes, "application/json"),
+                (
+                    "sentences.ndjson",
+                    sentences_key,
+                    sentences_bytes,
+                    "application/x-ndjson",
+                ),
+            ):
+                cur.execute(
+                    """
+                    INSERT INTO attachment_artifacts(
+                      artifact_id,
+                      attachment_id,
+                      project_id,
+                      created_by_user_id,
+                      artifact_type,
+                      object_key,
+                      bytes,
+                      content_type
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        str(uuid4()),
+                        aid,
+                        pid,
+                        uid,
+                        typ,
+                        key,
+                        int(len(blob)),
+                        ctype,
+                    ),
+                )
+
+            cur.execute(
+                """
+                UPDATE attachments
+                   SET artifacts_json=%s::jsonb,
+                       parsed_at=now(),
+                       updated_at=now()
+                 WHERE attachment_id=%s
+                """,
+                (json.dumps(arts, ensure_ascii=True), aid),
+            )
+
+    clear_sentence_cache(aid)
+    return arts
 
 
 def list_resumable(statuses: Optional[Iterable[str]] = None) -> List[dict]:
     wanted = set(statuses or {STATUS_PENDING, STATUS_CONVERTING, STATUS_PARSING})
-    return [
-        record
-        for record in list_attachments(public=False)
-        if _normalize_status(record.get("status")) in wanted
-    ]
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT attachment_id, status FROM attachments WHERE archived=false"
+            )
+            rows = cur.fetchall() or []
+    out: list[dict] = []
+    for aid, status in rows:
+        if _normalize_status(status) not in wanted:
+            continue
+        rec = get_attachment(str(aid), public=False)
+        if rec:
+            out.append(rec)
+    return out
 
 
 def mark_converting(attachment_id: str, attempt: int) -> dict:
@@ -310,7 +652,7 @@ def mark_converting(attachment_id: str, attempt: int) -> dict:
         status=STATUS_CONVERTING,
         timeline_event="converting",
         timeline_detail=f"Attempt {attempt}",
-        attempts=attempt,
+        attempts=int(attempt),
     )
 
 
@@ -320,7 +662,7 @@ def mark_parsing(attachment_id: str, attempt: int) -> dict:
         status=STATUS_PARSING,
         timeline_event="parsing",
         timeline_detail=f"Attempt {attempt}",
-        attempts=attempt,
+        attempts=int(attempt),
     )
 
 
@@ -351,8 +693,8 @@ def mark_error(attachment_id: str, message: str) -> dict:
 
 
 def reset_for_retry(attachment_id: str) -> dict:
-    record = get_attachment(attachment_id)
-    if record is None:
+    rec = get_attachment(attachment_id)
+    if rec is None:
         raise AttachmentNotFound(f"Attachment {attachment_id} not found")
     return update_attachment(
         attachment_id,
@@ -374,42 +716,69 @@ def public_claim_status(claim_id: str) -> List[dict]:
 def load_sentences_for_attachment(
     attachment_id: str, *, use_cache: bool = True
 ) -> List[dict]:
-    """Load persisted sentence rows for an attachment."""
-    record = get_attachment(attachment_id)
-    if record is None:
+    rec = get_attachment(attachment_id)
+    if rec is None:
         raise AttachmentNotFound(f"Attachment {attachment_id} not found")
-    if not is_ready(record):
+    if not is_ready(rec):
         raise RuntimeError(
-            f"Attachment {attachment_id} is not ready (status={record.get('status')})"
+            f"Attachment {attachment_id} is not ready (status={rec.get('status')})"
         )
-    artifacts = record.get("artifacts") or {}
-    sentences_path = artifacts.get("sentences")
-    if not sentences_path:
-        raise FileNotFoundError(
-            f"Attachment {attachment_id} is missing persisted sentences"
-        )
-    path = Path(sentences_path)
-    if not path.exists():
-        raise FileNotFoundError(path)
-    mtime = path.stat().st_mtime
+    artifacts = rec.get("artifacts") or {}
+    key = str(artifacts.get("sentences") or "").strip()
+    if not key:
+        raise FileNotFoundError(f"Attachment {attachment_id} is missing sentences")
+
     if use_cache:
-        cached = _SENTENCE_CACHE.get(attachment_id)
-        if cached and cached[0] == mtime:
-            return [dict(row) for row in cached[1]]
-    rows: List[dict] = []
-    with path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if not line:
-                continue
-            rows.append(json.loads(line))
-    _SENTENCE_CACHE[attachment_id] = (mtime, rows)
-    return [dict(row) for row in rows]
+        cached = _SENTENCE_CACHE.get(str(attachment_id))
+        if cached and cached[0] == key:
+            return [dict(x) for x in cached[1]]
+
+    blob = object_store_s3.get_bytes(key)
+    rows: list[dict] = []
+    for line in blob.decode("utf-8", errors="ignore").splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        try:
+            rows.append(json.loads(s))
+        except Exception:
+            continue
+    _SENTENCE_CACHE[str(attachment_id)] = (key, rows)
+    return [dict(x) for x in rows]
 
 
 def clear_sentence_cache(attachment_id: Optional[str] = None) -> None:
-    """Invalidate the in-memory sentence cache."""
     if attachment_id is None:
         _SENTENCE_CACHE.clear()
         return
-    _SENTENCE_CACHE.pop(attachment_id, None)
+    _SENTENCE_CACHE.pop(str(attachment_id), None)
+
+
+__all__ = [
+    "AttachmentNotFound",
+    "STATUS_PENDING",
+    "STATUS_CONVERTING",
+    "STATUS_PARSING",
+    "STATUS_MATCHED",
+    "STATUS_READY",
+    "STATUS_ERROR",
+    "create_attachment",
+    "get_attachment",
+    "list_attachments",
+    "set_archived",
+    "set_placement",
+    "update_attachment",
+    "save_artifacts",
+    "list_resumable",
+    "mark_converting",
+    "mark_parsing",
+    "mark_matched",
+    "mark_ready",
+    "mark_error",
+    "reset_for_retry",
+    "public_status",
+    "public_claim_status",
+    "load_sentences_for_attachment",
+    "clear_sentence_cache",
+    "is_ready",
+]

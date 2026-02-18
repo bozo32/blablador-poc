@@ -1,10 +1,6 @@
-import json
 from pathlib import Path
 
-import pytest
-
 from backend import attachment_pipeline, attachment_store
-from backend.settings import settings
 
 
 TEI_STUB = (
@@ -12,12 +8,6 @@ TEI_STUB = (
     "<text><body><p><s xml:id='s1'>Sentence one.</s>"
     "<s xml:id='s2'>Sentence two.</s></p></body></text></TEI>"
 )
-
-
-@pytest.fixture(autouse=True)
-def attachment_dir(tmp_path):
-    settings.ATTACHMENT_DIR = tmp_path / "attachments"
-    yield
 
 
 def _make_source(tmp_path: Path) -> Path:
@@ -53,8 +43,7 @@ def test_process_attachment_creates_artifacts(tmp_path, monkeypatch):
     assert updated["status"] == attachment_store.STATUS_MATCHED
     artifacts = updated["artifacts"]
     assert artifacts
-    sentences_path = Path(artifacts["sentences"])
-    rows = [json.loads(line) for line in sentences_path.read_text().splitlines()]
+    rows = attachment_store.load_sentences_for_attachment(record["id"], use_cache=False)
     assert rows[0]["embedding"] == [1.0]
     assert updated["claim_text"] == "Pipeline claim text"
     public = attachment_store.public_status(record["id"])

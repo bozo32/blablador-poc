@@ -1,15 +1,7 @@
 from pathlib import Path
 
-import pytest
-
 from backend import attachment_store
-from backend.settings import settings
-
-
-@pytest.fixture(autouse=True)
-def attachment_dir(tmp_path):
-    settings.ATTACHMENT_DIR = tmp_path / "attachments"
-    yield
+from backend.object_store import s3 as object_store_s3
 
 
 def _make_source(tmp_path: Path, name: str = "sample.pdf") -> Path:
@@ -30,7 +22,8 @@ def test_create_attachment_persists_metadata(tmp_path):
     )
 
     assert record["status"] == attachment_store.STATUS_PENDING
-    assert Path(record["file_path"]).exists()
+    assert record.get("pdf_object_key")
+    assert object_store_s3.exists(str(record["pdf_object_key"]))
 
     public = attachment_store.public_status(record["id"])
     assert public is not None

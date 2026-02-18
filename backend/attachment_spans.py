@@ -8,12 +8,12 @@ This module builds a deterministic index over a Grobid TEI body so the API can:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from lxml import etree
 
 from backend import attachment_store, extraction
+from backend.object_store import s3 as object_store_s3
 
 
 TEI_NS = extraction.NS
@@ -80,7 +80,7 @@ class _Paragraph:
     sentence_ids: Tuple[str, ...]
 
 
-_INDEX_CACHE: Dict[str, Tuple[float, "AttachmentSpanIndex"]] = {}
+_INDEX_CACHE: Dict[str, Tuple[str, "AttachmentSpanIndex"]] = {}
 
 
 class AttachmentSpanIndex:
@@ -117,24 +117,19 @@ class AttachmentSpanIndex:
             )
 
         artifacts = record.get("artifacts") or {}
-        tei_path = artifacts.get("tei_xml")
-        if not tei_path:
+        tei_key = str(artifacts.get("tei_xml") or "").strip()
+        if not tei_key:
             raise FileNotFoundError(
                 f"Attachment {attachment_id} is missing persisted TEI XML"
             )
-        path = Path(str(tei_path))
-        if not path.exists():
-            raise FileNotFoundError(path)
-
-        mtime = path.stat().st_mtime
         if use_cache:
             cached = _INDEX_CACHE.get(attachment_id)
-            if cached and cached[0] == mtime:
+            if cached and cached[0] == tei_key:
                 return cached[1]
 
-        tei_xml = path.read_text(encoding="utf-8")
-        index = cls._build_from_tei_xml(attachment_id, tei_xml)
-        _INDEX_CACHE[attachment_id] = (mtime, index)
+        raw = object_store_s3.get_bytes(tei_key)
+        index = cls._build_from_tei_xml(attachment_id, raw)
+        _INDEX_CACHE[attachment_id] = (tei_key, index)
         return index
 
     @staticmethod

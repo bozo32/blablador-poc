@@ -49,15 +49,17 @@ def _maybe_ingest_matched_attachment(record: dict) -> None:
     if str(record.get("source_ingest_id") or "").strip():
         return
 
+    pdf_object_key = str(record.get("pdf_object_key") or "").strip()
+    if not pdf_object_key:
+        return
     try:
-        pdf_path = Path(str(record.get("file_path") or ""))
+        file_bytes = object_store_s3.get_bytes(pdf_object_key)
     except Exception:
+        logger.exception("Unable to download attachment PDF from object store")
         return
-    if not pdf_path.exists():
-        return
-
-    file_bytes = pdf_path.read_bytes()
-    filename = str(record.get("filename") or pdf_path.name).strip() or pdf_path.name
+    filename = (
+        str(record.get("filename") or "attachment.pdf").strip() or "attachment.pdf"
+    )
     sha256 = hashlib.sha256(file_bytes).hexdigest().lower()
     size_bytes = int(len(file_bytes))
 
@@ -128,15 +130,15 @@ def _maybe_ingest_matched_attachment(record: dict) -> None:
 
     # Reuse TEI artifacts produced by attachment processing.
     artifacts = record.get("artifacts") or {}
-    tei_xml_path = artifacts.get("tei_xml")
-    tei_json_path = artifacts.get("tei_json")
-    if tei_xml_path and tei_json_path:
+    tei_xml_key = str(artifacts.get("tei_xml") or "").strip()
+    tei_json_key = str(artifacts.get("tei_json") or "").strip()
+    if tei_xml_key and tei_json_key:
         try:
-            tei_xml = Path(str(tei_xml_path)).read_text(
-                encoding="utf-8", errors="ignore"
+            tei_xml = object_store_s3.get_bytes(tei_xml_key).decode(
+                "utf-8", errors="ignore"
             )
             extraction_payload = json.loads(
-                Path(str(tei_json_path)).read_text(encoding="utf-8")
+                object_store_s3.get_bytes(tei_json_key).decode("utf-8")
             )
 
             attempt_id, _state = create_or_get_attempt(
@@ -380,8 +382,21 @@ def process_attachment(
         attachment_store.mark_converting(attachment_id, attempt)
         attachment_store.mark_parsing(attachment_id, attempt)
         try:
-            pdf_path = Path(record["file_path"])
-            tei_xml = grobid_client.extract_tei(pdf_path)
+            pdf_object_key = str(record.get("pdf_object_key") or "").strip()
+            if not pdf_object_key:
+                raise RuntimeError("Attachment is missing pdf_object_key")
+
+            tmp_pdf_path = None
+            try:
+                tmp_pdf_path = Path(f"/tmp/attach-{attachment_id}.pdf")
+                tmp_pdf_path.write_bytes(object_store_s3.get_bytes(pdf_object_key))
+                tei_xml = grobid_client.extract_tei(tmp_pdf_path)
+            finally:
+                try:
+                    if tmp_pdf_path and tmp_pdf_path.exists():
+                        tmp_pdf_path.unlink()
+                except Exception:
+                    pass
             tei_json = extraction.parse_tei(tei_xml)
             sentences = _extract_sentences(tei_xml)
             texts = [sentence["text"] for sentence in sentences]

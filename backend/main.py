@@ -41,6 +41,7 @@ from backend import (
     citation_context,
     citation_graph,
     extraction,
+    fallback_text,
     evidence_selection_store,
     grobid_client,
     judgment_store,
@@ -85,13 +86,20 @@ from backend.spine.works import upsert_work_from_pdf
 from backend.spine.attempts import (
     create_or_get_attempt,
     get_latest_attempt_for_work,
+    merge_attempt_quality_json,
+    mark_attempt_cancelled,
     mark_attempt_failed,
     mark_attempt_partial,
     mark_attempt_running,
     mark_attempt_succeeded,
 )
-from backend.spine.artifacts import create_artifact
+from backend.spine.artifacts import (
+    create_artifact,
+    get_artifact_for_attempt,
+    list_artifacts_for_attempt,
+)
 from backend.spine.jobs import create_job, set_job_state
+from backend.spine.jobs import list_jobs_for_attempt
 from backend.spine.documents import (
     ensure_project_document,
     get_document_version_by_sha256,
@@ -120,6 +128,8 @@ from backend.reference_retrieval import build_retrieval_dossier
 from backend.graph_store import GraphStore
 from backend.span_graph_store import SpanGraphStore
 from backend.ingest_pipeline import IngestWorkerPool
+from backend.spine.extraction_pool import SpineExtractionPool
+from backend import fallback_body
 from backend import project_io
 
 # Configure logging.
@@ -147,6 +157,13 @@ ingest_pool = IngestWorkerPool(
     graph_db_path=app_settings.GRAPH_DB_PATH,
     max_workers=app_settings.INGEST_PIPELINE_WORKERS,
     max_queue=app_settings.INGEST_PIPELINE_QUEUE_MAX,
+)
+
+spine_extract_pool = SpineExtractionPool(
+    max_workers=max(1, int(getattr(app_settings, "INGEST_PIPELINE_WORKERS", 1) or 1)),
+    max_queue=max(
+        16, int(getattr(app_settings, "INGEST_PIPELINE_QUEUE_MAX", 64) or 64)
+    ),
 )
 
 # Setup pipeline via registry and settings
@@ -2156,6 +2173,36 @@ def extract_ingested_document(
             except Exception:
                 pass
 
+        # Spine mode: enqueue extraction work and return quickly.
+        if _spine_mode() == "spine":
+            if attempt_id:
+                try:
+                    # Don't re-enqueue if already running.
+                    attempt = get_latest_attempt_for_work(
+                        project_id=project_id,
+                        work_id=work_id,
+                        kind="primary",
+                    )
+                    if attempt and str(attempt.get("state") or "") in {"running"}:
+                        return {
+                            "document_id": doc_id,
+                            "extraction": document.get("extraction"),
+                        }
+                except Exception:
+                    pass
+
+                job_id = spine_extract_pool.enqueue(
+                    doc_id=work_id,
+                    project_id=project_id,
+                    user_id=user_id,
+                    force_fallback=False,
+                )
+                try:
+                    mark_attempt_running(attempt_id)
+                except Exception:
+                    pass
+            return {"document_id": doc_id, "extraction": {"status": "running"}}
+
         if attempt_id:
             try:
                 mark_attempt_running(attempt_id)
@@ -2182,42 +2229,163 @@ def extract_ingested_document(
         pdf_path = tmp_pdf_path
 
         mode = "fulltext"
+        quality_patch: dict = {}
+        tei_xml: Optional[str] = None
+        extraction_payload: Optional[dict] = None
         try:
             try:
-                tei_xml = grobid_client.extract_tei_fulltext(pdf_path)
-            except grobid_client.GrobidError:
-                mode = "header+references"
-                header_xml = grobid_client.extract_tei_header(pdf_path)
-                refs_xml = grobid_client.extract_tei_references(pdf_path)
-                tei_xml = grobid_client.merge_header_and_references_tei(
-                    header_xml=header_xml,
-                    references_xml=refs_xml,
-                )
+                try:
+                    tei_xml = grobid_client.extract_tei_fulltext(pdf_path)
+                except grobid_client.GrobidError:
+                    header_xml = None
+                    try:
+                        header_xml = grobid_client.extract_tei_header(pdf_path)
+                    except grobid_client.GrobidError:
+                        quality_patch = {"primary": {"header_failed": True}}
+                        header_xml = None
+
+                    refs_xml = grobid_client.extract_tei_references(pdf_path)
+                    if header_xml:
+                        mode = "header+references"
+                        tei_xml = grobid_client.merge_header_and_references_tei(
+                            header_xml=header_xml,
+                            references_xml=refs_xml,
+                        )
+                    else:
+                        mode = "refs-only"
+                        quality_patch = {
+                            **(quality_patch or {}),
+                            "primary": {
+                                **((quality_patch or {}).get("primary") or {}),
+                                "refs_only": True,
+                            },
+                        }
+                        tei_xml = refs_xml
+
+                if tei_xml is None:
+                    raise grobid_client.GrobidError("GROBID returned no TEI")
+                extraction_payload = extraction.parse_tei(tei_xml)
+            except grobid_client.GrobidError as exc:
+                # Deterministic fallback: text-layer extraction to produce
+                # inspectable artifacts in the spine.
+                pages = fallback_text.extract_fallback_pages(Path(pdf_path))
+                pages_jsonl = fallback_text.pages_to_jsonl(pages)
+                body_txt = fallback_text.pages_to_body_text(pages)
+                refs_json = b"[]\n"
+                quality_patch = {
+                    **(quality_patch or {}),
+                    **fallback_text.fallback_quality(pages),
+                }
+
+                if attempt_id:
+                    fb_pages_key = (
+                        f"extract/{work_id}/attempts/{attempt_id}/fallback/pages.jsonl"
+                    )
+                    object_store_s3.put_bytes(
+                        fb_pages_key,
+                        pages_jsonl,
+                        content_type="application/x-ndjson",
+                    )
+                    create_artifact(
+                        project_id,
+                        user_id,
+                        attempt_id,
+                        "fallback.pages.jsonl",
+                        fb_pages_key,
+                        len(pages_jsonl),
+                        "application/x-ndjson",
+                    )
+
+                    fb_body_key = (
+                        f"extract/{work_id}/attempts/{attempt_id}/fallback/body.txt"
+                    )
+                    object_store_s3.put_bytes(
+                        fb_body_key,
+                        body_txt,
+                        content_type="text/plain",
+                    )
+                    create_artifact(
+                        project_id,
+                        user_id,
+                        attempt_id,
+                        "fallback.body.txt",
+                        fb_body_key,
+                        len(body_txt),
+                        "text/plain",
+                    )
+
+                    fb_refs_key = (
+                        f"extract/{work_id}/attempts/{attempt_id}/fallback/refs.json"
+                    )
+                    object_store_s3.put_bytes(
+                        fb_refs_key,
+                        refs_json,
+                        content_type="application/json",
+                    )
+                    create_artifact(
+                        project_id,
+                        user_id,
+                        attempt_id,
+                        "fallback.refs.json",
+                        fb_refs_key,
+                        len(refs_json),
+                        "application/json",
+                    )
+
+                # Minimal extraction payload so the API remains usable.
+                extraction_payload = {
+                    "extraction_version": "fallback-v1",
+                    "metadata": {
+                        "title": None,
+                        "authors": [],
+                        "year": None,
+                        "journal": None,
+                        "container": None,
+                        "doi": None,
+                        "url": None,
+                    },
+                    "citations": [],
+                    "references": [],
+                    "fallback": {"error": str(exc)},
+                }
+                mode = "fallback"
         finally:
             cleanup_temp_path(tmp_pdf_path)
-        extraction_payload = extraction.parse_tei(tei_xml)
 
         if attempt_id:
-            tei_key = f"extract/{work_id}/attempts/{attempt_id}/primary/tei.xml"
-            tei_bytes = tei_xml.encode("utf-8", errors="ignore")
-            object_store_s3.put_bytes(
-                tei_key, tei_bytes, content_type="application/xml"
-            )
-            create_artifact(
-                project_id,
-                user_id,
-                attempt_id,
-                "tei.xml",
-                tei_key,
-                len(tei_bytes),
-                "application/xml",
-            )
+            if quality_patch:
+                try:
+                    merge_attempt_quality_json(str(attempt_id), quality_patch)
+                except Exception:
+                    pass
+
+            if tei_xml is not None and mode in {
+                "fulltext",
+                "header+references",
+                "refs-only",
+            }:
+                tei_key = f"extract/{work_id}/attempts/{attempt_id}/primary/tei.xml"
+                tei_bytes = tei_xml.encode("utf-8", errors="ignore")
+                object_store_s3.put_bytes(
+                    tei_key,
+                    tei_bytes,
+                    content_type="application/xml",
+                )
+                create_artifact(
+                    project_id,
+                    user_id,
+                    attempt_id,
+                    "tei.xml",
+                    tei_key,
+                    len(tei_bytes),
+                    "application/xml",
+                )
 
             extraction_key = (
                 f"extract/{work_id}/attempts/{attempt_id}/primary/extraction.json"
             )
             extraction_bytes = json.dumps(
-                extraction_payload,
+                extraction_payload or {},
                 sort_keys=True,
                 ensure_ascii=True,
                 separators=(",", ":"),
@@ -2239,7 +2407,24 @@ def extract_ingested_document(
 
         stored = None
         if _legacy_ingestion_enabled():
-            stored = store_extraction(doc_id, tei_xml, extraction_payload)
+            if tei_xml is not None:
+                stored = store_extraction(doc_id, tei_xml, extraction_payload)
+            else:
+                try:
+                    update_ingested_document(
+                        doc_id,
+                        {
+                            "extraction": {
+                                "status": "complete",
+                                "extracted_at": datetime.now(timezone.utc)
+                                .isoformat()
+                                .replace("+00:00", "Z"),
+                                "data": extraction_payload,
+                            }
+                        },
+                    )
+                except Exception:
+                    pass
             try:
                 update_ingested_document(
                     doc_id,
@@ -2256,13 +2441,16 @@ def extract_ingested_document(
                 )
             except Exception:
                 pass
-        try:
-            graph_store.index_extraction(
-                ingest_meta=(stored or {"id": str(doc_id), "project_id": project_id}),
-                extraction_data=extraction_payload,
-            )
-        except Exception:
-            logger.exception("Graph index failed for extraction")
+        if extraction_payload is not None:
+            try:
+                graph_store.index_extraction(
+                    ingest_meta=(
+                        stored or {"id": str(doc_id), "project_id": project_id}
+                    ),
+                    extraction_data=extraction_payload,
+                )
+            except Exception:
+                logger.exception("Graph index failed for extraction")
 
         if attempt_id:
             try:
@@ -2334,6 +2522,66 @@ def extract_ingested_document(
     }
 
 
+@app.post("/ingest/{doc_id}/fallback-extract")
+def fallback_extract_ingested_document(
+    doc_id: str,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
+    """Force a fallback extraction attempt (spine mode only)."""
+    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
+    user_id = str(app_settings.DEFAULT_USER_ID)
+    if _spine_mode() != "spine":
+        raise HTTPException(
+            status_code=404, detail="Fallback extract only supported in spine mode"
+        )
+
+    work_id = str(doc_id or "").strip()
+    if not work_id:
+        raise HTTPException(status_code=400, detail="doc_id is required")
+
+    job_id = spine_extract_pool.enqueue(
+        doc_id=work_id,
+        project_id=project_id,
+        user_id=user_id,
+        force_fallback=True,
+    )
+    if not job_id:
+        raise HTTPException(
+            status_code=503, detail="Unable to enqueue fallback extraction"
+        )
+    return {"document_id": work_id, "job_id": job_id}
+
+
+@app.post("/ingest/{doc_id}/extract/cancel")
+def cancel_extraction(
+    doc_id: str,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
+    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
+    if _spine_mode() != "spine":
+        raise HTTPException(
+            status_code=404, detail="Cancellation only supported in spine mode"
+        )
+    wid = str(doc_id or "").strip()
+    if not wid:
+        raise HTTPException(status_code=400, detail="doc_id is required")
+
+    attempt = get_latest_attempt_for_work(
+        project_id=project_id, work_id=wid, kind="primary"
+    )
+    if not attempt or not attempt.get("attempt_id"):
+        raise HTTPException(status_code=404, detail="No attempt found")
+    try:
+        mark_attempt_cancelled(str(attempt["attempt_id"]))
+    except Exception as exc:
+        raise HTTPException(status_code=409, detail=f"Cancel failed: {exc}")
+    return {
+        "document_id": wid,
+        "attempt_id": str(attempt["attempt_id"]),
+        "state": "cancelled",
+    }
+
+
 @app.get("/ingest/{doc_id}/extraction", response_model=schemas.ExtractionResult)
 def get_ingested_extraction(
     doc_id: str,
@@ -2364,6 +2612,55 @@ def get_ingested_extraction(
     raise HTTPException(status_code=404, detail="Document not found")
 
 
+@app.get("/ingest/{doc_id}/spine")
+def get_ingest_spine_debug(
+    doc_id: str,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
+    """Debug/verification view of spine attempt + artifacts.
+
+    This is intentionally separate from schemas.IngestedDocument to keep the
+    UI payload stable while we iterate on robustness + fallback contracts.
+    """
+    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
+    wid = str(doc_id or "").strip()
+    if not wid:
+        raise HTTPException(status_code=400, detail="doc_id is required")
+    if not _spine_reads_enabled():
+        raise HTTPException(status_code=404, detail="Spine reads disabled")
+
+    doc = build_ingested_document_from_spine(
+        work_id=wid,
+        project_id=project_id,
+        include_extraction_data=False,
+    )
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    attempt = get_latest_attempt_for_work(
+        project_id=project_id, work_id=wid, kind="primary"
+    )
+    artifacts = []
+    jobs = []
+    if attempt and attempt.get("attempt_id"):
+        try:
+            artifacts = list_artifacts_for_attempt(str(attempt["attempt_id"]))
+        except Exception:
+            artifacts = []
+        try:
+            jobs = list_jobs_for_attempt(str(attempt["attempt_id"]), limit=50)
+        except Exception:
+            jobs = []
+
+    return {
+        "work_id": wid,
+        "project_id": project_id,
+        "attempt": attempt,
+        "artifacts": artifacts,
+        "jobs": jobs,
+    }
+
+
 @app.get("/ingest/{doc_id}/body", response_model=schemas.DocumentBodyResponse)
 def get_ingested_body(
     doc_id: str,
@@ -2380,16 +2677,52 @@ def get_ingested_body(
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    if not tei_xml:
-        raise HTTPException(status_code=404, detail="TEI XML not found")
+    tei_payload: Optional[dict] = None
+    if tei_xml:
+        tei_payload = tei_body.build_document_body(tei_xml)
+        # If TEI exists but yields an empty body, prefer fallback artifacts when
+        # available (common for refs-only or structure-poor parses).
+        if tei_payload.get("paragraphs"):
+            return {"document_id": doc_id, **tei_payload}
 
-    payload = tei_body.build_document_body(tei_xml)
-    return {"document_id": doc_id, **payload}
+    # Fallback body from spine artifact.
+    if _spine_reads_enabled():
+        attempt = get_latest_attempt_for_work(
+            project_id=project_id,
+            work_id=str(doc_id),
+            kind="primary",
+        )
+        if attempt and attempt.get("attempt_id"):
+            art = None
+            try:
+                art = get_artifact_for_attempt(
+                    attempt_id=str(attempt["attempt_id"]),
+                    artifact_type="fallback.body.txt",
+                )
+            except Exception:
+                art = None
+            if art and art.get("object_key"):
+                try:
+                    raw = object_store_s3.get_bytes(str(art["object_key"]))
+                    text = raw.decode("utf-8", errors="ignore")
+                    return fallback_body.build_body_from_plaintext(
+                        document_id=str(doc_id),
+                        text=text,
+                    )
+                except Exception:
+                    pass
+
+    # TEI exists but was empty and no fallback artifact was found.
+    if tei_payload is not None:
+        return {"document_id": doc_id, **tei_payload}
+
+    raise HTTPException(status_code=404, detail="TEI XML not found")
 
 
 @app.post("/ingest/{doc_id}/resolve", response_model=schemas.ResolutionResponse)
 def resolve_ingested_references(
     doc_id: str,
+    force: bool = Query(False),
     x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
 ):
     project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
@@ -2417,7 +2750,20 @@ def resolve_ingested_references(
     work_id = str(spine_meta.get("work_id") or "").strip() or work_id_from_doc_id(
         doc_id
     )
-    attempt_id = str(spine_meta.get("active_attempt_id") or "").strip() or None
+    attempt_id: Optional[str] = None
+    attempt = None
+    if _spine_reads_enabled():
+        try:
+            attempt = get_latest_attempt_for_work(
+                project_id=project_id,
+                work_id=work_id,
+                kind="primary",
+            )
+            if attempt and attempt.get("attempt_id"):
+                attempt_id = str(attempt["attempt_id"])
+        except Exception:
+            attempt = None
+            attempt_id = None
 
     extraction = document.get("extraction") or {}
     extraction_data = extraction.get("data") or {}
@@ -2426,6 +2772,37 @@ def resolve_ingested_references(
         references = []
     if not isinstance(references, list):
         raise HTTPException(status_code=422, detail="Invalid extraction references")
+
+    # Resolution gating policy (Phase 09.2-07).
+    if attempt is None and attempt_id:
+        try:
+            attempt = get_latest_attempt_for_work(
+                project_id=project_id,
+                work_id=work_id,
+                kind="primary",
+            )
+        except Exception:
+            attempt = None
+    quality = (attempt.get("quality_json") if isinstance(attempt, dict) else None) or {}
+    primary = quality.get("primary") if isinstance(quality.get("primary"), dict) else {}
+    fb = quality.get("fallback") if isinstance(quality.get("fallback"), dict) else {}
+
+    needs_confirm = bool(
+        fb.get("used")
+        or fb.get("ocr_used")
+        or primary.get("refs_only")
+        or primary.get("header_failed")
+    )
+    if (not references) or needs_confirm:
+        if not bool(force):
+            reason = "no_references" if not references else "low_quality_references"
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Resolution gated ({reason}). "
+                    "Re-run with ?force=true after review."
+                ),
+            )
 
     try:
         resolved = resolve_references(references)
@@ -2440,18 +2817,6 @@ def resolve_ingested_references(
                     "primary",
                     settings_json={},
                 )
-                try:
-                    update_ingested_document(
-                        doc_id,
-                        {
-                            "spine": {
-                                "work_id": work_id,
-                                "active_attempt_id": attempt_id,
-                            }
-                        },
-                    )
-                except Exception:
-                    pass
             except Exception:
                 attempt_id = None
 

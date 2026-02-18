@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-01-23)
 ## Current Position
 
 Phase: 9.2 of 12 (Ingestion automation robustness + fallback extraction)
-Plan: 0 of 7 in current phase
-Status: Not started
-Last activity: 2026-02-16 — Completed Phase 09.1 spine-only flip (plans 12..15)
+Plan: 7 of 7 in current phase
+Status: Complete
+Last activity: 2026-02-17 — Implemented spine async extraction, deterministic fallback artifacts, OCR-capable fallback worker, and refs-quality resolution gating
 
-Progress: ░░░░░░░░░░░░ 0%
+Progress: ████████████ 100%
 
 ## Performance Metrics
 
@@ -99,7 +99,7 @@ Recent decisions affecting current work:
 ### Pending Todos
 
 - Run full cleanup protocol pass (see `.planning/CLEANUP_PROTOCOL.md`) and re-verify UI flows.
-- Plan Phase 9.2 into executable plan files and implement with small commits + verification scripts.
+- Proceed to Phase 9.3 (spine everywhere + legacy removal).
 
 ### Blockers/Concerns
 

@@ -30,6 +30,12 @@ data/*
 !data/poc_graph.json
 experiments/
 
+# Local-only corpora / scans
+corpus/local/
+local_corpus/
+corpus/focus/
+corpus/ok/
+
 # ─── Local ColBERT clones (use requirements pin or submodule instead) ───────
 ColBERT/
 vendor/colbert/

@@ -54,5 +54,14 @@ fi
 
 curl -4 -sf -X POST "${api_url}/ingest/${doc_id}/extract" >/dev/null
 
+# Poll spine attempt state (spine mode runs extract async).
+for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+  state=$(curl -4 -sf "${api_url}/ingest/${doc_id}/spine" | python -c "import json,sys; d=json.load(sys.stdin); a=d.get('attempt') or {}; print(a.get('state') or '')")
+  if [ "$state" = "succeeded" ] || [ "$state" = "partial" ] || [ "$state" = "failed" ] || [ "$state" = "cancelled" ]; then
+    break
+  fi
+  sleep 1
+done
+
 echo "doc_id=${doc_id}"
 curl -4 -sf "${api_url}/ingest/${doc_id}" | python -m json.tool

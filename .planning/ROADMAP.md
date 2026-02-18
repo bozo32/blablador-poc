@@ -232,14 +232,16 @@ Plans:
 **Depends on**: Phase 9.1
 **Plans**: 7 plans
 
+**Cloud readiness note (post-9.2 hardening):** after fallback behavior is stable, add capability discovery (CPU/RAM/GPU) + derived concurrency defaults + strict readiness checks for cloud deployments (Azure-oriented). Spec: `.planning/architecture/CLOUD_CAPABILITIES_SPEC.md`.
+
 Plans:
-- [ ] 09.2-01-PLAN.md — Corpus + regression fixtures for extraction failures
-- [ ] 09.2-02-PLAN.md — Fallback attempt contract (quality flags + S3 artifacts + DB pointers)
-- [ ] 09.2-03-PLAN.md — "Header 500 but refs OK" resilience + quality flags
-- [ ] 09.2-04-PLAN.md — PyMuPDF fallback extractor (text-layer) persisted as fallback attempts
-- [ ] 09.2-05-PLAN.md — Hybrid OCR worker service (per-page policy + adaptive DPI)
-- [ ] 09.2-06-PLAN.md — Orchestration: auto fallback on primary failure + manual force fallback + polling
-- [ ] 09.2-07-PLAN.md — Resolution gating based on refs quality + UI prompt
+- [x] 09.2-01-PLAN.md — Corpus + regression fixtures for extraction failures
+- [x] 09.2-02-PLAN.md — Fallback attempt contract (quality flags + S3 artifacts + DB pointers)
+- [x] 09.2-03-PLAN.md — "Header 500 but refs OK" resilience + quality flags
+- [x] 09.2-04-PLAN.md — PyMuPDF fallback extractor (text-layer) persisted as fallback attempts
+- [x] 09.2-05-PLAN.md — Hybrid OCR worker service (per-page policy + adaptive DPI)
+- [x] 09.2-06-PLAN.md — Orchestration: auto fallback on primary failure + manual force fallback + polling
+- [x] 09.2-07-PLAN.md — Resolution gating based on refs quality + UI prompt
 
 ### Phase 9.3: Spine Everywhere + Legacy Removal (INSERTED)
 **Goal**: Remove remaining local-disk persistence requirements by moving attachments, evidence, judgments, and project metadata onto the spine, and delete legacy filesystem stores.
@@ -256,6 +258,10 @@ Plans:
 
 **Details:**
 [To be added during planning]
+
+**Multi-user cloud note:** keep `project_id` and `created_by_user_id` first-class
+in all spine tables and endpoints so OIDC (Azure Entra) can be layered on later.
+Spec: `.planning/architecture/MULTI_USER_CLOUD_SPEC.md`.
 
 ### Post-9.2 Focus Notes
 

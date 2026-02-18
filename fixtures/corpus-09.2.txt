@@ -1,0 +1,19 @@
+# Phase 09.2 local corpus manifest
+#
+# Format: <path> <class-tags...>
+# - Whitespace-separated
+# - Lines starting with '#' are ignored
+#
+# The goal is a small mixed set that we run in every 09.2 verification step.
+
+fixtures/text-1.pdf normal text
+
+# Generated fixture for OCR path:
+#   bash scripts/dev/gen_scanned_fixture.sh fixtures/scanned-1.pdf
+#
+fixtures/scanned-1.pdf scanned ocr
+
+# Add curated, redistributable regression fixtures here as we find them.
+# Examples:
+# fixtures/choker-*.pdf grobid-choker
+# fixtures/scanned-1.pdf scanned ocr

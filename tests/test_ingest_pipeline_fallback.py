@@ -8,6 +8,10 @@ from backend.ingestion_store import create_ingested_document, get_ingested_docum
 
 
 def test_ingest_pipeline_falls_back_to_header_and_references(tmp_path, monkeypatch):
+    # This test targets the legacy ingestion store behavior.
+    monkeypatch.setenv("SPINE_MODE", "legacy")
+    monkeypatch.setenv("SPINE_PDF_SOURCE", "legacy")
+
     ingestion_dir = tmp_path / "ingestion"
     graph_db = tmp_path / "graph.db"
     store = GraphStore(graph_db)

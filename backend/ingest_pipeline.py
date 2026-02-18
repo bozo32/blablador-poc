@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 from backend import extraction, grobid_client
+from backend import fallback_text
 from backend.graph_store import GraphStore
 from backend.ingestion_store import (
     get_document_source_path,
@@ -22,6 +23,7 @@ from backend.object_store import s3 as object_store_s3
 from backend.spine.pdf_source import cleanup_temp_path, get_pdf_temp_path
 from backend.spine.attempts import (
     create_or_get_attempt,
+    merge_attempt_quality_json,
     mark_attempt_failed,
     mark_attempt_partial,
     mark_attempt_running,
@@ -92,38 +94,47 @@ def run_full_ingest_pipeline(
         attempt_id: Optional[str] = None
         job_id: Optional[str] = None
         try:
-            attempt_id, _state = create_or_get_attempt(
-                project_id,
-                user_id,
-                work_id,
-                "primary",
-                settings_json={},
-            )
-            try:
-                update_ingested_document(
-                    doc_id,
-                    {"spine": {"work_id": work_id, "active_attempt_id": attempt_id}},
-                    ingestion_dir,
-                )
-            except Exception:
-                pass
+            spine_mode = str(os.environ.get("SPINE_MODE", "spine")).strip().lower()
+            spine_writes = spine_mode in {"dual", "spine"}
 
-            if attempt_id:
+            if spine_writes:
+                attempt_id, _state = create_or_get_attempt(
+                    project_id,
+                    user_id,
+                    work_id,
+                    "primary",
+                    settings_json={},
+                )
                 try:
-                    mark_attempt_running(attempt_id)
-                except Exception:
-                    pass
-                try:
-                    job_id = create_job(
-                        project_id,
-                        user_id,
-                        attempt_id,
-                        worker="grobid",
-                        state="running",
-                        progress_json={"stage": "extract"},
+                    update_ingested_document(
+                        doc_id,
+                        {
+                            "spine": {
+                                "work_id": work_id,
+                                "active_attempt_id": attempt_id,
+                            }
+                        },
+                        ingestion_dir,
                     )
                 except Exception:
-                    job_id = None
+                    pass
+
+                if attempt_id:
+                    try:
+                        mark_attempt_running(attempt_id)
+                    except Exception:
+                        pass
+                    try:
+                        job_id = create_job(
+                            project_id,
+                            user_id,
+                            attempt_id,
+                            worker="grobid",
+                            state="running",
+                            progress_json={"stage": "extract"},
+                        )
+                    except Exception:
+                        job_id = None
 
             try:
                 update_ingested_document(
@@ -134,7 +145,7 @@ def run_full_ingest_pipeline(
             except Exception:
                 pass
 
-            use_legacy_pdf = (
+            use_legacy_pdf = spine_mode == "legacy" or (
                 str(os.environ.get("SPINE_PDF_SOURCE", "")).strip().lower() == "legacy"
             )
             tmp_pdf_path = None
@@ -150,44 +161,162 @@ def run_full_ingest_pipeline(
                 )
                 pdf_path = tmp_pdf_path
             mode = "fulltext"
+            quality_patch: dict = {}
+            tei_xml: Optional[str] = None
+            extraction_payload: Optional[dict] = None
             try:
-                tei_xml = grobid_client.extract_tei_fulltext(pdf_path)
-            except grobid_client.GrobidError:
-                mode = "header+references"
-                header_xml = grobid_client.extract_tei_header(pdf_path)
-                refs_xml = grobid_client.extract_tei_references(pdf_path)
-                tei_xml = grobid_client.merge_header_and_references_tei(
-                    header_xml=header_xml,
-                    references_xml=refs_xml,
-                )
+                try:
+                    try:
+                        tei_xml = grobid_client.extract_tei_fulltext(pdf_path)
+                    except grobid_client.GrobidError:
+                        header_xml = None
+                        try:
+                            header_xml = grobid_client.extract_tei_header(pdf_path)
+                        except grobid_client.GrobidError:
+                            quality_patch = {"primary": {"header_failed": True}}
+                            header_xml = None
+
+                        refs_xml = grobid_client.extract_tei_references(pdf_path)
+                        if header_xml:
+                            mode = "header+references"
+                            tei_xml = grobid_client.merge_header_and_references_tei(
+                                header_xml=header_xml,
+                                references_xml=refs_xml,
+                            )
+                        else:
+                            mode = "refs-only"
+                            quality_patch = {
+                                **(quality_patch or {}),
+                                "primary": {
+                                    **((quality_patch or {}).get("primary") or {}),
+                                    "refs_only": True,
+                                },
+                            }
+                            tei_xml = refs_xml
+
+                    if tei_xml is None:
+                        raise grobid_client.GrobidError("GROBID returned no TEI")
+                    extraction_payload = extraction.parse_tei(tei_xml)
+                except grobid_client.GrobidError as exc:
+                    pages = fallback_text.extract_fallback_pages(Path(pdf_path))
+                    pages_jsonl = fallback_text.pages_to_jsonl(pages)
+                    body_txt = fallback_text.pages_to_body_text(pages)
+                    refs_json = b"[]\n"
+                    quality_patch = {
+                        **(quality_patch or {}),
+                        **fallback_text.fallback_quality(pages),
+                    }
+
+                    if attempt_id:
+                        fb_pages_key = (
+                            f"extract/{work_id}/attempts/{attempt_id}/fallback/"
+                            "pages.jsonl"
+                        )
+                        object_store_s3.put_bytes(
+                            fb_pages_key,
+                            pages_jsonl,
+                            content_type="application/x-ndjson",
+                        )
+                        create_artifact(
+                            project_id,
+                            user_id,
+                            attempt_id,
+                            "fallback.pages.jsonl",
+                            fb_pages_key,
+                            len(pages_jsonl),
+                            "application/x-ndjson",
+                        )
+
+                        fb_body_key = (
+                            f"extract/{work_id}/attempts/{attempt_id}/fallback/body.txt"
+                        )
+                        object_store_s3.put_bytes(
+                            fb_body_key,
+                            body_txt,
+                            content_type="text/plain",
+                        )
+                        create_artifact(
+                            project_id,
+                            user_id,
+                            attempt_id,
+                            "fallback.body.txt",
+                            fb_body_key,
+                            len(body_txt),
+                            "text/plain",
+                        )
+
+                        fb_refs_key = (
+                            f"extract/{work_id}/attempts/{attempt_id}/fallback/"
+                            "refs.json"
+                        )
+                        object_store_s3.put_bytes(
+                            fb_refs_key,
+                            refs_json,
+                            content_type="application/json",
+                        )
+                        create_artifact(
+                            project_id,
+                            user_id,
+                            attempt_id,
+                            "fallback.refs.json",
+                            fb_refs_key,
+                            len(refs_json),
+                            "application/json",
+                        )
+
+                    extraction_payload = {
+                        "extraction_version": "fallback-v1",
+                        "metadata": {
+                            "title": None,
+                            "authors": [],
+                            "year": None,
+                            "journal": None,
+                            "container": None,
+                            "doi": None,
+                            "url": None,
+                        },
+                        "citations": [],
+                        "references": [],
+                        "fallback": {"error": str(exc)},
+                    }
+                    mode = "fallback"
             finally:
                 cleanup_temp_path(tmp_pdf_path)
 
-            extraction_payload = extraction.parse_tei(tei_xml)
-
             if attempt_id:
-                tei_key = f"extract/{work_id}/attempts/{attempt_id}/primary/tei.xml"
-                tei_bytes = tei_xml.encode("utf-8", errors="ignore")
-                object_store_s3.put_bytes(
-                    tei_key,
-                    tei_bytes,
-                    content_type="application/xml",
-                )
-                create_artifact(
-                    project_id,
-                    user_id,
-                    attempt_id,
-                    "tei.xml",
-                    tei_key,
-                    len(tei_bytes),
-                    "application/xml",
-                )
+                if quality_patch:
+                    try:
+                        merge_attempt_quality_json(str(attempt_id), quality_patch)
+                    except Exception:
+                        pass
+
+                if tei_xml is not None and mode in {
+                    "fulltext",
+                    "header+references",
+                    "refs-only",
+                }:
+                    tei_key = f"extract/{work_id}/attempts/{attempt_id}/primary/tei.xml"
+                    tei_bytes = tei_xml.encode("utf-8", errors="ignore")
+                    object_store_s3.put_bytes(
+                        tei_key,
+                        tei_bytes,
+                        content_type="application/xml",
+                    )
+                    create_artifact(
+                        project_id,
+                        user_id,
+                        attempt_id,
+                        "tei.xml",
+                        tei_key,
+                        len(tei_bytes),
+                        "application/xml",
+                    )
 
                 extraction_key = (
                     f"extract/{work_id}/attempts/{attempt_id}/primary/extraction.json"
                 )
                 extraction_bytes = json.dumps(
-                    extraction_payload,
+                    extraction_payload or {},
                     sort_keys=True,
                     ensure_ascii=True,
                     separators=(",", ":"),
@@ -207,10 +336,31 @@ def run_full_ingest_pipeline(
                     "application/json",
                 )
 
-            stored = store_extraction(
-                doc_id, tei_xml, extraction_payload, ingestion_dir
-            )
-            document = stored
+            stored = None
+            if tei_xml is not None:
+                stored = store_extraction(
+                    doc_id,
+                    tei_xml,
+                    extraction_payload,
+                    ingestion_dir,
+                )
+                document = stored
+            else:
+                # Legacy store can't persist without a TEI file; best-effort mark stage.
+                try:
+                    update_ingested_document(
+                        doc_id,
+                        {
+                            "extraction": {
+                                "status": "complete",
+                                "extracted_at": _iso_now(),
+                                "data": extraction_payload,
+                            }
+                        },
+                        ingestion_dir,
+                    )
+                except Exception:
+                    pass
 
             try:
                 update_ingested_document(
@@ -231,13 +381,14 @@ def run_full_ingest_pipeline(
             except Exception:
                 pass
 
-            try:
-                graph_store.index_extraction(
-                    ingest_meta=stored,
-                    extraction_data=extraction_payload,
-                )
-            except Exception:
-                logger.exception("Graph index failed for extraction")
+            if extraction_payload is not None:
+                try:
+                    graph_store.index_extraction(
+                        ingest_meta=(stored or document),
+                        extraction_data=extraction_payload,
+                    )
+                except Exception:
+                    logger.exception("Graph index failed for extraction")
 
             if attempt_id:
                 try:
@@ -309,6 +460,23 @@ def run_full_ingest_pipeline(
             if references:
                 resolved = resolve_references(references)
 
+                spine_mode2 = str(os.environ.get("SPINE_MODE", "spine")).strip().lower()
+                spine_writes2 = spine_mode2 in {"dual", "spine"}
+
+                project_id2 = str(document.get("project_id") or "").strip() or str(
+                    app_settings.DEFAULT_PROJECT_ID
+                )
+                user_id2 = str(app_settings.DEFAULT_USER_ID)
+                spine_meta_work = (
+                    document.get("spine") if isinstance(document, dict) else None
+                )
+                spine_meta_work = (
+                    spine_meta_work if isinstance(spine_meta_work, dict) else {}
+                )
+                work_id2 = str(spine_meta_work.get("work_id") or "").strip() or str(
+                    doc_id
+                )
+
                 # Persist resolution to the spine (S3 + artifacts table) so spine
                 # reads can reconstruct without local metadata.json.
                 attempt_id2 = None
@@ -319,12 +487,12 @@ def run_full_ingest_pipeline(
                 attempt_id2 = (
                     str(spine_meta2.get("active_attempt_id") or "").strip() or None
                 )
-                if not attempt_id2:
+                if spine_writes2 and (not attempt_id2):
                     try:
                         attempt_id2, _state = create_or_get_attempt(
-                            project_id,
-                            user_id,
-                            work_id,
+                            project_id2,
+                            user_id2,
+                            work_id2,
                             "primary",
                             settings_json={},
                         )
@@ -334,7 +502,7 @@ def run_full_ingest_pipeline(
                 if attempt_id2:
                     resolution_key = (
                         "resolve/"
-                        f"{work_id}/attempts/{attempt_id2}/primary/resolution.json"
+                        f"{work_id2}/attempts/{attempt_id2}/primary/resolution.json"
                     )
                     resolution_bytes = json.dumps(
                         resolved,
@@ -348,8 +516,8 @@ def run_full_ingest_pipeline(
                         content_type="application/json",
                     )
                     create_artifact(
-                        project_id,
-                        user_id,
+                        project_id2,
+                        user_id2,
                         attempt_id2,
                         "resolution.json",
                         resolution_key,

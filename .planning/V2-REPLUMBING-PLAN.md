@@ -16,6 +16,11 @@ and fallback/rollback options when assumptions break.
 - Kubernetes-first.
 - GPU requirements (CPU-only).
 
+Note: cloud deployment will likely have deep resources (Azure). Capability
+discovery + derived defaults (CPU/RAM/GPU) is tracked separately as a spec so
+it can be implemented without ballooning the initial replumbing work:
+`.planning/architecture/CLOUD_CAPABILITIES_SPEC.md`.
+
 ## Current Baseline (Observed in Repo)
 
 - Backend is FastAPI in `backend/main.py`.

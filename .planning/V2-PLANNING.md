@@ -149,6 +149,19 @@ This backlog is intentionally sequenced after the ingestion/extraction spine is 
   - Keep last N attempts per work (default 5)
   - Default `store_intermediates=false`
 
+### Span Anchoring (Work-Universal)
+
+- Offsets drift across parsers/PDF builds; store quote selectors (exact/prefix/suffix)
+  plus attempt-local offsets as a fast path.
+- Spec: `.planning/architecture/SPAN_ANCHORING_SPEC.md`
+
+### Cloud Capabilities + Startup (Spec)
+
+- Deployment will likely target deep cloud resources (Azure).
+- Add explicit capability discovery + derived concurrency/thread defaults, and
+  separate liveness vs readiness checks.
+- Spec: `.planning/architecture/CLOUD_CAPABILITIES_SPEC.md`
+
 ## Open Questions (V2)
 
 ### A) UI Technology Choice (Streamlit vs something else)
@@ -164,6 +177,12 @@ This backlog is intentionally sequenced after the ingestion/extraction spine is 
 
 - What are the minimum fields to define Program/Project (names, tags, default profiles)?
 - Are Works global and tagged into projects, or owned by a single project?
+
+### G) Multi-User Cloud Shape (Spec)
+
+- Default direction: browser UI + API; thin client only if offline is required.
+- Lock in tenancy boundaries now (project scoping, auditability, quotas).
+- Spec: `.planning/architecture/MULTI_USER_CLOUD_SPEC.md`
 
 ### C) Remote Services + Networking
 

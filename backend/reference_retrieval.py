@@ -44,6 +44,15 @@ def _load_document(doc_id: str) -> Dict[str, Any]:
     return document
 
 
+def get_ingested_document(doc_id: str) -> Dict[str, Any]:
+    """Backward-compatible hook for tests and callers.
+
+    Historically this module loaded documents via the legacy ingestion store.
+    In spine mode we resolve the ingested document via the spine view.
+    """
+    return _load_document(doc_id)
+
+
 def _find_reference_entry(
     document: Dict[str, Any], reference_id: str
 ) -> Dict[str, Any]:
@@ -224,7 +233,8 @@ def _resolve_sources(
 def build_retrieval_dossier(
     doc_id: str, reference_id: str
 ) -> schemas.ReferenceRetrievalResponse:
-    document = _load_document(doc_id)
+    # Indirection allows tests to monkeypatch document loading.
+    document = get_ingested_document(doc_id)
     reference = _find_reference_entry(document, reference_id)
     resolution_entry = _find_resolution_entry(document, reference_id)
 

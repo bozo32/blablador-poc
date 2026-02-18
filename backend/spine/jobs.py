@@ -179,3 +179,48 @@ def get_job(job_id: str) -> Optional[Dict[str, Any]]:
                 except Exception:
                     pass
             return out
+
+
+def list_jobs_for_attempt(attempt_id: str, *, limit: int = 50) -> list[Dict[str, Any]]:
+    aid = str(attempt_id or "").strip()
+    if not aid:
+        raise ValueError("attempt_id is required")
+    lim = max(1, min(500, int(limit or 50)))
+
+    cols = (
+        "job_id",
+        "attempt_id",
+        "project_id",
+        "created_by_user_id",
+        "worker",
+        "state",
+        "progress_json",
+        "heartbeat_at",
+        "created_at",
+    )
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT job_id, attempt_id, project_id, created_by_user_id,
+                       worker, state, progress_json,
+                       heartbeat_at, created_at
+                  FROM jobs
+                 WHERE attempt_id = %s
+                 ORDER BY created_at DESC
+                 LIMIT %s
+                """,
+                (aid, lim),
+            )
+            rows = cur.fetchall() or []
+
+    out: list[Dict[str, Any]] = []
+    for row in rows:
+        item: Dict[str, Any] = {str(k): v for k, v in zip(cols, row)}
+        if isinstance(item.get("progress_json"), str):
+            try:
+                item["progress_json"] = json.loads(item["progress_json"]) or {}
+            except Exception:
+                pass
+        out.append(item)
+    return out

@@ -18,6 +18,25 @@ pytest -k <pattern>        # Targeted subset (no watch config detected)
 Not detected               # Coverage command
 ```
 
+**Containerized (recommended):**
+```bash
+bash scripts/dev/pytest_docker.sh  # Unit tests inside Docker
+bash scripts/dev/e2e_docker.sh     # End-to-end ingestion smoke
+bash scripts/dev/test_docker.sh    # Unit + E2E (sequential)
+```
+
+### Environment Notes (2026-02)
+
+- Host conda envs can fail pytest collection if NumPy 2.x is installed with
+  pandas/scipy/sklearn wheels built against NumPy 1.x.
+- Fix options:
+  - Containerized tests (recommended): `bash scripts/dev/pytest_docker.sh`
+  - Repair active conda env in place: `CONFIRM=1 bash scripts/dev/fix_local_conda_env.sh`
+
+**Container pytest stability:**
+- `scripts/dev/pytest_docker.sh` runs `scripts/dev/pytest_runner.py`, which calls pytest and then exits via
+  `os._exit(code)` to avoid intermittent native teardown aborts observed in some container environments.
+
 ## Test File Organization
 
 **Location:**
@@ -106,7 +125,9 @@ Not detected
 - Model sanity checks are script-style in `tests/test_coref.py`.
 
 **E2E Tests:**
-- Not used (no browser or API-level E2E framework detected).
+- API-level E2E smoke is implemented as a script:
+  - `scripts/dev/e2e_flow.py` (drives ingest -> extract -> fallback/OCR -> body -> claim confirm -> basic graph check)
+  - `scripts/dev/e2e_docker.sh` (brings up compose stack, generates fixtures, runs the flow)
 
 ## Common Patterns
 

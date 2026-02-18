@@ -101,6 +101,34 @@ class AppSettings(PydanticBaseSettings):
         description="Shared bearer token for internal services (workers, gateways)",
     )
 
+    # --- Fallback/OCR worker (Phase 09.2) ---
+    FALLBACK_WORKER_URL: str = Field(
+        "",
+        description=(
+            "Optional URL for an OCR-capable fallback worker service. "
+            "If set (Compose: http://fallback-worker:8010), spine extraction can "
+            "delegate fallback extraction + OCR policy to that service."
+        ),
+    )
+    FALLBACK_OCR_LANGUAGES: str = Field(
+        "eng",
+        description=(
+            "OCR languages string passed to Tesseract (e.g. 'eng', 'eng+deu')."
+        ),
+    )
+    FALLBACK_TEXT_MIN_CHARS: int = Field(
+        40,
+        ge=0,
+        description=(
+            "Per-page minimum extracted text chars before we consider OCR. "
+            "Used by the fallback worker's hybrid text-layer/OCR policy."
+        ),
+    )
+    FALLBACK_OCR_DPI_STEPS: str = Field(
+        "150,200,300",
+        description="Comma-separated DPI steps for adaptive OCR.",
+    )
+
     # — Scope plumbing (project/user)
     DEFAULT_PROJECT_ID: str = Field(
         "default",

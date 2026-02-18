@@ -55,6 +55,58 @@ def _json_loads(value: Any) -> Any:
     return value
 
 
+def _deep_merge_dict(base: Dict[str, Any], patch: Dict[str, Any]) -> Dict[str, Any]:
+    out: Dict[str, Any] = dict(base or {})
+    for k, v in (patch or {}).items():
+        if k in out and isinstance(out.get(k), dict) and isinstance(v, dict):
+            out[k] = _deep_merge_dict(out.get(k) or {}, v)
+        else:
+            out[k] = v
+    return out
+
+
+def set_attempt_quality_json(attempt_id: str, quality_json: Any) -> Dict[str, Any]:
+    """Overwrite quality_json for an attempt (jsonb)."""
+    aid = str(attempt_id or "").strip()
+    if not aid:
+        raise ValueError("attempt_id is required")
+    blob = _json_dumps(quality_json or {})
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE attempts SET quality_json = %s::jsonb WHERE attempt_id = %s",
+                (blob, aid),
+            )
+        conn.commit()
+    attempt = get_attempt(aid)
+    if attempt is None:
+        raise ValueError("attempt not found")
+    return attempt
+
+
+def merge_attempt_quality_json(
+    attempt_id: str, quality_patch: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Deep-merge a patch into attempts.quality_json."""
+    aid = str(attempt_id or "").strip()
+    if not aid:
+        raise ValueError("attempt_id is required")
+    patch = quality_patch or {}
+    if not isinstance(patch, dict):
+        raise ValueError("quality_patch must be a dict")
+    if not patch:
+        attempt = get_attempt(aid)
+        if attempt is None:
+            raise ValueError("attempt not found")
+        return attempt
+
+    current = get_attempt(aid)
+    if current is None:
+        raise ValueError("attempt not found")
+    merged = _deep_merge_dict(current.get("quality_json") or {}, patch)
+    return set_attempt_quality_json(aid, merged)
+
+
 def settings_hash_for_attempt(work_id: str, kind: str, settings_json: Any) -> str:
     """Compute deterministic idempotency hash.
 

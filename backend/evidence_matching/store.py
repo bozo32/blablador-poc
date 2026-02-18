@@ -1,15 +1,20 @@
-"""Disk-backed persistence for evidence ranking runs and history."""
+"""Spine-backed persistence for evidence ranking runs and history.
+
+Phase 09.3: evidence runs persist in Postgres; large candidate payloads live in
+object storage with a Postgres pointer.
+"""
 
 from __future__ import annotations
 
+import json
 from collections import Counter
 from copy import deepcopy
 from datetime import datetime, timezone
-import json
-from pathlib import Path
 from typing import Any, Sequence
 from uuid import uuid4
 
+from backend.db.pg import connect
+from backend.object_store import s3 as object_store_s3
 from backend.settings import AppSettings, settings as app_settings
 
 from . import serializers
@@ -19,12 +24,8 @@ class EvidenceRunStore:
     """Persist evidence ranking runs with limited history and delta metadata."""
 
     def __init__(self, *, settings: AppSettings | None = None) -> None:
-        """Create a store that persists runs under the configured directory."""
+        """Create a run store backed by Postgres + object storage."""
         self.settings = settings or app_settings
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
 
     def record_run(
         self,
@@ -33,7 +34,6 @@ class EvidenceRunStore:
         candidates: Sequence[Any],
         metadata: dict | None = None,
     ) -> dict:
-        """Persist a ranking run for a claim and keep capped history."""
         if not claim_id:
             raise ValueError("claim_id is required")
 
@@ -44,86 +44,186 @@ class EvidenceRunStore:
 
         created_at = _utcnow()
         run_id = self._run_id(created_at)
-        payload = {
+        summary = self._build_summary(annotated)
+        meta = dict(metadata or {})
+
+        candidates_key = f"evidence/{claim_id}/{run_id}.json"
+        candidates_bytes = json.dumps(
+            annotated,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        object_store_s3.put_bytes(
+            candidates_key,
+            candidates_bytes,
+            content_type="application/json",
+        )
+
+        depth = max(1, int(getattr(self.settings, "EVIDENCE_HISTORY_DEPTH", 5)))
+        with connect(autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO evidence_runs(
+                      run_id,
+                      project_id,
+                      created_by_user_id,
+                      claim_id,
+                      created_at,
+                      note,
+                      summary_json,
+                      metadata_json,
+                      candidates_object_key,
+                      lock_state_json
+                    )
+                    VALUES (
+                      %s,
+                      'default',
+                      'local',
+                      %s,
+                      now(),
+                      %s,
+                      %s::jsonb,
+                      %s::jsonb,
+                      %s,
+                      '{}'::jsonb
+                    )
+                    """,
+                    (
+                        run_id,
+                        str(claim_id),
+                        str(meta.get("note") or "") or None,
+                        json.dumps(summary, ensure_ascii=True),
+                        json.dumps(meta, ensure_ascii=True),
+                        candidates_key,
+                    ),
+                )
+
+                # Trim history rows (best-effort). Keep newest N.
+                cur.execute(
+                    """
+                    SELECT run_id, candidates_object_key
+                    FROM evidence_runs
+                    WHERE claim_id=%s
+                    ORDER BY created_at DESC
+                    OFFSET %s
+                    """,
+                    (str(claim_id), int(depth)),
+                )
+                stale = cur.fetchall() or []
+                if stale:
+                    cur.execute(
+                        """
+                        DELETE FROM evidence_runs
+                        WHERE claim_id=%s
+                          AND run_id = ANY(%s)
+                        """,
+                        (
+                            str(claim_id),
+                            [str(row[0]) for row in stale if row and row[0]],
+                        ),
+                    )
+
+        return {
             "claim_id": claim_id,
             "run_id": run_id,
             "created_at": created_at,
-            "metadata": dict(metadata or {}),
-            "summary": self._build_summary(annotated),
+            "metadata": meta,
+            "summary": summary,
             "candidates": annotated,
         }
 
-        claim_dir = self._claim_dir(claim_id)
-        latest_path = claim_dir / "run.json"
-        history_path = self._history_dir(claim_id) / f"{run_id}.json"
-
-        _write_json_atomic(history_path, payload)
-        _write_json_atomic(latest_path, payload)
-        self._trim_history(claim_id)
-        return payload
-
     def latest_run(self, claim_id: str) -> dict | None:
-        """Return the latest persisted run for a claim, if any."""
-        latest_path = self._claim_dir(claim_id) / "run.json"
-        if not latest_path.exists():
+        if not claim_id:
             return None
-        return _read_json(latest_path)
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                      run_id,
+                      created_at,
+                      summary_json,
+                      metadata_json,
+                      candidates_object_key
+                    FROM evidence_runs
+                    WHERE claim_id=%s
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    (str(claim_id),),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return None
+
+        candidates: list[dict] = []
+        key = str(row[4] or "").strip()
+        if key:
+            try:
+                raw = object_store_s3.get_bytes(key)
+                data = json.loads(raw.decode("utf-8"))
+                candidates = data if isinstance(data, list) else []
+            except Exception:
+                candidates = []
+
+        created_at = (
+            row[1].isoformat().replace("+00:00", "Z")
+            if getattr(row[1], "isoformat", None)
+            else str(row[1])
+        )
+        summary = row[2] if isinstance(row[2], dict) else json.loads(row[2] or "{}")
+        meta = row[3] if isinstance(row[3], dict) else json.loads(row[3] or "{}")
+        return {
+            "claim_id": str(claim_id),
+            "run_id": str(row[0]),
+            "created_at": created_at,
+            "metadata": meta,
+            "summary": summary,
+            "candidates": candidates,
+        }
 
     def history(self, claim_id: str) -> list[dict]:
-        """Return recent history for a claim, newest first."""
-        history_dir = self._history_dir(claim_id)
-        if not history_dir.exists():
+        if not claim_id:
             return []
-        entries: list[tuple[float, dict]] = []
-        for path in history_dir.glob("*.json"):
-            try:
-                payload = _read_json(path)
-            except json.JSONDecodeError:
-                continue
-            entries.append((path.stat().st_mtime, payload))
-        entries.sort(key=lambda pair: pair[0], reverse=True)
-        return [payload for _, payload in entries]
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    def _root_dir(self) -> Path:
-        root = Path(self.settings.EVIDENCE_STORE_DIR)
-        root.mkdir(parents=True, exist_ok=True)
-        return root
-
-    def _claim_dir(self, claim_id: str) -> Path:
-        safe_claim = claim_id.replace("/", "_")
-        path = self._root_dir() / safe_claim
-        path.mkdir(parents=True, exist_ok=True)
-        return path
-
-    def _history_dir(self, claim_id: str) -> Path:
-        path = self._claim_dir(claim_id) / "history"
-        path.mkdir(parents=True, exist_ok=True)
-        return path
-
-    def _trim_history(self, claim_id: str) -> None:
-        depth = max(1, int(getattr(self.settings, "EVIDENCE_HISTORY_DEPTH", 5)))
-        history_dir = self._history_dir(claim_id)
-        paths = sorted(
-            history_dir.glob("*.json"),
-            key=lambda path: path.stat().st_mtime,
-            reverse=True,
-        )
-        for stale in paths[depth:]:
-            try:
-                stale.unlink()
-            except FileNotFoundError:  # pragma: no cover - race-resistant
-                continue
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT run_id, created_at, summary_json, metadata_json
+                    FROM evidence_runs
+                    WHERE claim_id=%s
+                    ORDER BY created_at DESC
+                    """,
+                    (str(claim_id),),
+                )
+                rows = cur.fetchall() or []
+        out: list[dict] = []
+        for row in rows:
+            created_at = (
+                row[1].isoformat().replace("+00:00", "Z")
+                if getattr(row[1], "isoformat", None)
+                else str(row[1])
+            )
+            summary = row[2] if isinstance(row[2], dict) else json.loads(row[2] or "{}")
+            meta = row[3] if isinstance(row[3], dict) else json.loads(row[3] or "{}")
+            out.append(
+                {
+                    "claim_id": str(claim_id),
+                    "run_id": str(row[0]),
+                    "created_at": created_at,
+                    "metadata": meta,
+                    "summary": summary,
+                }
+            )
+        return out
 
     def _normalize_candidate(self, candidate: Any) -> dict:
         if hasattr(candidate, "id") and hasattr(candidate, "claim_id"):
-            # Assume EvidenceCandidate-like dataclass
             try:
                 return serializers.serialize_candidate(candidate)
-            except Exception:  # pragma: no cover - fallback to dict conversion
+            except Exception:
                 pass
         if hasattr(candidate, "to_dict") and callable(candidate.to_dict):
             return candidate.to_dict()
@@ -157,6 +257,7 @@ class EvidenceRunStore:
                     (_score(data) or 0.0)
                     - (prev_scores.get(data.get("id"), 0.0) or 0.0)
                 )
+
             status: str
             demotion_reason: str | None = None
             if prev_pos is None:
@@ -184,26 +285,12 @@ class EvidenceRunStore:
         labels = Counter(
             (cand.get("label") or "unknown").lower() for cand in candidates
         )
-        return {
-            "total": len(candidates),
-            "label_counts": dict(labels),
-        }
+        return {"total": len(candidates), "label_counts": dict(labels)}
 
     @staticmethod
     def _run_id(created_at: str) -> str:
         compact = created_at.replace("-", "").replace(":", "").replace(".", "")
         return f"{compact}-{uuid4().hex[:8]}"
-
-
-def _write_json_atomic(path: Path, payload: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.parent / f".{path.name}.{uuid4().hex}.tmp"
-    tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-    tmp_path.replace(path)
-
-
-def _read_json(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _utcnow() -> str:
@@ -217,7 +304,7 @@ def _score(candidate: dict | None) -> float | None:
     combined = scores.get("combined")
     try:
         return float(combined) if combined is not None else None
-    except (TypeError, ValueError):  # pragma: no cover - defensive
+    except (TypeError, ValueError):
         return None
 
 

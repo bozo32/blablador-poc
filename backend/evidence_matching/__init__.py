@@ -1,9 +1,12 @@
-"""Evidence matching pipeline primitives and helpers."""
+"""Evidence matching primitives.
+
+Keep this module import-light: importing `pipeline` pulls in heavyweight ML
+dependencies (torch/transformers). Callers should import those modules
+explicitly when needed.
+"""
 
 from .types import CandidateSpan, EvidenceCandidate, RankScores
-from . import loaders, deterministic_matcher, pipeline, serializers, store, service
-from .service import EvidenceMatchingService, evidence_service
-from .store import EvidenceRunStore
+from . import loaders, deterministic_matcher, serializers
 
 __all__ = [
     "CandidateSpan",
@@ -11,11 +14,5 @@ __all__ = [
     "RankScores",
     "loaders",
     "deterministic_matcher",
-    "pipeline",
     "serializers",
-    "store",
-    "service",
-    "EvidenceRunStore",
-    "EvidenceMatchingService",
-    "evidence_service",
 ]

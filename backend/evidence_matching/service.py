@@ -6,7 +6,7 @@ import logging
 import threading
 import time
 from collections import deque
-from typing import Any, Callable, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Sequence
 from uuid import uuid4
 
 from backend import attachment_store, background_state
@@ -17,8 +17,10 @@ from backend.settings import (
 )
 
 from . import deterministic_matcher, loaders, serializers
-from .pipeline import EvidencePipeline
 from .store import EvidenceRunStore
+
+if TYPE_CHECKING:  # pragma: no cover
+    from .pipeline import EvidencePipeline
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +32,7 @@ class EvidenceMatchingService:
         self,
         *,
         settings: AppSettings | None = None,
-        pipeline: EvidencePipeline | None = None,
+        pipeline: "EvidencePipeline" | None = None,
         store: EvidenceRunStore | None = None,
         max_workers: int | None = None,
         load_windows: Callable[[str], Sequence[Any]] | None = None,
@@ -38,7 +40,8 @@ class EvidenceMatchingService:
     ) -> None:
         """Initialize the service with optional dependency overrides."""
         self.settings = settings or app_settings
-        self.pipeline = pipeline or EvidencePipeline(settings=self.settings)
+        # Lazily construct the pipeline; importing it pulls in heavy ML deps.
+        self.pipeline = pipeline
         self.store = store or EvidenceRunStore(settings=self.settings)
         self.max_workers = max(
             1, int(max_workers or getattr(self.settings, "EVIDENCE_RERUN_WORKERS", 1))
@@ -377,11 +380,14 @@ class EvidenceMatchingService:
             settings_override=effective_settings,
         )
 
-        pipeline = (
-            self.pipeline
-            if effective_settings is self.settings
-            else EvidencePipeline(settings=effective_settings)
-        )
+        if effective_settings is self.settings and self.pipeline is not None:
+            pipeline = self.pipeline
+        else:
+            from .pipeline import EvidencePipeline
+
+            pipeline = EvidencePipeline(settings=effective_settings)
+            if effective_settings is self.settings and self.pipeline is None:
+                self.pipeline = pipeline
         candidates = pipeline.run(
             claim_id=claim_id,
             claim_text=claim_text,

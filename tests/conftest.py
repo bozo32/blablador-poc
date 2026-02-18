@@ -12,7 +12,6 @@ def _apply_spine_migrations() -> None:
     """
     from backend.db.migrate import apply_migrations
     from backend.db.pg import connect
-    from backend.object_store import s3 as object_store_s3
 
     apply_migrations()
 
@@ -33,9 +32,6 @@ def _apply_spine_migrations() -> None:
                 """
             )
 
-    # Clear MinIO/S3 objects from previous runs.
-    try:
-        object_store_s3.delete_all()
-    except Exception:
-        # Some unit tests don't require S3; don't block the whole suite.
-        pass
+    # Note: we intentionally do not delete S3 objects here. Object keys are
+    # UUID-scoped in tests, and `delete_all()` can be slow if the bucket has
+    # accumulated objects from prior interactive runs.

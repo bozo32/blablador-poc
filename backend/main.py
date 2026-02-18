@@ -6,6 +6,8 @@ import shutil
 import asyncio
 import json
 import hashlib
+import io
+import zipfile
 from uuid import uuid4
 
 # Transformers v5 removes TRANSFORMERS_CACHE; use HF_HOME.
@@ -131,6 +133,12 @@ from backend.ingest_pipeline import IngestWorkerPool
 from backend.spine.extraction_pool import SpineExtractionPool
 from backend import fallback_body
 from backend import project_io
+from backend.spine.project_meta import (
+    export_project_meta_json,
+    get_or_create_project_meta,
+    import_project_meta_json,
+    update_project_meta,
+)
 
 # Configure logging.
 # Default to INFO to avoid extremely noisy dependency logs (urllib3/HF).
@@ -562,7 +570,13 @@ def get_document_ledger():
 
 
 @app.get("/project", response_model=schemas.ProjectMeta)
-def get_project_meta():
+def get_project_meta(
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
+    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
+    user_id = str(app_settings.DEFAULT_USER_ID)
+    if _spine_reads_enabled():
+        return get_or_create_project_meta(project_id=project_id, user_id=user_id)
     return project_io.read_project_meta()
 
 
@@ -576,9 +590,18 @@ class ProjectMetaUpdate(BaseModel):
 
 
 @app.put("/project", response_model=schemas.ProjectMeta)
-def put_project_meta(payload: ProjectMetaUpdate):
+def put_project_meta(
+    payload: ProjectMetaUpdate,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
     patch = payload.model_dump(exclude_unset=True)
+    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
+    user_id = str(app_settings.DEFAULT_USER_ID)
     try:
+        if _spine_reads_enabled():
+            return update_project_meta(
+                project_id=project_id, user_id=user_id, patch=patch
+            )
         return project_io.write_project_meta_update(patch)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -746,18 +769,46 @@ def spine_list_locators_for_document_version(
 
 @app.get("/project/export")
 def export_project():
+    if _spine_reads_enabled():
+        project_id = str(app_settings.DEFAULT_PROJECT_ID)
+        meta = get_or_create_project_meta(project_id=project_id)
+        name = (meta.get("name") or "project").strip() or "project"
+        safe = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in name)
+        filename = f"{safe}.zip"
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("project.json", export_project_meta_json(project_id=project_id))
+        headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+        return Response(
+            content=buf.getvalue(),
+            media_type="application/zip",
+            headers=headers,
+        )
+
     payload = project_io.export_project_zip()
-    meta = project_io.read_project_meta()
-    name = (meta.get("name") or "project").strip() or "project"
-    safe = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in name)
-    filename = f"{safe}.zip"
-    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
-    return Response(content=payload, media_type="application/zip", headers=headers)
+    meta2 = project_io.read_project_meta()
+    name2 = (meta2.get("name") or "project").strip() or "project"
+    safe2 = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in name2)
+    filename2 = f"{safe2}.zip"
+    headers2 = {"Content-Disposition": f'attachment; filename="{filename2}"'}
+    return Response(content=payload, media_type="application/zip", headers=headers2)
 
 
 @app.post("/project/import", response_model=schemas.ProjectImportResponse)
 async def import_project(file: UploadFile = File(...), overwrite: bool = False):
     blob = await file.read()
+    if _spine_reads_enabled():
+        project_id = str(app_settings.DEFAULT_PROJECT_ID)
+        user_id = str(app_settings.DEFAULT_USER_ID)
+        try:
+            with zipfile.ZipFile(io.BytesIO(blob), "r") as zf:
+                meta_raw = json.loads(zf.read("project.json").decode("utf-8"))
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        import_project_meta_json(project_id=project_id, user_id=user_id, meta=meta_raw)
+        return {"ok": True, "backup_zip": None}
+
     try:
         result = project_io.import_project_zip(blob, overwrite=bool(overwrite))
     except RuntimeError as exc:

@@ -290,6 +290,194 @@ _DDL_STATEMENTS: list[str] = [
     CREATE INDEX IF NOT EXISTS locators_project_type_idx
       ON locators(project_id, type);
     """,
+    # ---------------------------------------------------------------------
+    # Phase 09.3: Spine everywhere (attachments, evidence, judgments, project)
+    # ---------------------------------------------------------------------
+    """
+    CREATE TABLE IF NOT EXISTS project_meta (
+      project_id text PRIMARY KEY,
+      meta_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      updated_by_user_id text NOT NULL DEFAULT 'local'
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS attachments (
+      attachment_id text PRIMARY KEY,
+      project_id text NOT NULL DEFAULT 'default',
+      created_by_user_id text NOT NULL DEFAULT 'local',
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+
+      claim_id text NULL,
+      doc_id text NULL,
+      citation_index int NULL,
+      target_id text NULL,
+      source_ingest_id text NULL,
+
+      filename text NOT NULL,
+      size_bytes bigint NOT NULL,
+      status text NOT NULL,
+      error text NULL,
+      parsed_at timestamptz NULL,
+
+      archived boolean NOT NULL DEFAULT false,
+      archived_at timestamptz NULL,
+
+      attempts int NOT NULL DEFAULT 0,
+      max_attempts int NOT NULL DEFAULT 2,
+
+      reference_hint jsonb NOT NULL DEFAULT '{}'::jsonb,
+      claim_text text NULL,
+
+      pdf_object_key text NOT NULL,
+      artifacts_json jsonb NOT NULL DEFAULT '{}'::jsonb
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS attachments_project_id_idx
+      ON attachments(project_id);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS attachments_claim_id_idx
+      ON attachments(claim_id);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS attachments_doc_id_idx
+      ON attachments(doc_id);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS attachment_events (
+      event_id text PRIMARY KEY,
+      attachment_id text NOT NULL REFERENCES attachments(attachment_id)
+        ON DELETE CASCADE,
+      project_id text NOT NULL DEFAULT 'default',
+      created_by_user_id text NOT NULL DEFAULT 'local',
+      event text NOT NULL,
+      detail text NULL,
+      at timestamptz NOT NULL DEFAULT now()
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS attachment_events_attachment_at_idx
+      ON attachment_events(attachment_id, at DESC);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS attachment_artifacts (
+      artifact_id text PRIMARY KEY,
+      attachment_id text NOT NULL REFERENCES attachments(attachment_id)
+        ON DELETE CASCADE,
+      project_id text NOT NULL DEFAULT 'default',
+      created_by_user_id text NOT NULL DEFAULT 'local',
+      artifact_type text NOT NULL,
+      object_key text NOT NULL,
+      bytes bigint NULL,
+      content_type text NULL,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS attachment_artifacts_attachment_type_idx
+      ON attachment_artifacts(attachment_id, artifact_type);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS evidence_runs (
+      run_id text PRIMARY KEY,
+      project_id text NOT NULL DEFAULT 'default',
+      created_by_user_id text NOT NULL DEFAULT 'local',
+      claim_id text NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      note text NULL,
+      summary_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      metadata_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      candidates_object_key text NULL,
+      lock_state_json jsonb NOT NULL DEFAULT '{}'::jsonb
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS evidence_runs_claim_created_idx
+      ON evidence_runs(claim_id, created_at DESC);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS evidence_selections (
+      selection_id text PRIMARY KEY,
+      project_id text NOT NULL DEFAULT 'default',
+      updated_by_user_id text NOT NULL DEFAULT 'local',
+      claim_id text NOT NULL,
+      reviewer_uid text NOT NULL DEFAULT 'default',
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      verdict text NOT NULL,
+      primary_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      secondary_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      note text NULL
+    );
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS evidence_selections_claim_reviewer_uniq
+      ON evidence_selections(claim_id, reviewer_uid);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS judgments (
+      judgment_id text PRIMARY KEY,
+      project_id text NOT NULL DEFAULT 'default',
+      updated_by_user_id text NOT NULL DEFAULT 'local',
+      claim_id text NOT NULL,
+      reviewer_uid text NOT NULL DEFAULT 'default',
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      status text NOT NULL,
+      verdict text NOT NULL,
+      notes_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+
+      doc_id text NULL,
+      citation_index int NULL,
+      target_id text NULL,
+      sentence_id text NULL,
+      callout text NULL,
+      reference_id text NULL,
+      doi text NULL,
+      author text NULL,
+      year int NULL,
+      claim_text text NULL,
+      cited_work_id text NULL,
+      citation_anchor jsonb NOT NULL DEFAULT '{}'::jsonb,
+      span_selectors jsonb NOT NULL DEFAULT '{}'::jsonb,
+      validation_json jsonb NOT NULL DEFAULT '{}'::jsonb
+    );
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS judgments_claim_reviewer_uniq
+      ON judgments(claim_id, reviewer_uid);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS judgments_doc_id_idx
+      ON judgments(doc_id);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS confirmed_claims (
+      project_id text NOT NULL DEFAULT 'default',
+      document_id text NOT NULL,
+      sentence_id text NOT NULL,
+      claim_index int NOT NULL,
+      parsed_text text NOT NULL,
+      original_text text NULL,
+      segmentation_model text NULL,
+      reviewer_uid text NOT NULL DEFAULT 'default',
+      confirmed_at timestamptz NOT NULL DEFAULT now(),
+      confidence double precision NULL,
+      citation_index int NULL,
+      target_id text NULL,
+      sentence_text text NULL,
+      PRIMARY KEY(document_id, sentence_id, claim_index)
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS confirmed_claims_project_doc_idx
+      ON confirmed_claims(project_id, document_id);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS confirmed_claims_sentence_idx
+      ON confirmed_claims(sentence_id);
+    """,
 ]
 
 

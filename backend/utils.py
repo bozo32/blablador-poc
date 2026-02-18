@@ -5,10 +5,7 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import Any, List, Literal, Optional, Tuple, Union  # new import
-
-import pandas as pd
-from sentence_transformers import CrossEncoder, SentenceTransformer
+from typing import Any, List, Literal, Optional, Tuple, Union
 
 from backend.bl_client import BlabladorClient
 
@@ -89,7 +86,7 @@ def clean_text(text: str) -> str:
     return text.strip()
 
 
-def read_csv(path: Union[Path, str]) -> pd.DataFrame:
+def read_csv(path: Union[Path, str]):
     """Read a CSV file into a pandas DataFrame.
 
     Ensure correct path resolution and handle nested quoting.
@@ -99,6 +96,8 @@ def read_csv(path: Union[Path, str]) -> pd.DataFrame:
     path = Path(path)
     # First, try pandas’ parser in a slightly more forgiving mode:
     try:
+        import pandas as pd
+
         df = pd.read_csv(
             path,
             dtype=str,
@@ -119,8 +118,12 @@ def read_csv(path: Union[Path, str]) -> pd.DataFrame:
         reader = csv.reader(f)
         rows = list(reader)
     if not rows:
+        import pandas as pd
+
         return pd.DataFrame()
     header, *data = rows
+    import pandas as pd
+
     return pd.DataFrame(data, columns=header)
 
 
@@ -145,10 +148,10 @@ def list_local_models() -> list[str]:
 
 
 # Cache loaded models in memory for performance
-_loaded_models: dict[str, SentenceTransformer] = {}
+_loaded_models: dict[str, Any] = {}
 
 
-def get_model(model_name: str) -> SentenceTransformer:
+def get_model(model_name: str):
     """Load a SentenceTransformer from local cache if present.
 
     Download to MODEL_CACHE_DIR when missing.
@@ -156,6 +159,8 @@ def get_model(model_name: str) -> SentenceTransformer:
     if model_name in _loaded_models:
         return _loaded_models[model_name]
     try:
+        from sentence_transformers import SentenceTransformer
+
         local_path = MODEL_CACHE_DIR / model_name
         if local_path.exists():
             model = SentenceTransformer(str(local_path))
@@ -259,7 +264,9 @@ def make_retriever_key(row_id: str, segment_id: Optional[str] = None) -> str:
 
 
 @lru_cache(maxsize=4)  # adjust as needed
-def get_cross_encoder(model_name: str) -> CrossEncoder:
+def get_cross_encoder(model_name: str):
+    from sentence_transformers import CrossEncoder
+
     return CrossEncoder(model_name)
 
 

@@ -3280,15 +3280,42 @@ def get_citation_context(
     doc_id: str,
     citation_index: int = 0,
     target_id: Optional[str] = None,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
 ):
-    document = get_ingested_document(doc_id)
+    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
+
+    document = None
+    tei_xml: Optional[str] = None
+
+    if _spine_reads_enabled():
+        try:
+            document = build_ingested_document_from_spine(
+                work_id=str(doc_id),
+                project_id=project_id,
+                include_extraction_data=True,
+            )
+        except Exception:
+            logger.exception("Spine document read failed for doc_id=%s", doc_id)
+            document = None
+        try:
+            tei_xml = get_tei_xml_from_spine(work_id=str(doc_id), project_id=project_id)
+        except Exception:
+            tei_xml = None
+
+    if document is None and _legacy_ingestion_enabled():
+        document = get_ingested_document(doc_id)
+
+    if tei_xml is None and _legacy_ingestion_enabled():
+        try:
+            tei_xml = get_tei_xml(doc_id)
+        except FileNotFoundError:
+            tei_xml = None
+
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    try:
-        tei_xml = get_tei_xml(doc_id)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+    if not tei_xml:
+        return {"document_id": doc_id, "context": None}
 
     context = citation_context.get_citation_context(tei_xml, citation_index, target_id)
     if context is None:
@@ -3331,8 +3358,25 @@ def get_citation_graph(
     doi: Optional[str] = None,
     depth: int = 1,
     max_nodes: int = 10,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
 ):
-    document = get_ingested_document(doc_id)
+    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
+    document = None
+
+    if _spine_reads_enabled():
+        try:
+            document = build_ingested_document_from_spine(
+                work_id=str(doc_id),
+                project_id=project_id,
+                include_extraction_data=True,
+            )
+        except Exception:
+            logger.exception("Spine document read failed for doc_id=%s", doc_id)
+            document = None
+
+    if document is None and _legacy_ingestion_enabled():
+        document = get_ingested_document(doc_id)
+
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found")
 

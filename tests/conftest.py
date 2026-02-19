@@ -24,6 +24,7 @@ def _apply_spine_migrations() -> None:
                   attachment_artifacts,
                   attachment_events,
                   attachments,
+                  background_state,
                   evidence_runs,
                   evidence_selections,
                   judgments,

@@ -1,102 +1,123 @@
-"""On-disk persistence for per-claim reviewer judgments."""
+"""Spine-backed persistence for per-claim reviewer judgments.
+
+Phase 09.3: judgments persist in Postgres (no `data/judgments/**`).
+"""
 
 from __future__ import annotations
 
-import json
-import re
 import csv
+import json
 from datetime import datetime, timezone
-from hashlib import sha1
-from pathlib import Path
+from io import StringIO
 from typing import Any, Iterable, Literal, Optional
+from uuid import uuid4
 
 from pydantic import ValidationError
 
+from backend.db.pg import connect
 from backend.schemas import JudgmentPayload, JudgmentUpsertRequest
 from backend.settings import AppSettings, settings as app_settings
-
-
-_SAFE_ID_RE = re.compile(r"[^a-zA-Z0-9._-]+")
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _safe_claim_id(claim_id: str) -> str:
-    value = (claim_id or "").strip() or "unknown"
-    return _SAFE_ID_RE.sub("_", value)
-
-
-def _safe_reviewer_uid(reviewer_uid: str) -> str:
-    value = (reviewer_uid or "").strip() or "default"
-    return _SAFE_ID_RE.sub("_", value)
-
-
-def _claim_hash_suffix(claim_id: str) -> str:
-    return sha1((claim_id or "").encode("utf-8")).hexdigest()[:8]
-
-
-def _reviewer_hash_suffix(reviewer_uid: str) -> str:
-    return sha1((reviewer_uid or "").encode("utf-8")).hexdigest()[:8]
-
-
 class JudgmentStore:
     def __init__(self, *, settings: AppSettings = app_settings) -> None:
-        """Create a store for per-claim judgments."""
+        """Create a judgment store backed by Postgres."""
         self.settings = settings
-
-    @property
-    def root_dir(self) -> Path:
-        base = getattr(self.settings, "EVIDENCE_STORE_DIR", None)
-        if base is None:
-            return Path("data") / "judgments"
-        return Path(base).parent / "judgments"
-
-    def _path_for_claim(self, claim_id: str) -> Path:
-        """Legacy single-judgment storage path (Phase 07)."""
-        safe = _safe_claim_id(claim_id)
-        suffix = _claim_hash_suffix(claim_id)
-        return self.root_dir / f"{safe}__{suffix}.json"
-
-    def _path_for_claim_reviewer(self, claim_id: str, reviewer_uid: str) -> Path:
-        safe_claim = _safe_claim_id(claim_id)
-        claim_suffix = _claim_hash_suffix(claim_id)
-        safe_reviewer = _safe_reviewer_uid(reviewer_uid)
-        reviewer_suffix = _reviewer_hash_suffix(reviewer_uid)
-        return (
-            self.root_dir
-            / f"{safe_claim}__{claim_suffix}__{safe_reviewer}__{reviewer_suffix}.json"
-        )
 
     def read(
         self, claim_id: str, reviewer_uid: str = "default"
     ) -> Optional[JudgmentPayload]:
-        reviewer = (reviewer_uid or "").strip() or "default"
-        path = self._path_for_claim_reviewer(claim_id, reviewer)
-        if not path.exists() and reviewer == "default":
-            legacy = self._path_for_claim(claim_id)
-            if legacy.exists():
-                path = legacy
-        if not path.exists():
+        cid = str(claim_id or "").strip()
+        rid = str(reviewer_uid or "default").strip() or "default"
+        if not cid:
             return None
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                      reviewer_uid,
+                      updated_at,
+                      status,
+                      verdict,
+                      notes_json,
+                      validation_json,
+                      doc_id,
+                      citation_index,
+                      target_id,
+                      sentence_id,
+                      callout,
+                      reference_id,
+                      doi,
+                      author,
+                      year,
+                      claim_text,
+                      cited_work_id,
+                      citation_anchor,
+                      span_selectors
+                    FROM judgments
+                    WHERE claim_id=%s AND reviewer_uid=%s
+                    """,
+                    (cid, rid),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return None
+        payload = {
+            "claim_id": cid,
+            "reviewer_uid": str(row[0] or "default"),
+            "updated_at": row[1].isoformat().replace("+00:00", "Z")
+            if row[1]
+            else _now(),
+            "status": row[2],
+            "verdict": row[3],
+            "notes": row[4]
+            if isinstance(row[4], dict)
+            else json.loads(row[4] or "null"),
+            "validation": row[5]
+            if isinstance(row[5], dict)
+            else json.loads(row[5] or "null"),
+            "doc_id": row[6],
+            "citation_index": row[7],
+            "target_id": row[8],
+            "sentence_id": row[9],
+            "callout": row[10],
+            "reference_id": row[11],
+            "doi": row[12],
+            "author": row[13],
+            "year": str(row[14]) if row[14] is not None else None,
+            "claim_text": row[15],
+            "cited_work_id": row[16],
+            "citation_anchor": row[17]
+            if isinstance(row[17], dict)
+            else json.loads(row[17] or "null"),
+            "span_selectors": row[18]
+            if isinstance(row[18], dict)
+            else json.loads(row[18] or "null"),
+        }
         return JudgmentPayload.model_validate(payload)
 
     def upsert(
         self, claim_id: str, judgment: dict | JudgmentUpsertRequest
     ) -> JudgmentPayload:
+        cid = str(claim_id or "").strip()
+        if not cid:
+            raise ValueError("claim_id is required")
         request = (
             judgment
             if isinstance(judgment, JudgmentUpsertRequest)
             else JudgmentUpsertRequest.model_validate(judgment)
         )
-
         reviewer = (
-            str(getattr(request, "reviewer_uid", "default") or "").strip() or "default"
+            str(getattr(request, "reviewer_uid", "default") or "default").strip()
+            or "default"
         )
         stored = JudgmentPayload(
-            claim_id=claim_id,
+            claim_id=cid,
             reviewer_uid=reviewer,
             updated_at=_now(),
             status=request.status,
@@ -118,77 +139,179 @@ class JudgmentStore:
             span_selectors=getattr(request, "span_selectors", None),
         )
 
-        path = self._path_for_claim_reviewer(claim_id, reviewer)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(stored.model_dump(mode="json"), indent=2, sort_keys=True),
-            encoding="utf-8",
+        notes_json = (
+            stored.notes.model_dump(mode="json") if stored.notes is not None else None
         )
+        validation_json = (
+            stored.validation.model_dump(mode="json")
+            if getattr(stored, "validation", None) is not None
+            else None
+        )
+        citation_anchor_json = (
+            stored.citation_anchor
+            if isinstance(getattr(stored, "citation_anchor", None), dict)
+            else getattr(stored, "citation_anchor", None)
+        )
+        span_selectors_json = (
+            stored.span_selectors
+            if isinstance(getattr(stored, "span_selectors", None), dict)
+            else getattr(stored, "span_selectors", None)
+        )
+
+        with connect(autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO judgments(
+                      judgment_id,
+                      project_id,
+                      updated_by_user_id,
+                      claim_id,
+                      reviewer_uid,
+                      updated_at,
+                      status,
+                      verdict,
+                      notes_json,
+                      doc_id,
+                      citation_index,
+                      target_id,
+                      sentence_id,
+                      callout,
+                      reference_id,
+                      doi,
+                      author,
+                      year,
+                      claim_text,
+                      cited_work_id,
+                      citation_anchor,
+                      span_selectors,
+                      validation_json
+                    )
+                    VALUES (
+                      %s,
+                      'default',
+                      'local',
+                      %s,
+                      %s,
+                      now(),
+                      %s,
+                      %s,
+                      %s::jsonb,
+                      %s,
+                      %s,
+                      %s,
+                      %s,
+                      %s,
+                      %s,
+                      %s,
+                      %s,
+                      %s,
+                      %s,
+                      %s,
+                      %s::jsonb,
+                      %s::jsonb,
+                      %s::jsonb
+                    )
+                    ON CONFLICT(claim_id, reviewer_uid) DO UPDATE
+                      SET updated_at=excluded.updated_at,
+                          updated_by_user_id=excluded.updated_by_user_id,
+                          status=excluded.status,
+                          verdict=excluded.verdict,
+                          notes_json=excluded.notes_json,
+                          doc_id=excluded.doc_id,
+                          citation_index=excluded.citation_index,
+                          target_id=excluded.target_id,
+                          sentence_id=excluded.sentence_id,
+                          callout=excluded.callout,
+                          reference_id=excluded.reference_id,
+                          doi=excluded.doi,
+                          author=excluded.author,
+                          year=excluded.year,
+                          claim_text=excluded.claim_text,
+                          cited_work_id=excluded.cited_work_id,
+                          citation_anchor=excluded.citation_anchor,
+                          span_selectors=excluded.span_selectors,
+                          validation_json=excluded.validation_json
+                    """,
+                    (
+                        str(uuid4()),
+                        cid,
+                        reviewer,
+                        str(stored.status),
+                        str(stored.verdict) if stored.verdict is not None else None,
+                        json.dumps(notes_json, ensure_ascii=True)
+                        if notes_json is not None
+                        else json.dumps(None),
+                        stored.doc_id,
+                        stored.citation_index,
+                        stored.target_id,
+                        stored.sentence_id,
+                        stored.callout,
+                        stored.reference_id,
+                        stored.doi,
+                        stored.author,
+                        stored.year,
+                        stored.claim_text,
+                        getattr(stored, "cited_work_id", None),
+                        json.dumps(citation_anchor_json, ensure_ascii=True)
+                        if citation_anchor_json is not None
+                        else json.dumps(None),
+                        json.dumps(span_selectors_json, ensure_ascii=True)
+                        if span_selectors_json is not None
+                        else json.dumps(None),
+                        json.dumps(validation_json, ensure_ascii=True)
+                        if validation_json is not None
+                        else json.dumps(None),
+                    ),
+                )
         return stored
 
     def validate(self, judgment: dict) -> JudgmentUpsertRequest:
-        """Validate an upsert payload without persisting it."""
         try:
             return JudgmentUpsertRequest.model_validate(judgment)
         except ValidationError:
             raise
 
     def list_all(self) -> list[JudgmentPayload]:
-        """List all stored judgments (including legacy default-only files)."""
-        root = self.root_dir
-        if not root.exists():
-            return []
-
-        reviewer_items: list[JudgmentPayload] = []
-        reviewer_keys: set[tuple[str, str]] = set()
-        legacy_paths: list[Path] = []
-
-        for path in sorted(root.glob("*.json")):
-            parts = path.stem.split("__")
-            if len(parts) == 2:
-                legacy_paths.append(path)
-                continue
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            item = JudgmentPayload.model_validate(payload)
-            reviewer_items.append(item)
-            reviewer_keys.add((item.claim_id, item.reviewer_uid))
-
-        items = list(reviewer_items)
-        for path in legacy_paths:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            item = JudgmentPayload.model_validate(payload)
-            key = (item.claim_id, item.reviewer_uid)
-            if key in reviewer_keys:
-                continue
-            items.append(item)
-
-        items.sort(key=lambda item: (item.claim_id, item.reviewer_uid))
-        return items
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT claim_id, reviewer_uid
+                    FROM judgments
+                    ORDER BY claim_id, reviewer_uid
+                    """
+                )
+                rows = cur.fetchall() or []
+        out: list[JudgmentPayload] = []
+        for cid, rid in rows:
+            item = self.read(str(cid), reviewer_uid=str(rid))
+            if item is not None:
+                out.append(item)
+        return out
 
     def list_for_claim(self, claim_id: str) -> list[JudgmentPayload]:
-        """List all reviewer judgments for a claim (legacy default included)."""
-        root = self.root_dir
-        if not root.exists():
+        cid = str(claim_id or "").strip()
+        if not cid:
             return []
-
-        safe = _safe_claim_id(claim_id)
-        suffix = _claim_hash_suffix(claim_id)
-        reviewer_paths = sorted(root.glob(f"{safe}__{suffix}__*.json"))
-        items: list[JudgmentPayload] = []
-        keys: set[tuple[str, str]] = set()
-        for path in reviewer_paths:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            item = JudgmentPayload.model_validate(payload)
-            items.append(item)
-            keys.add((item.claim_id, item.reviewer_uid))
-
-        legacy = self._path_for_claim(claim_id)
-        if legacy.exists() and (claim_id, "default") not in keys:
-            payload = json.loads(legacy.read_text(encoding="utf-8"))
-            items.append(JudgmentPayload.model_validate(payload))
-
-        items.sort(key=lambda item: item.reviewer_uid)
-        return items
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT reviewer_uid
+                    FROM judgments
+                    WHERE claim_id=%s
+                    ORDER BY reviewer_uid
+                    """,
+                    (cid,),
+                )
+                rows = cur.fetchall() or []
+        out: list[JudgmentPayload] = []
+        for (rid,) in rows:
+            item = self.read(cid, reviewer_uid=str(rid))
+            if item is not None:
+                out.append(item)
+        return out
 
     def list_filtered(
         self,
@@ -196,7 +319,6 @@ class JudgmentStore:
         status: Literal["final", "draft", "all"],
         doc_id: str | None = None,
     ) -> list[JudgmentPayload]:
-        """List stored judgments filtered by status and optional doc_id."""
         items = self.list_all()
         if doc_id is not None:
             items = [item for item in items if item.doc_id == doc_id]
@@ -211,7 +333,6 @@ class JudgmentStore:
         mode: Literal["core", "verbose"],
         format: Literal["json", "csv"],
     ) -> bytes:
-        """Export per-claim judgments as JSON or CSV."""
         judgments = self.list_all()
         if not include_drafts:
             judgments = [j for j in judgments if j.status == "final"]
@@ -293,45 +414,17 @@ class JudgmentStore:
                 json.dumps(rows, indent=2, sort_keys=True, ensure_ascii=True) + "\n"
             ).encode("utf-8")
 
-        if not rows:
-            headers = list(core_row(JudgmentPayload(claim_id="x")).keys())
-            if mode == "verbose":
-                headers = [
-                    "claim_id",
-                    "reviewer_uid",
-                    "status",
-                    "verdict",
-                    "claim_text",
-                    "updated_at",
-                    "rationale",
-                    "caveats",
-                    "followups",
-                    "source_valid",
-                    "source_valid_comment",
-                    "source_relevant",
-                    "source_relevant_comment",
-                    "sentence_id",
-                    "reference_id",
-                    "doi",
-                    "author",
-                    "year",
-                    "doc_id",
-                    "citation_index",
-                    "target_id",
-                    "callout",
-                ]
-        else:
-            headers = list(rows[0].keys())
-        buf: list[str] = []
-        from io import StringIO
-
+        headers = (
+            list(rows[0].keys())
+            if rows
+            else list(core_row(JudgmentPayload(claim_id="x")).keys())
+        )
         sio = StringIO()
         writer = csv.DictWriter(sio, fieldnames=headers, extrasaction="ignore")
         writer.writeheader()
         for row in rows:
             writer.writerow(row)
-        buf.append(sio.getvalue())
-        return "".join(buf).encode("utf-8")
+        return sio.getvalue().encode("utf-8")
 
     def export_callouts(
         self,
@@ -340,7 +433,6 @@ class JudgmentStore:
         mode: Literal["core", "verbose"],
         format: Literal["json", "csv"],
     ) -> bytes:
-        """Export judgments grouped per citation callout as JSON or CSV."""
         judgments = self.list_all()
         if not include_drafts:
             judgments = [j for j in judgments if j.status == "final"]
@@ -413,51 +505,34 @@ class JudgmentStore:
                 + "\n"
             ).encode("utf-8")
 
-        from io import StringIO
-
+        # CSV: flatten.
         flat_rows: list[dict[str, Any]] = []
         for group in group_items:
-            group_fields = {
-                "doc_id": group.get("doc_id"),
-                "citation_index": group.get("citation_index"),
-                "target_id": group.get("target_id"),
-                "callout": group.get("callout"),
-            }
             for claim in group.get("claims") or []:
-                row = {**group_fields, **(claim or {})}
-                if mode == "verbose":
-                    notes = row.pop("notes", None) or {}
-                    if not isinstance(notes, dict):
-                        notes = {}
-                    row["rationale"] = notes.get("rationale")
-                    row["caveats"] = notes.get("caveats")
-                    row["followups"] = notes.get("followups")
-                flat_rows.append(row)
-
-        headers = [
-            "doc_id",
-            "citation_index",
-            "target_id",
-            "callout",
-            "claim_id",
-            "reviewer_uid",
-            "status",
-            "verdict",
-            "claim_text",
-        ]
-        if mode == "verbose":
-            headers += [
-                "updated_at",
-                "sentence_id",
-                "reference_id",
-                "doi",
-                "author",
-                "year",
-                "rationale",
-                "caveats",
-                "followups",
+                flat_rows.append(
+                    {
+                        "doc_id": group.get("doc_id"),
+                        "citation_index": group.get("citation_index"),
+                        "target_id": group.get("target_id"),
+                        "callout": group.get("callout"),
+                        **(claim if isinstance(claim, dict) else {}),
+                    }
+                )
+        headers = (
+            list(flat_rows[0].keys())
+            if flat_rows
+            else [
+                "doc_id",
+                "citation_index",
+                "target_id",
+                "callout",
+                "claim_id",
+                "reviewer_uid",
+                "status",
+                "verdict",
+                "claim_text",
             ]
-
+        )
         sio = StringIO()
         writer = csv.DictWriter(sio, fieldnames=headers, extrasaction="ignore")
         writer.writeheader()

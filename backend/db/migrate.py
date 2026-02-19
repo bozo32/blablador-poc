@@ -302,6 +302,14 @@ _DDL_STATEMENTS: list[str] = [
     );
     """,
     """
+    CREATE TABLE IF NOT EXISTS background_state (
+      project_id text PRIMARY KEY,
+      paused boolean NOT NULL DEFAULT false,
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      reason text NULL
+    );
+    """,
+    """
     CREATE TABLE IF NOT EXISTS attachments (
       attachment_id text PRIMARY KEY,
       project_id text NOT NULL DEFAULT 'default',
@@ -425,7 +433,7 @@ _DDL_STATEMENTS: list[str] = [
       reviewer_uid text NOT NULL DEFAULT 'default',
       updated_at timestamptz NOT NULL DEFAULT now(),
       status text NOT NULL,
-      verdict text NOT NULL,
+      verdict text NULL,
       notes_json jsonb NOT NULL DEFAULT '{}'::jsonb,
 
       doc_id text NULL,
@@ -436,13 +444,24 @@ _DDL_STATEMENTS: list[str] = [
       reference_id text NULL,
       doi text NULL,
       author text NULL,
-      year int NULL,
+      year text NULL,
       claim_text text NULL,
       cited_work_id text NULL,
       citation_anchor jsonb NOT NULL DEFAULT '{}'::jsonb,
       span_selectors jsonb NOT NULL DEFAULT '{}'::jsonb,
       validation_json jsonb NOT NULL DEFAULT '{}'::jsonb
     );
+    """,
+    # Older DBs may have verdict NOT NULL; drafts allow NULL verdict.
+    """
+    ALTER TABLE judgments
+      ALTER COLUMN verdict DROP NOT NULL;
+    """,
+    # Older DBs may have year as int; schema expects string (and may be non-numeric).
+    """
+    ALTER TABLE judgments
+      ALTER COLUMN year TYPE text
+      USING year::text;
     """,
     """
     CREATE UNIQUE INDEX IF NOT EXISTS judgments_claim_reviewer_uniq

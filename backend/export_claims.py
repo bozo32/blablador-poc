@@ -1,11 +1,10 @@
 import json
-import sqlite3
 from pathlib import Path
 
-from backend.settings import settings
+from backend.db.pg import connect
 
 
-EXPORT_PATH = settings.CLAIM_DB_PATH.parent / "claims.ndjson"
+EXPORT_PATH = Path(__file__).parent.parent / "data" / "claims.ndjson"
 
 
 def export_claims(out_path: Path | str = EXPORT_PATH) -> int:
@@ -13,36 +12,67 @@ def export_claims(out_path: Path | str = EXPORT_PATH) -> int:
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    conn = sqlite3.connect(str(settings.CLAIM_DB_PATH))
-    conn.row_factory = sqlite3.Row
+    exported = 0
 
     query = """
     SELECT
-        c.claim_id,
-        c.sentence_id,
-        c.claim_index,
-        c.parsed_text,
-        c.original_text,
-        c.segmentation_model,
-        c.reviewer_uid,
-        c.confirmed_at,
-        c.confidence,
-        s.doc_id,
-        s.citation_index,
-        s.target_id,
-        s.sentence_text,
-        d.filename,
-        d.uploaded_at
-    FROM claims c
-    JOIN sentences s ON c.sentence_id = s.sentence_id
-    LEFT JOIN documents d ON s.doc_id = d.doc_id
-    ORDER BY c.confirmed_at DESC
+      project_id,
+      document_id,
+      sentence_id,
+      claim_index,
+      parsed_text,
+      original_text,
+      segmentation_model,
+      reviewer_uid,
+      confirmed_at,
+      confidence,
+      citation_index,
+      target_id,
+      sentence_text
+    FROM confirmed_claims
+    ORDER BY confirmed_at DESC
     """
 
-    exported = 0
-    with conn, out_path.open("w", encoding="utf-8") as fh:
-        for row in conn.execute(query):
-            record = {key: row[key] for key in row.keys()}
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query)
+            rows = cur.fetchall() or []
+
+    with out_path.open("w", encoding="utf-8") as fh:
+        for (
+            project_id,
+            document_id,
+            sentence_id,
+            claim_index,
+            parsed_text,
+            original_text,
+            segmentation_model,
+            reviewer_uid,
+            confirmed_at,
+            confidence,
+            citation_index,
+            target_id,
+            sentence_text,
+        ) in rows:
+            record = {
+                "project_id": project_id,
+                "document_id": document_id,
+                # Back-compat with older exporters.
+                "doc_id": document_id,
+                "sentence_id": sentence_id,
+                "claim_index": claim_index,
+                "parsed_text": parsed_text,
+                "original_text": original_text,
+                "segmentation_model": segmentation_model,
+                "reviewer_uid": reviewer_uid,
+                "confirmed_at": confirmed_at.isoformat().replace("+00:00", "Z")
+                if confirmed_at is not None
+                else None,
+                "confidence": confidence,
+                "citation_index": citation_index,
+                "target_id": target_id,
+                "sentence_text": sentence_text,
+            }
             fh.write(json.dumps(record, ensure_ascii=False) + "\n")
             exported += 1
     return exported

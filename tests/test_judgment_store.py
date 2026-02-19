@@ -1,7 +1,7 @@
 import csv
 import json
-from pathlib import Path
 from io import StringIO
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -14,6 +14,12 @@ from backend.settings import settings
 @pytest.fixture()
 def store(tmp_path: Path, monkeypatch) -> JudgmentStore:
     monkeypatch.setattr(settings, "EVIDENCE_STORE_DIR", tmp_path / "evidence_runs")
+    # JudgmentStore is spine-backed (Postgres), so isolate tests by truncating.
+    from backend.db.pg import connect
+
+    with connect(autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute("TRUNCATE judgments")
     return JudgmentStore(settings=settings)
 
 
@@ -36,12 +42,6 @@ def test_notes_structured_and_optional():
     assert payload.notes is not None
     assert payload.notes.rationale == "Because."
     assert payload.notes.caveats is None
-
-
-def test_filename_collision_guard(store: JudgmentStore):
-    claim_a = "a:b"
-    claim_b = "a?b"
-    assert store._path_for_claim(claim_a).name != store._path_for_claim(claim_b).name
 
 
 def test_roundtrip_write_and_read(store: JudgmentStore):
@@ -107,29 +107,6 @@ def test_two_reviewers_can_upsert_same_claim_without_overwriting(store: Judgment
 
     all_for_claim = store.list_for_claim("claim-9")
     assert {j.reviewer_uid for j in all_for_claim} == {"Alice", "Bob"}
-
-
-def test_legacy_single_judgment_file_is_still_readable(store: JudgmentStore):
-    legacy_path = store._path_for_claim("claim-legacy")
-    legacy_path.parent.mkdir(parents=True, exist_ok=True)
-    legacy_path.write_text(
-        json.dumps(
-            {
-                "claim_id": "claim-legacy",
-                "status": "draft",
-                "verdict": None,
-                "notes": None,
-            },
-            indent=2,
-            sort_keys=True,
-        ),
-        encoding="utf-8",
-    )
-
-    loaded = store.read("claim-legacy", reviewer_uid="default")
-    assert loaded is not None
-    assert loaded.claim_id == "claim-legacy"
-    assert loaded.reviewer_uid == "default"
 
 
 def test_upsert_updates_timestamp(store: JudgmentStore):

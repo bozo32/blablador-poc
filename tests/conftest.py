@@ -11,11 +11,18 @@ def _apply_spine_migrations() -> None:
     Postgres, so unit tests require the DDL to be present.
     """
     from backend.db.migrate import apply_migrations
-    from backend.db.pg import connect
 
     apply_migrations()
 
-    # Keep tests isolated from prior runs: these tables are now spine-backed.
+
+@pytest.fixture(autouse=True)
+def _truncate_spine_backed_tables() -> None:
+    """Keep tests isolated from prior runs.
+
+    Phase 09.3 moves multiple stores onto Postgres; graph/spans are now Postgres too.
+    """
+    from backend.db.pg import connect
+
     with connect(autocommit=True) as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -29,7 +36,25 @@ def _apply_spine_migrations() -> None:
                   evidence_selections,
                   judgments,
                   confirmed_claims,
-                  project_meta
+                  project_meta,
+                  graph_edge_votes,
+                  graph_edges,
+                  graph_aliases,
+                  graph_nodes,
+                  span_graph_neighborhood_candidates,
+                  span_graph_neighborhood_runs,
+                  span_graph_review_marks,
+                  span_graph_assertions,
+                  span_graph_claim_span_atoms,
+                  span_graph_claim_atoms,
+                  span_graph_claim_spans,
+                  span_graph_span_cite_roles,
+                  span_graph_citation_span_index,
+                  span_graph_span_cites,
+                  span_graph_spans,
+                  span_graph_work_cites,
+                  span_graph_works
+                RESTART IDENTITY CASCADE
                 """
             )
 

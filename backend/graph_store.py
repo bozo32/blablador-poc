@@ -3,10 +3,12 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
+
+from backend.db.pg import connect
+from backend.settings import AppSettings, settings as app_settings
 
 
 _NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
@@ -14,11 +16,6 @@ _NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-def _ensure_parent(path: Path) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    return path
 
 
 def _norm_text(value: Optional[str]) -> str:
@@ -68,10 +65,7 @@ def bib_fingerprint(
 
 
 def _safe_bib_key(
-    *,
-    title: Optional[str],
-    authors: Optional[Sequence[str]],
-    year: Optional[str],
+    *, title: Optional[str], authors: Optional[Sequence[str]], year: Optional[str]
 ) -> Optional[str]:
     """Return a bib:... key only when metadata is specific enough.
 
@@ -105,104 +99,97 @@ def doc_key_for_ingest(ingest_meta: dict) -> Optional[str]:
     return None
 
 
-SCHEMA: List[str] = [
-    """
-    CREATE TABLE IF NOT EXISTS nodes (
-        node_id TEXT PRIMARY KEY,
-        kind TEXT NOT NULL,
-        num INTEGER UNIQUE,
-        label TEXT,
-        properties_json TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS aliases (
-        alias TEXT PRIMARY KEY,
-        node_id TEXT NOT NULL,
-        kind TEXT NOT NULL,
-        created_at TEXT NOT NULL
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS edges (
-        edge_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        source_id TEXT NOT NULL,
-        target_id TEXT NOT NULL,
-        kind TEXT NOT NULL,
-        ref_id TEXT NOT NULL DEFAULT '',
-        enabled INTEGER NOT NULL DEFAULT 1,
-        properties_json TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        UNIQUE(source_id, target_id, kind, ref_id)
-    )
-    """,
-    "CREATE INDEX IF NOT EXISTS idx_edges_source_kind ON edges(source_id, kind)",
-    "CREATE INDEX IF NOT EXISTS idx_edges_target_kind ON edges(target_id, kind)",
-    "CREATE INDEX IF NOT EXISTS idx_edges_enabled_kind ON edges(enabled, kind)",
-    # Phase 09: per-edge multi-user votes (consensus aggregates computed from rows).
-    """
-    CREATE TABLE IF NOT EXISTS edge_votes (
-        edge_id INTEGER NOT NULL,
-        reviewer_uid TEXT NOT NULL,
-        verdict TEXT NOT NULL,
-        confidence REAL,
-        comment TEXT,
-        updated_at TEXT NOT NULL,
-        PRIMARY KEY(edge_id, reviewer_uid),
-        FOREIGN KEY(edge_id) REFERENCES edges(edge_id) ON DELETE CASCADE
-    )
-    """,
-    "CREATE INDEX IF NOT EXISTS idx_edge_votes_edge_id ON edge_votes(edge_id)",
-]
+def _json_dumps(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=True)
 
 
 class GraphStore:
-    def __init__(self, db_path: Path):
-        """SQLite-backed graph store (nodes + edges)."""
-        self._path = _ensure_parent(db_path)
-        self._conn = sqlite3.connect(str(self._path), check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA foreign_keys = ON")
-        self._init_schema()
+    """Postgres-backed graph store (nodes + edges + votes).
 
-    def _init_schema(self) -> None:
-        with self._conn:
-            for ddl in SCHEMA:
-                self._conn.execute(ddl)
+    Phase 09.3 removes durable local SQLite graph stores (`data/graph.db`).
+
+    Notes:
+    - The constructor keeps the legacy `db_path` argument for API compatibility.
+    - All rows are scoped by `project_id`.
+    """
+
+    def __init__(
+        self, db_path: Optional[Path] = None, *, settings: AppSettings = app_settings
+    ) -> None:
+        """Create a Postgres-backed graph store."""
+        self._db_path = db_path
+        self.settings = settings
+
+    def _project_id(self) -> str:
+        return str(getattr(self.settings, "DEFAULT_PROJECT_ID", "default") or "default")
 
     def wipe(self) -> None:
-        """Delete all graph rows (keeps schema)."""
-        with self._conn:
-            # Order matters due to FKs.
-            for table in ("edge_votes", "edges", "nodes"):
-                self._conn.execute(f"DELETE FROM {table}")
+        """Delete all graph rows for the active project (keeps schema)."""
+        pid = self._project_id()
+        with connect(autocommit=True) as conn:
+            with conn.cursor() as cur:
+                # Votes cascade via graph_edges.
+                cur.execute("DELETE FROM graph_edges WHERE project_id=%s", (pid,))
+                cur.execute("DELETE FROM graph_aliases WHERE project_id=%s", (pid,))
+                cur.execute("DELETE FROM graph_nodes WHERE project_id=%s", (pid,))
 
     def _next_num(self) -> int:
-        row = self._conn.execute(
-            "SELECT COALESCE(MAX(num), 0) AS max_num FROM nodes"
-        ).fetchone()
-        return int(row["max_num"] or 0) + 1
+        pid = self._project_id()
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT COALESCE(MAX(num), 0) FROM graph_nodes WHERE project_id=%s",
+                    (pid,),
+                )
+                row = cur.fetchone()
+                return int((row[0] or 0) + 1)
 
     def _get_node(self, node_id: str) -> Optional[dict]:
-        row = self._conn.execute(
-            """
-            SELECT node_id, kind, num, label, properties_json, created_at, updated_at
-            FROM nodes
-            WHERE node_id=?
-            """,
-            (node_id,),
-        ).fetchone()
-        if not row:
+        pid = self._project_id()
+        nid = str(node_id or "").strip()
+        if not nid:
             return None
-        data = dict(row)
-        try:
-            data["properties"] = json.loads(data.pop("properties_json") or "{}")
-        except Exception:
-            data["properties"] = {}
-        return data
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                      node_id,
+                      kind,
+                      num,
+                      label,
+                      properties_json,
+                      created_at,
+                      updated_at
+                    FROM graph_nodes
+                    WHERE project_id=%s AND node_id=%s
+                    """,
+                    (pid, nid),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return None
+
+        node_id2, kind, num, label, props_raw, created_at, updated_at = row
+        props = props_raw if isinstance(props_raw, dict) else {}
+        if props_raw is not None and not isinstance(props_raw, dict):
+            try:
+                props = json.loads(props_raw)
+            except Exception:
+                props = {}
+        return {
+            "node_id": str(node_id2),
+            "kind": str(kind),
+            "num": int(num) if num is not None else None,
+            "label": label,
+            "properties": props,
+            "created_at": created_at.isoformat().replace("+00:00", "Z")
+            if created_at is not None
+            else None,
+            "updated_at": updated_at.isoformat().replace("+00:00", "Z")
+            if updated_at is not None
+            else None,
+        }
 
     def _upsert_node(
         self,
@@ -212,8 +199,10 @@ class GraphStore:
         label: Optional[str] = None,
         merge_properties: Optional[dict] = None,
     ) -> dict:
+        pid = self._project_id()
         existing = self._get_node(node_id)
         now = _now()
+
         if existing:
             props = dict(existing.get("properties") or {})
             for k, v in (merge_properties or {}).items():
@@ -221,86 +210,99 @@ class GraphStore:
                     continue
                 if k not in props or props.get(k) in (None, "", []):
                     props[k] = v
-                else:
-                    # special-case: lists should extend.
-                    if isinstance(props.get(k), list) and isinstance(v, list):
-                        merged = list(props.get(k) or [])
-                        for item in v:
-                            if item not in merged:
-                                merged.append(item)
-                        props[k] = merged
             new_label = label if label is not None else existing.get("label")
-            with self._conn:
-                self._conn.execute(
-                    """
-                    UPDATE nodes
-                    SET label=?, properties_json=?, updated_at=?
-                    WHERE node_id=?
-                    """,
-                    (
-                        new_label,
-                        json.dumps(props, ensure_ascii=True),
-                        now,
-                        node_id,
-                    ),
-                )
+            with connect(autocommit=True) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE graph_nodes
+                        SET label=%s, properties_json=%s::jsonb, updated_at=now()
+                        WHERE project_id=%s AND node_id=%s
+                        """,
+                        (new_label, _json_dumps(props), pid, str(node_id)),
+                    )
             return self._get_node(node_id) or existing
 
         num = self._next_num()
-        props = merge_properties or {}
-        with self._conn:
-            self._conn.execute(
-                """
-                    INSERT INTO nodes(
-                        node_id,
-                        kind,
-                        num,
-                        label,
-                        properties_json,
-                        created_at,
-                        updated_at
+        props2 = merge_properties or {}
+        with connect(autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO graph_nodes(
+                      project_id,
+                      node_id,
+                      kind,
+                      num,
+                      label,
+                      properties_json,
+                      created_at,
+                      updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s, %s, %s::jsonb, now(), now())
                     """,
-                (
-                    node_id,
-                    kind,
-                    num,
-                    label,
-                    json.dumps(props, ensure_ascii=True),
-                    now,
-                    now,
-                ),
-            )
+                    (
+                        pid,
+                        str(node_id),
+                        str(kind),
+                        int(num),
+                        label,
+                        _json_dumps(props2),
+                    ),
+                )
         return self._get_node(node_id) or {
-            "node_id": node_id,
-            "kind": kind,
-            "num": num,
+            "node_id": str(node_id),
+            "kind": str(kind),
+            "num": int(num),
             "label": label,
-            "properties": dict(props),
+            "properties": dict(props2),
+            "created_at": now,
+            "updated_at": now,
         }
 
     def _set_alias(self, *, alias: str, node_id: str, kind: str) -> None:
-        with self._conn:
-            self._conn.execute(
-                """
-                INSERT OR REPLACE INTO aliases(alias, node_id, kind, created_at)
-                VALUES (?, ?, ?, ?)
-                """,
-                (alias, node_id, kind, _now()),
-            )
+        pid = self._project_id()
+        with connect(autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO graph_aliases(
+                      project_id,
+                      alias,
+                      node_id,
+                      kind,
+                      created_at
+                    )
+                    VALUES (%s, %s, %s, %s, now())
+                    ON CONFLICT(project_id, alias) DO UPDATE
+                      SET node_id=excluded.node_id,
+                          kind=excluded.kind,
+                          created_at=excluded.created_at
+                    """,
+                    (pid, str(alias), str(node_id), str(kind)),
+                )
 
     def resolve_alias(self, alias: str) -> Optional[str]:
-        row = self._conn.execute(
-            "SELECT node_id FROM aliases WHERE alias=?",
-            (alias,),
-        ).fetchone()
-        return str(row["node_id"]) if row else None
+        pid = self._project_id()
+        a = str(alias or "").strip()
+        if not a:
+            return None
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT node_id
+                    FROM graph_aliases
+                    WHERE project_id=%s AND alias=%s
+                    """,
+                    (pid, a),
+                )
+                row = cur.fetchone()
+                return str(row[0]) if row and row[0] else None
 
     def resolve_reference_to_ingest_id(
         self, *, citing_doc_id: str, reference_id: str
     ) -> Optional[str]:
-        """Return an anchored ingest_id for a citing doc's reference_id (target_id)."""
         citing = str(citing_doc_id or "").strip()
         ref = str(reference_id or "").strip()
         if not citing or not ref:
@@ -315,8 +317,6 @@ class GraphStore:
             value = ingest_ids[0]
             return str(value) if value else None
 
-        # Fallback: attempt to resolve the reference's doc_key/doi to an ingested
-        # document node via aliases.
         doi = normalize_doi(props.get("doi"))
         if doi:
             node_id2 = self.resolve_alias(f"doi:{doi}")
@@ -349,71 +349,78 @@ class GraphStore:
         ref_id: str = "",
         enabled: bool = True,
         merge_properties: Optional[dict] = None,
-    ) -> None:
-        now = _now()
+    ) -> int:
+        pid = self._project_id()
         ref_id_norm = str(ref_id or "")
-        row = self._conn.execute(
-            """
-            SELECT edge_id, properties_json, enabled
-            FROM edges
-            WHERE source_id=? AND target_id=? AND kind=? AND ref_id=?
-            """,
-            (source_id, target_id, kind, ref_id_norm),
-        ).fetchone()
+
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT edge_id, properties_json
+                    FROM graph_edges
+                    WHERE project_id=%s
+                      AND source_id=%s
+                      AND target_id=%s
+                      AND kind=%s
+                      AND ref_id=%s
+                    """,
+                    (pid, str(source_id), str(target_id), str(kind), ref_id_norm),
+                )
+                row = cur.fetchone()
+
         if row:
-            try:
-                props = json.loads(row["properties_json"] or "{}")
-            except Exception:
-                props = {}
+            edge_id, props_raw = row
+            props = props_raw if isinstance(props_raw, dict) else {}
+            if props_raw is not None and not isinstance(props_raw, dict):
+                try:
+                    props = json.loads(props_raw)
+                except Exception:
+                    props = {}
             for k, v in (merge_properties or {}).items():
                 if v is None:
                     continue
                 if k not in props or props.get(k) in (None, "", []):
                     props[k] = v
-            with self._conn:
-                self._conn.execute(
+            with connect(autocommit=True) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE graph_edges
+                        SET enabled=%s, properties_json=%s::jsonb, updated_at=now()
+                        WHERE edge_id=%s
+                        """,
+                        (bool(enabled), _json_dumps(props), int(edge_id)),
+                    )
+            return int(edge_id)
+
+        with connect(autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
                     """
-                    UPDATE edges
-                    SET enabled=?, properties_json=?, updated_at=?
-                    WHERE edge_id=?
+                    INSERT INTO graph_edges(
+                      project_id, source_id, target_id, kind, ref_id, enabled,
+                      properties_json, created_at, updated_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, now(), now())
+                    RETURNING edge_id
                     """,
                     (
-                        1 if enabled else 0,
-                        json.dumps(props, ensure_ascii=True),
-                        now,
-                        int(row["edge_id"]),
+                        pid,
+                        str(source_id),
+                        str(target_id),
+                        str(kind),
+                        ref_id_norm,
+                        bool(enabled),
+                        _json_dumps(merge_properties or {}),
                     ),
                 )
-            return
-
-        with self._conn:
-            self._conn.execute(
-                """
-                INSERT INTO edges(
-                    source_id,
-                    target_id,
-                    kind,
-                    ref_id,
-                    enabled,
-                    properties_json,
-                    created_at,
-                    updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    source_id,
-                    target_id,
-                    kind,
-                    ref_id_norm,
-                    1 if enabled else 0,
-                    json.dumps(merge_properties or {}, ensure_ascii=True),
-                    now,
-                    now,
-                ),
-            )
-
-    # --- Public indexing -------------------------------------------------
+                row2 = cur.fetchone()
+                edge_id_val = row2[0] if row2 else None
+                if edge_id_val is None:
+                    raise RuntimeError("Failed to create edge")
+                new_id = int(edge_id_val)
+        return new_id
 
     def index_ingest_upload(self, ingest_meta: dict) -> Optional[dict]:
         doc_key = doc_key_for_ingest(ingest_meta)
@@ -465,15 +472,11 @@ class GraphStore:
         if ingest_id:
             self._set_alias(alias=f"ingest:{ingest_id}", node_id=node_id, kind="ingest")
 
-        # If this ingested doc has a DOI, alias the DOI key to the ingest node.
-        # This prevents "duplicate document nodes" while allowing reference
-        # resolution (doi -> ingest_id) via resolve_alias.
         if doi_meta:
             self._set_alias(alias=f"doi:{doi_meta}", node_id=node_id, kind="doi")
         if bib_meta:
             self._set_alias(alias=str(bib_meta), node_id=node_id, kind="bib")
 
-        # References -> document nodes + CITES edges.
         for ref in (extraction_data or {}).get("references") or []:
             if not isinstance(ref, dict):
                 continue
@@ -495,7 +498,6 @@ class GraphStore:
                     )
                 )
             )
-            # Prefer any existing alias for this reference (eg. doi -> ingested doc).
             ref_node_id = self.resolve_alias(str(ref_key)) or doc_node_id_from_key(
                 ref_key
             )
@@ -555,9 +557,6 @@ class GraphStore:
             )
 
             ingest_ids: list[str] = []
-            # If the resolution corresponds to an ingested document, anchor the
-            # reference node to that ingest id so downstream views (Surfing) can
-            # resolve reference_id -> ingest_id.
             for alias_key in [f"doi:{doi}" if doi else None, bib]:
                 if not alias_key:
                     continue
@@ -598,7 +597,6 @@ class GraphStore:
         if not isinstance(confirmed, list) or not confirmed:
             return
 
-        # Mark document as assigned in workflow.
         self._upsert_node(
             node_id=doc_node_id,
             kind="document",
@@ -659,30 +657,36 @@ class GraphStore:
             merge_properties={"workflow_assigned": True},
         )
 
-    # --- Ledger view + editing -------------------------------------------
-
     def ledger_rows(self) -> List[dict]:
-        nodes = self._conn.execute(
-            """
-            SELECT node_id, kind, num, label, properties_json
-            FROM nodes
-            WHERE kind='document'
-            ORDER BY num ASC
-            """
-        ).fetchall()
+        pid = self._project_id()
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT node_id, num, label, properties_json
+                    FROM graph_nodes
+                    WHERE project_id=%s AND kind='document'
+                    ORDER BY num ASC
+                    """,
+                    (pid,),
+                )
+                nodes = cur.fetchall() or []
+
         if not nodes:
             return []
+
         docs: Dict[str, dict] = {}
-        for row in nodes:
-            props = {}
-            try:
-                props = json.loads(row["properties_json"] or "{}")
-            except Exception:
-                props = {}
-            docs[str(row["node_id"])] = {
-                "node_id": str(row["node_id"]),
-                "num": int(row["num"] or 0),
-                "label": row["label"],
+        for node_id, num, label, props_raw in nodes:
+            props = props_raw if isinstance(props_raw, dict) else {}
+            if props_raw is not None and not isinstance(props_raw, dict):
+                try:
+                    props = json.loads(props_raw)
+                except Exception:
+                    props = {}
+            docs[str(node_id)] = {
+                "node_id": str(node_id),
+                "num": int(num or 0),
+                "label": label,
                 "properties": props,
             }
 
@@ -692,19 +696,27 @@ class GraphStore:
             if bool((doc.get("properties") or {}).get("ingest_ids"))
         }
 
-        # Edges: only enabled CITES.
-        cite_rows = self._conn.execute(
-            "SELECT source_id, target_id FROM edges WHERE kind='CITES' AND enabled=1"
-        ).fetchall()
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT source_id, target_id
+                    FROM graph_edges
+                    WHERE project_id=%s AND kind='CITES' AND enabled=true
+                    """,
+                    (pid,),
+                )
+                cite_rows = cur.fetchall() or []
+
         outgoing: Dict[str, List[str]] = {k: [] for k in docs.keys()}
         incoming: Dict[str, List[str]] = {k: [] for k in docs.keys()}
-        for edge in cite_rows:
-            src = str(edge["source_id"])
-            tgt = str(edge["target_id"])
-            if src in outgoing and tgt in docs:
-                outgoing[src].append(tgt)
-            if tgt in incoming and src in docs:
-                incoming[tgt].append(src)
+        for src, tgt in cite_rows:
+            src2 = str(src)
+            tgt2 = str(tgt)
+            if src2 in outgoing and tgt2 in docs:
+                outgoing[src2].append(tgt2)
+            if tgt2 in incoming and src2 in docs:
+                incoming[tgt2].append(src2)
 
         rows: List[dict] = []
         for node_id, doc in docs.items():
@@ -784,6 +796,7 @@ class GraphStore:
                     "ingest_id": (props.get("ingest_ids") or [None])[0],
                 }
             )
+
         rows.sort(key=lambda r: r.get("num", 0))
         return rows
 
@@ -800,13 +813,22 @@ class GraphStore:
         ]
 
     def _node_id_by_num(self, num: int) -> Optional[str]:
-        row = self._conn.execute(
-            "SELECT node_id FROM nodes WHERE kind='document' AND num=?",
-            (int(num),),
-        ).fetchone()
-        return str(row["node_id"]) if row else None
+        pid = self._project_id()
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT node_id
+                    FROM graph_nodes
+                    WHERE project_id=%s AND kind='document' AND num=%s
+                    """,
+                    (pid, int(num)),
+                )
+                row = cur.fetchone()
+                return str(row[0]) if row and row[0] else None
 
     def set_outgoing(self, *, source_num: int, target_nums: Sequence[int]) -> None:
+        pid = self._project_id()
         source_id = self._node_id_by_num(int(source_num))
         if not source_id:
             raise KeyError(f"Unknown source document number: {source_num}")
@@ -816,19 +838,31 @@ class GraphStore:
             if tgt and tgt != source_id:
                 desired.add(tgt)
 
-        existing = self._conn.execute(
-            "SELECT edge_id, target_id FROM edges WHERE kind='CITES' AND source_id=?",
-            (source_id,),
-        ).fetchall()
-        existing_targets = {
-            str(row["target_id"]): int(row["edge_id"]) for row in existing
-        }
-        with self._conn:
-            for tgt, edge_id in existing_targets.items():
-                self._conn.execute(
-                    "UPDATE edges SET enabled=?, updated_at=? WHERE edge_id=?",
-                    (1 if tgt in desired else 0, _now(), edge_id),
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT edge_id, target_id
+                    FROM graph_edges
+                    WHERE project_id=%s AND kind='CITES' AND source_id=%s
+                    """,
+                    (pid, str(source_id)),
                 )
+                existing = cur.fetchall() or []
+        existing_targets = {str(tgt): int(eid) for eid, tgt in existing}
+
+        with connect(autocommit=True) as conn:
+            with conn.cursor() as cur:
+                for tgt, edge_id in existing_targets.items():
+                    cur.execute(
+                        """
+                        UPDATE graph_edges
+                        SET enabled=%s, updated_at=now()
+                        WHERE edge_id=%s
+                        """,
+                        (bool(tgt in desired), int(edge_id)),
+                    )
+
         for tgt in desired:
             if tgt in existing_targets:
                 continue
@@ -842,6 +876,7 @@ class GraphStore:
             )
 
     def set_incoming(self, *, target_num: int, source_nums: Sequence[int]) -> None:
+        pid = self._project_id()
         target_id = self._node_id_by_num(int(target_num))
         if not target_id:
             raise KeyError(f"Unknown target document number: {target_num}")
@@ -851,19 +886,31 @@ class GraphStore:
             if src and src != target_id:
                 desired_sources.add(src)
 
-        existing = self._conn.execute(
-            "SELECT edge_id, source_id FROM edges WHERE kind='CITES' AND target_id=?",
-            (target_id,),
-        ).fetchall()
-        existing_sources = {
-            str(row["source_id"]): int(row["edge_id"]) for row in existing
-        }
-        with self._conn:
-            for src, edge_id in existing_sources.items():
-                self._conn.execute(
-                    "UPDATE edges SET enabled=?, updated_at=? WHERE edge_id=?",
-                    (1 if src in desired_sources else 0, _now(), edge_id),
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT edge_id, source_id
+                    FROM graph_edges
+                    WHERE project_id=%s AND kind='CITES' AND target_id=%s
+                    """,
+                    (pid, str(target_id)),
                 )
+                existing = cur.fetchall() or []
+        existing_sources = {str(src): int(eid) for eid, src in existing}
+
+        with connect(autocommit=True) as conn:
+            with conn.cursor() as cur:
+                for src, edge_id in existing_sources.items():
+                    cur.execute(
+                        """
+                        UPDATE graph_edges
+                        SET enabled=%s, updated_at=now()
+                        WHERE edge_id=%s
+                        """,
+                        (bool(src in desired_sources), int(edge_id)),
+                    )
+
         for src in desired_sources:
             if src in existing_sources:
                 continue
@@ -887,36 +934,56 @@ class GraphStore:
             merge_properties={"workflow_assigned": bool(assigned)},
         )
 
-    # --- Claim graph (Phase 09) -------------------------------------------
-
     def _get_edge(self, edge_id: int) -> Optional[dict]:
-        row = self._conn.execute(
-            """
-            SELECT
-                edge_id,
-                source_id,
-                target_id,
-                kind,
-                ref_id,
-                enabled,
-                properties_json,
-                created_at,
-                updated_at
-            FROM edges
-            WHERE edge_id=?
-            """,
-            (int(edge_id),),
-        ).fetchone()
-        if not row:
-            return None
-        data = dict(row)
-        try:
-            data["properties"] = json.loads(data.pop("properties_json") or "{}")
-        except Exception:
-            data["properties"] = {}
-        data["edge_id"] = int(data.get("edge_id") or 0)
-        data["enabled"] = bool(int(data.get("enabled") or 0))
-        return data
+        pid = self._project_id()
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT edge_id, source_id, target_id, kind, ref_id, enabled,
+                           properties_json, created_at, updated_at
+                    FROM graph_edges
+                    WHERE edge_id=%s AND project_id=%s
+                    """,
+                    (int(edge_id), pid),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return None
+
+        (
+            edge_id2,
+            source_id,
+            target_id,
+            kind,
+            ref_id,
+            enabled,
+            props_raw,
+            created_at,
+            updated_at,
+        ) = row
+        props = props_raw if isinstance(props_raw, dict) else {}
+        if props_raw is not None and not isinstance(props_raw, dict):
+            try:
+                props = json.loads(props_raw)
+            except Exception:
+                props = {}
+
+        return {
+            "edge_id": int(edge_id2),
+            "source_id": str(source_id),
+            "target_id": str(target_id),
+            "kind": str(kind),
+            "ref_id": str(ref_id or ""),
+            "enabled": bool(enabled),
+            "properties": props,
+            "created_at": created_at.isoformat().replace("+00:00", "Z")
+            if created_at is not None
+            else None,
+            "updated_at": updated_at.isoformat().replace("+00:00", "Z")
+            if updated_at is not None
+            else None,
+        }
 
     def get_edge(self, edge_id: int) -> Optional[dict]:
         return self._get_edge(int(edge_id))
@@ -930,12 +997,22 @@ class GraphStore:
         return node
 
     def list_claim_nodes(self) -> List[dict]:
-        rows = self._conn.execute(
-            "SELECT node_id FROM nodes WHERE kind='claim' ORDER BY num ASC"
-        ).fetchall()
+        pid = self._project_id()
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT node_id
+                    FROM graph_nodes
+                    WHERE project_id=%s AND kind='claim'
+                    ORDER BY num ASC
+                    """,
+                    (pid,),
+                )
+                rows = cur.fetchall() or []
         nodes: List[dict] = []
-        for row in rows:
-            node = self._get_node(str(row["node_id"]))
+        for (node_id,) in rows:
+            node = self._get_node(str(node_id))
             if node:
                 nodes.append(node)
         return nodes
@@ -949,10 +1026,6 @@ class GraphStore:
         creator_uid: Optional[str] = None,
         explored_by: Optional[Sequence[str]] = None,
     ) -> int:
-        """Create or re-enable a materialized claim->claim edge.
-
-        Uses edges(kind='CLAIM_LINK') and stores provenance in properties_json.
-        """
         src = str(source_claim_id or "").strip()
         tgt = str(target_claim_id or "").strip()
         if not src or not tgt:
@@ -960,30 +1033,39 @@ class GraphStore:
         if src == tgt:
             raise ValueError("Cannot link a claim to itself")
 
-        now = _now()
-        row = self._conn.execute(
-            """
-            SELECT edge_id, properties_json
-            FROM edges
-            WHERE source_id=? AND target_id=? AND kind='CLAIM_LINK' AND ref_id=''
-            """,
-            (src, tgt),
-        ).fetchone()
+        pid = self._project_id()
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT edge_id, properties_json
+                    FROM graph_edges
+                    WHERE project_id=%s AND source_id=%s AND target_id=%s
+                      AND kind='CLAIM_LINK' AND ref_id=''
+                    """,
+                    (pid, src, tgt),
+                )
+                row = cur.fetchone()
 
         props: dict = {}
         if row:
-            try:
-                props = json.loads(row["properties_json"] or "{}")
-            except Exception:
-                props = {}
+            props_raw = row[1]
+            props = props_raw if isinstance(props_raw, dict) else {}
+            if props_raw is not None and not isinstance(props_raw, dict):
+                try:
+                    props = json.loads(props_raw)
+                except Exception:
+                    props = {}
 
         props["source"] = str(source or "").strip() or "auto"
         if creator_uid:
             text = str(creator_uid or "").strip()
-            if text:
-                # Only set creator for manual edges; keep existing creator if present.
-                if props.get("source") == "manual" and not props.get("creator_uid"):
-                    props["creator_uid"] = text
+            if (
+                text
+                and props.get("source") == "manual"
+                and not props.get("creator_uid")
+            ):
+                props["creator_uid"] = text
 
         if explored_by:
             merged: List[str] = []
@@ -998,39 +1080,41 @@ class GraphStore:
                 props["explored_by"] = merged
 
         if row:
-            with self._conn:
-                self._conn.execute(
-                    """
-                    UPDATE edges
-                    SET enabled=1, properties_json=?, updated_at=?
-                    WHERE edge_id=?
-                    """,
-                    (
-                        json.dumps(props, ensure_ascii=True),
-                        now,
-                        int(row["edge_id"]),
-                    ),
-                )
-            return int(row["edge_id"])
+            edge_id_val = row[0]
+            if edge_id_val is None:
+                raise RuntimeError("Corrupt graph edge row")
+            edge_id = int(edge_id_val)
+            with connect(autocommit=True) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE graph_edges
+                        SET enabled=true, properties_json=%s::jsonb, updated_at=now()
+                        WHERE edge_id=%s
+                        """,
+                        (_json_dumps(props), edge_id),
+                    )
+            return edge_id
 
-        with self._conn:
-            cur = self._conn.execute(
-                """
-                INSERT INTO edges(
-                    source_id,
-                    target_id,
-                    kind,
-                    ref_id,
-                    enabled,
-                    properties_json,
-                    created_at,
-                    updated_at
+        with connect(autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO graph_edges(
+                      project_id, source_id, target_id, kind, ref_id, enabled,
+                      properties_json, created_at, updated_at
+                    )
+                    VALUES (%s, %s, %s, 'CLAIM_LINK', '', true, %s::jsonb, now(), now())
+                    RETURNING edge_id
+                    """,
+                    (pid, src, tgt, _json_dumps(props)),
                 )
-                VALUES (?, ?, 'CLAIM_LINK', '', 1, ?, ?, ?)
-                """,
-                (src, tgt, json.dumps(props, ensure_ascii=True), now, now),
-            )
-        return int(cur.lastrowid)
+                row2 = cur.fetchone()
+                edge_id_val = row2[0] if row2 else None
+                if edge_id_val is None:
+                    raise RuntimeError("Failed to create claim link edge")
+                new_id = int(edge_id_val)
+        return new_id
 
     def upsert_topology_edge(
         self,
@@ -1043,11 +1127,6 @@ class GraphStore:
         explored_by: Optional[Sequence[str]] = None,
         enabled: bool = True,
     ) -> int:
-        """Create or re-enable a generic topology edge.
-
-        This is the same settled-topology pattern used for claim links: an edge
-        row (with enabled flag) plus per-reviewer votes stored in edge_votes.
-        """
         src = str(source_id or "").strip()
         tgt = str(target_id or "").strip()
         kind_norm = str(kind or "").strip()
@@ -1056,29 +1135,42 @@ class GraphStore:
         if src == tgt:
             raise ValueError("Cannot link a node to itself")
 
-        now = _now()
-        row = self._conn.execute(
-            """
-            SELECT edge_id, properties_json
-            FROM edges
-            WHERE source_id=? AND target_id=? AND kind=? AND ref_id=''
-            """,
-            (src, tgt, kind_norm),
-        ).fetchone()
+        pid = self._project_id()
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT edge_id, properties_json
+                    FROM graph_edges
+                    WHERE project_id=%s
+                      AND source_id=%s
+                      AND target_id=%s
+                      AND kind=%s
+                      AND ref_id=''
+                    """,
+                    (pid, src, tgt, kind_norm),
+                )
+                row = cur.fetchone()
 
         props: dict = {}
         if row:
-            try:
-                props = json.loads(row["properties_json"] or "{}")
-            except Exception:
-                props = {}
+            props_raw = row[1]
+            props = props_raw if isinstance(props_raw, dict) else {}
+            if props_raw is not None and not isinstance(props_raw, dict):
+                try:
+                    props = json.loads(props_raw)
+                except Exception:
+                    props = {}
 
         props["source"] = str(source or "").strip() or "auto"
         if creator_uid:
             text = str(creator_uid or "").strip()
-            if text:
-                if props.get("source") == "manual" and not props.get("creator_uid"):
-                    props["creator_uid"] = text
+            if (
+                text
+                and props.get("source") == "manual"
+                and not props.get("creator_uid")
+            ):
+                props["creator_uid"] = text
 
         if explored_by:
             merged: List[str] = []
@@ -1093,47 +1185,41 @@ class GraphStore:
                 props["explored_by"] = merged
 
         if row:
-            with self._conn:
-                self._conn.execute(
-                    """
-                    UPDATE edges
-                    SET enabled=?, properties_json=?, updated_at=?
-                    WHERE edge_id=?
-                    """,
-                    (
-                        1 if enabled else 0,
-                        json.dumps(props, ensure_ascii=True),
-                        now,
-                        int(row["edge_id"]),
-                    ),
-                )
-            return int(row["edge_id"])
+            edge_id_val = row[0]
+            if edge_id_val is None:
+                raise RuntimeError("Corrupt graph edge row")
+            edge_id = int(edge_id_val)
+            with connect(autocommit=True) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE graph_edges
+                        SET enabled=%s, properties_json=%s::jsonb, updated_at=now()
+                        WHERE edge_id=%s
+                        """,
+                        (bool(enabled), _json_dumps(props), edge_id),
+                    )
+            return edge_id
 
-        with self._conn:
-            cur = self._conn.execute(
-                """
-                INSERT INTO edges(
-                    source_id,
-                    target_id,
-                    kind,
-                    ref_id,
-                    enabled,
-                    properties_json,
-                    created_at,
-                    updated_at
-                ) VALUES(?, ?, ?, '', ?, ?, ?, ?)
-                """,
-                (
-                    src,
-                    tgt,
-                    kind_norm,
-                    1 if enabled else 0,
-                    json.dumps(props, ensure_ascii=True),
-                    now,
-                    now,
-                ),
-            )
-        return int(cur.lastrowid)
+        with connect(autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO graph_edges(
+                      project_id, source_id, target_id, kind, ref_id, enabled,
+                      properties_json, created_at, updated_at
+                    )
+                    VALUES (%s, %s, %s, %s, '', %s, %s::jsonb, now(), now())
+                    RETURNING edge_id
+                    """,
+                    (pid, src, tgt, kind_norm, bool(enabled), _json_dumps(props)),
+                )
+                row2 = cur.fetchone()
+                edge_id_val = row2[0] if row2 else None
+                if edge_id_val is None:
+                    raise RuntimeError("Failed to create topology edge")
+                new_id = int(edge_id_val)
+        return new_id
 
     def upsert_manual_work_cites_work(
         self,
@@ -1143,11 +1229,6 @@ class GraphStore:
         reviewer_uid: str,
         enabled: bool = True,
     ) -> int:
-        """Create/enable a manual work->work citation edge.
-
-        This is a work-level override for cases where extraction/resolution is
-        wrong or incomplete. It uses the generic topology edge mechanism.
-        """
         citing = str(citing_ingest_id or "").strip()
         cited = str(cited_ingest_id or "").strip()
         if not citing or not cited:
@@ -1164,23 +1245,26 @@ class GraphStore:
     def list_edges_by_kind(
         self, *, kind: str, include_disabled: bool = True
     ) -> List[dict]:
+        pid = self._project_id()
         kind_norm = str(kind or "").strip()
         if not kind_norm:
             return []
-        where_enabled = "" if include_disabled else "AND enabled=1"
-        rows = self._conn.execute(
-            f"""
-            SELECT edge_id
-            FROM edges
-            WHERE kind=?
-              {where_enabled}
-            ORDER BY edge_id ASC
-            """,
-            (kind_norm,),
-        ).fetchall()
+        clause = "" if include_disabled else "AND enabled=true"
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT edge_id
+                    FROM graph_edges
+                    WHERE project_id=%s AND kind=%s {clause}
+                    ORDER BY edge_id ASC
+                    """,
+                    (pid, kind_norm),
+                )
+                rows = cur.fetchall() or []
         out: List[dict] = []
-        for r in rows:
-            edge = self._get_edge(int(r["edge_id"]))
+        for (edge_id,) in rows:
+            edge = self._get_edge(int(edge_id))
             if edge:
                 out.append(edge)
         return out
@@ -1193,37 +1277,38 @@ class GraphStore:
         target_id: Optional[str] = None,
         include_disabled: bool = True,
     ) -> List[dict]:
+        pid = self._project_id()
         kind_norm = str(kind or "").strip()
         if not kind_norm:
             return []
-        clauses = ["kind=?"]
-        params: List[Any] = [kind_norm]
+        clauses = ["project_id=%s", "kind=%s"]
+        params: List[Any] = [pid, kind_norm]
         if source_id is not None:
-            clauses.append("source_id=?")
+            clauses.append("source_id=%s")
             params.append(str(source_id))
         if target_id is not None:
-            clauses.append("target_id=?")
+            clauses.append("target_id=%s")
             params.append(str(target_id))
         if not include_disabled:
-            clauses.append("enabled=1")
+            clauses.append("enabled=true")
         where = " AND ".join(clauses)
-        rows = self._conn.execute(
-            f"SELECT edge_id FROM edges WHERE {where} ORDER BY edge_id ASC",
-            tuple(params),
-        ).fetchall()
+        with connect() as conn:
+            with conn.cursor() as cur:
+                sql = (
+                    f"SELECT edge_id FROM graph_edges WHERE {where} "
+                    "ORDER BY edge_id ASC"
+                )
+                cur.execute(sql, tuple(params))
+                rows = cur.fetchall() or []
         out: List[dict] = []
-        for r in rows:
-            edge = self._get_edge(int(r["edge_id"]))
+        for (edge_id,) in rows:
+            edge = self._get_edge(int(edge_id))
             if edge:
                 out.append(edge)
         return out
 
     def set_edge_enabled(
-        self,
-        *,
-        edge_id: int,
-        enabled: bool,
-        merge_properties: Optional[dict] = None,
+        self, *, edge_id: int, enabled: bool, merge_properties: Optional[dict] = None
     ) -> None:
         edge = self._get_edge(int(edge_id))
         if not edge:
@@ -1233,19 +1318,16 @@ class GraphStore:
             if v is None:
                 continue
             props[k] = v
-        with self._conn:
-            self._conn.execute(
-                (
-                    "UPDATE edges SET enabled=?, properties_json=?, updated_at=? "
-                    "WHERE edge_id=?"
-                ),
-                (
-                    1 if enabled else 0,
-                    json.dumps(props, ensure_ascii=True),
-                    _now(),
-                    int(edge_id),
-                ),
-            )
+        with connect(autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE graph_edges
+                    SET enabled=%s, properties_json=%s::jsonb, updated_at=now()
+                    WHERE edge_id=%s
+                    """,
+                    (bool(enabled), _json_dumps(props), int(edge_id)),
+                )
 
     def delete_claim_link(self, *, edge_id: int, reviewer_uid: str) -> None:
         edge = self._get_edge(int(edge_id))
@@ -1261,11 +1343,16 @@ class GraphStore:
         if not creator or creator != reviewer:
             raise PermissionError("Only the creator can delete this manual edge")
 
-        with self._conn:
-            self._conn.execute(
-                "UPDATE edges SET enabled=0, updated_at=? WHERE edge_id=?",
-                (_now(), int(edge_id)),
-            )
+        with connect(autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE graph_edges
+                    SET enabled=false, updated_at=now()
+                    WHERE edge_id=%s
+                    """,
+                    (int(edge_id),),
+                )
 
     def upsert_edge_vote(
         self,
@@ -1280,8 +1367,6 @@ class GraphStore:
         if not edge:
             raise KeyError("Edge not found")
         if not edge.get("enabled"):
-            # Allow votes on disabled edges so consensus can re-enable topology.
-            # Exception: manually deleted claim links should stay inert.
             props = edge.get("properties") or {}
             if (
                 str(edge.get("kind") or "") == "CLAIM_LINK"
@@ -1296,72 +1381,92 @@ class GraphStore:
                 "verdict must be one of: support, contradict, neutral, uncertain"
             )
 
-        now = _now()
-        with self._conn:
-            self._conn.execute(
-                """
-                INSERT INTO edge_votes(
-                    edge_id,
-                    reviewer_uid,
-                    verdict,
-                    confidence,
-                    comment,
-                    updated_at
+        with connect(autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO graph_edge_votes(
+                      edge_id, reviewer_uid, verdict, confidence, comment, updated_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, now())
+                    ON CONFLICT(edge_id, reviewer_uid) DO UPDATE
+                      SET verdict=excluded.verdict,
+                          confidence=excluded.confidence,
+                          comment=excluded.comment,
+                          updated_at=excluded.updated_at
+                    RETURNING
+                      edge_id,
+                      reviewer_uid,
+                      verdict,
+                      confidence,
+                      comment,
+                      updated_at
+                    """,
+                    (int(edge_id), reviewer, ver, confidence, comment),
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(edge_id, reviewer_uid) DO UPDATE SET
-                    verdict=excluded.verdict,
-                    confidence=excluded.confidence,
-                    comment=excluded.comment,
-                    updated_at=excluded.updated_at
-                """,
-                (int(edge_id), reviewer, ver, confidence, comment, now),
-            )
+                row = cur.fetchone()
 
-        row = self._conn.execute(
-            """
-            SELECT edge_id, reviewer_uid, verdict, confidence, comment, updated_at
-            FROM edge_votes
-            WHERE edge_id=? AND reviewer_uid=?
-            """,
-            (int(edge_id), reviewer),
-        ).fetchone()
-        return (
-            dict(row)
-            if row
-            else {
-                "edge_id": int(edge_id),
-                "reviewer_uid": reviewer,
-                "verdict": ver,
-                "confidence": confidence,
-                "comment": comment,
-                "updated_at": now,
-            }
-        )
+        edge_id2, reviewer_uid2, verdict2, conf2, comment2, updated_at = row
+        return {
+            "edge_id": int(edge_id2),
+            "reviewer_uid": str(reviewer_uid2),
+            "verdict": str(verdict2),
+            "confidence": conf2,
+            "comment": comment2,
+            "updated_at": updated_at.isoformat().replace("+00:00", "Z")
+            if updated_at is not None
+            else None,
+        }
 
     def list_edge_votes(self, edge_id: int) -> List[dict]:
-        rows = self._conn.execute(
-            """
-            SELECT edge_id, reviewer_uid, verdict, confidence, comment, updated_at
-            FROM edge_votes
-            WHERE edge_id=?
-            ORDER BY updated_at DESC, reviewer_uid ASC
-            """,
-            (int(edge_id),),
-        ).fetchall()
-        return [dict(r) for r in rows]
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                      edge_id,
+                      reviewer_uid,
+                      verdict,
+                      confidence,
+                      comment,
+                      updated_at
+                    FROM graph_edge_votes
+                    WHERE edge_id=%s
+                    ORDER BY updated_at DESC, reviewer_uid ASC
+                    """,
+                    (int(edge_id),),
+                )
+                rows = cur.fetchall() or []
+        out: List[dict] = []
+        for edge_id2, reviewer_uid, verdict, conf, comment, updated_at in rows:
+            out.append(
+                {
+                    "edge_id": int(edge_id2),
+                    "reviewer_uid": str(reviewer_uid),
+                    "verdict": str(verdict),
+                    "confidence": conf,
+                    "comment": comment,
+                    "updated_at": updated_at.isoformat().replace("+00:00", "Z")
+                    if updated_at is not None
+                    else None,
+                }
+            )
+        return out
 
     def edge_vote_aggregates(self, edge_id: int) -> dict:
-        rows = self._conn.execute(
-            """
-            SELECT verdict, COUNT(*) AS n
-            FROM edge_votes
-            WHERE edge_id=?
-            GROUP BY verdict
-            """,
-            (int(edge_id),),
-        ).fetchall()
-        counts = {str(r["verdict"]): int(r["n"] or 0) for r in rows}
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT verdict, COUNT(*)
+                    FROM graph_edge_votes
+                    WHERE edge_id=%s
+                    GROUP BY verdict
+                    """,
+                    (int(edge_id),),
+                )
+                rows = cur.fetchall() or []
+        counts = {str(verdict): int(n or 0) for verdict, n in rows}
         n_support = int(counts.get("support") or 0)
         n_contradict = int(counts.get("contradict") or 0)
         n_neutral = int(counts.get("neutral") or 0)
@@ -1382,25 +1487,32 @@ class GraphStore:
         sources: Optional[Sequence[str]] = None,
         enabled_only: bool = True,
     ) -> List[dict]:
+        pid = self._project_id()
         node_id = str(claim_id or "").strip()
         if not node_id:
             return []
-        where_enabled = "AND enabled=1" if enabled_only else ""
-        rows = self._conn.execute(
-            f"""
-            SELECT edge_id
-            FROM edges
-            WHERE kind='CLAIM_LINK'
-              {where_enabled}
-              AND (source_id=? OR target_id=?)
-            ORDER BY edge_id ASC
-            """,
-            (node_id, node_id),
-        ).fetchall()
-        edges: List[dict] = []
+        clauses = [
+            "project_id=%s",
+            "kind='CLAIM_LINK'",
+            "(source_id=%s OR target_id=%s)",
+        ]
+        params: List[Any] = [pid, node_id, node_id]
+        if enabled_only:
+            clauses.append("enabled=true")
+        where = " AND ".join(clauses)
+        with connect() as conn:
+            with conn.cursor() as cur:
+                sql = (
+                    f"SELECT edge_id FROM graph_edges WHERE {where} "
+                    "ORDER BY edge_id ASC"
+                )
+                cur.execute(sql, tuple(params))
+                rows = cur.fetchall() or []
+
         want = {str(s).strip() for s in (sources or []) if str(s).strip()}
-        for row in rows:
-            edge = self._get_edge(int(row["edge_id"]))
+        edges: List[dict] = []
+        for (edge_id,) in rows:
+            edge = self._get_edge(int(edge_id))
             if not edge:
                 continue
             if want:

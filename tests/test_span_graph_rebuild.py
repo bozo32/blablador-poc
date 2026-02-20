@@ -634,7 +634,7 @@ def test_compact_assertions_prunes_selection_duplicates(tmp_path):
         }
     )
 
-    before = store._conn.execute("SELECT COUNT(1) AS n FROM assertions").fetchone()["n"]
-    assert before == 2
+    assert len(store.list_assertions_for_claim_span(claim_span_id=cs)) == 2
     result = store.compact_assertions(dry_run=False, aggressive=True)
     assert result["after"] == 1
+    assert len(store.list_assertions_for_claim_span(claim_span_id=cs)) == 1

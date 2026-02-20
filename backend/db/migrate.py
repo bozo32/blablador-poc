@@ -497,6 +497,329 @@ _DDL_STATEMENTS: list[str] = [
     CREATE INDEX IF NOT EXISTS confirmed_claims_sentence_idx
       ON confirmed_claims(sentence_id);
     """,
+    # ---------------------------------------------------------------------
+    # Phase 09.3: Durable graph/workboard state (Postgres)
+    #
+    # These tables replace durable local SQLite graph stores (`data/graph.db`).
+    # Table names are prefixed to avoid collisions with ingestion spine tables.
+    # ---------------------------------------------------------------------
+    """
+    CREATE TABLE IF NOT EXISTS graph_nodes (
+      project_id text NOT NULL DEFAULT 'default',
+      node_id text NOT NULL,
+      kind text NOT NULL,
+      num int NULL,
+      label text NULL,
+      properties_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY(project_id, node_id)
+    );
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS graph_nodes_project_num_uniq
+      ON graph_nodes(project_id, num)
+      WHERE num IS NOT NULL;
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS graph_nodes_project_kind_idx
+      ON graph_nodes(project_id, kind);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS graph_aliases (
+      project_id text NOT NULL DEFAULT 'default',
+      alias text NOT NULL,
+      node_id text NOT NULL,
+      kind text NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY(project_id, alias)
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS graph_aliases_project_node_idx
+      ON graph_aliases(project_id, node_id);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS graph_edges (
+      edge_id bigserial PRIMARY KEY,
+      project_id text NOT NULL DEFAULT 'default',
+      source_id text NOT NULL,
+      target_id text NOT NULL,
+      kind text NOT NULL,
+      ref_id text NOT NULL DEFAULT '',
+      enabled boolean NOT NULL DEFAULT true,
+      properties_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      UNIQUE(project_id, source_id, target_id, kind, ref_id)
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS graph_edges_project_source_kind_idx
+      ON graph_edges(project_id, source_id, kind);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS graph_edges_project_target_kind_idx
+      ON graph_edges(project_id, target_id, kind);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS graph_edges_project_enabled_kind_idx
+      ON graph_edges(project_id, enabled, kind);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS graph_edge_votes (
+      edge_id bigint NOT NULL REFERENCES graph_edges(edge_id) ON DELETE CASCADE,
+      reviewer_uid text NOT NULL,
+      verdict text NOT NULL,
+      confidence double precision NULL,
+      comment text NULL,
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY(edge_id, reviewer_uid)
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS graph_edge_votes_edge_id_idx
+      ON graph_edge_votes(edge_id);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS span_graph_works (
+      project_id text NOT NULL DEFAULT 'default',
+      work_id text NOT NULL,
+      doi text NULL,
+      openalex_id text NULL,
+      title text NULL,
+      authors_json jsonb NULL,
+      year text NULL,
+      abstract text NULL,
+      abstract_source text NULL,
+      abstract_embedding_json jsonb NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY(project_id, work_id)
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS span_graph_works_project_doi_idx
+      ON span_graph_works(project_id, doi);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS span_graph_works_project_openalex_idx
+      ON span_graph_works(project_id, openalex_id);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS span_graph_work_cites (
+      project_id text NOT NULL DEFAULT 'default',
+      citing_work_id text NOT NULL,
+      cited_work_id text NOT NULL,
+      source text NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY(project_id, citing_work_id, cited_work_id, source)
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS span_graph_work_cites_project_citing_idx
+      ON span_graph_work_cites(project_id, citing_work_id);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS span_graph_work_cites_project_cited_idx
+      ON span_graph_work_cites(project_id, cited_work_id);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS span_graph_spans (
+      project_id text NOT NULL DEFAULT 'default',
+      span_id text NOT NULL,
+      work_id text NULL,
+      ingest_id text NULL,
+      kind text NOT NULL,
+      selector_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      window_fingerprint text NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY(project_id, span_id)
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS span_graph_spans_project_work_idx
+      ON span_graph_spans(project_id, work_id);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS span_graph_spans_project_ingest_idx
+      ON span_graph_spans(project_id, ingest_id);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS span_graph_span_cites (
+      project_id text NOT NULL DEFAULT 'default',
+      span_id text NOT NULL,
+      cited_work_id text NOT NULL,
+      reference_id text NULL,
+      citation_index int NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY(project_id, span_id, cited_work_id)
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS span_graph_span_cites_project_cited_idx
+      ON span_graph_span_cites(project_id, cited_work_id);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS span_graph_citation_span_index (
+      project_id text NOT NULL DEFAULT 'default',
+      ingest_id text NOT NULL,
+      citation_index int NOT NULL,
+      target_id text NOT NULL,
+      span_id text NOT NULL,
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY(project_id, ingest_id, citation_index, target_id)
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS span_graph_citation_span_index_project_span_idx
+      ON span_graph_citation_span_index(project_id, span_id);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS span_graph_span_cite_roles (
+      project_id text NOT NULL DEFAULT 'default',
+      span_id text NOT NULL,
+      cited_work_id text NOT NULL,
+      reviewer_uid text NOT NULL,
+      role text NOT NULL,
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY(project_id, span_id, cited_work_id, reviewer_uid)
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS span_graph_span_cite_roles_project_reviewer_idx
+      ON span_graph_span_cite_roles(project_id, reviewer_uid);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS span_graph_claim_spans (
+      project_id text NOT NULL DEFAULT 'default',
+      claim_span_id text NOT NULL,
+      span_id text NOT NULL,
+      order_index int NOT NULL,
+      selector_json jsonb NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY(project_id, claim_span_id),
+      UNIQUE(project_id, span_id, order_index)
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS span_graph_claim_spans_project_span_idx
+      ON span_graph_claim_spans(project_id, span_id, order_index);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS span_graph_claim_atoms (
+      project_id text NOT NULL DEFAULT 'default',
+      claim_atom_id text NOT NULL,
+      text text NOT NULL,
+      created_by text NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      supersedes_id text NULL,
+      PRIMARY KEY(project_id, claim_atom_id)
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS span_graph_claim_atoms_project_created_by_idx
+      ON span_graph_claim_atoms(project_id, created_by);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS span_graph_claim_span_atoms (
+      project_id text NOT NULL DEFAULT 'default',
+      claim_span_id text NOT NULL,
+      claim_atom_id text NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY(project_id, claim_span_id, claim_atom_id)
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS span_graph_assertions (
+      project_id text NOT NULL DEFAULT 'default',
+      assertion_id text NOT NULL,
+      reviewer_uid text NOT NULL,
+      verdict text NOT NULL,
+      confidence double precision NULL,
+      comment text NULL,
+      claim_atom_id text NULL,
+      claim_span_id text NULL,
+      evidence_span_id text NULL,
+      evidence_work_id text NULL,
+      source text NULL,
+      source_key text NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY(project_id, assertion_id)
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS span_graph_assertions_project_reviewer_idx
+      ON span_graph_assertions(project_id, reviewer_uid);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS span_graph_assertions_project_claim_span_idx
+      ON span_graph_assertions(project_id, claim_span_id);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS span_graph_assertions_project_claim_atom_idx
+      ON span_graph_assertions(project_id, claim_atom_id);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS span_graph_assertions_project_evidence_span_idx
+      ON span_graph_assertions(project_id, evidence_span_id);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS span_graph_review_marks (
+      project_id text NOT NULL DEFAULT 'default',
+      claim_span_id text NOT NULL,
+      reviewer_uid text NOT NULL,
+      mark text NOT NULL,
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY(project_id, claim_span_id, reviewer_uid, mark)
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS span_graph_review_marks_project_reviewer_idx
+      ON span_graph_review_marks(project_id, reviewer_uid);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS span_graph_neighborhood_runs (
+      project_id text NOT NULL DEFAULT 'default',
+      run_id text NOT NULL,
+      created_by text NULL,
+      context_work_id text NULL,
+      context_span_id text NULL,
+      context_claim_span_id text NULL,
+      context_claim_atom_id text NULL,
+      method text NOT NULL,
+      params_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY(project_id, run_id)
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS span_graph_neighborhood_runs_project_work_idx
+      ON span_graph_neighborhood_runs(project_id, context_work_id);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS span_graph_neighborhood_runs_project_span_idx
+      ON span_graph_neighborhood_runs(project_id, context_span_id);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS span_graph_neighborhood_candidates (
+      project_id text NOT NULL DEFAULT 'default',
+      run_id text NOT NULL,
+      candidate_work_id text NOT NULL,
+      bib_intersection int NULL,
+      abstract_score double precision NULL,
+      rank int NULL,
+      detail_json jsonb NULL,
+      PRIMARY KEY(project_id, run_id, candidate_work_id)
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS span_graph_neighborhood_candidates_project_work_idx
+      ON span_graph_neighborhood_candidates(project_id, candidate_work_id);
+    """,
 ]
 
 

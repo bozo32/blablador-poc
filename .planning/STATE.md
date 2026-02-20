@@ -4,15 +4,17 @@
 
 See: .planning/PROJECT.md (updated 2026-01-23)
 
+Planning index: `.planning/PRIORITIES.md`
+
 **Core value:** Readers can validate a citation by linking a claim to supporting (or contradicting) evidence from the cited source, with the judgment captured and reusable.
-**Current focus:** Phase 9.2 - Ingestion automation robustness + fallback extraction
+**Current focus:** Phase 10 - Contracts + Core Workflow Simplification
 
 ## Current Position
 
-Phase: 9.2 of 12 (Ingestion automation robustness + fallback extraction)
-Plan: 7 of 7 in current phase
-Status: Complete
-Last activity: 2026-02-17 — Implemented spine async extraction, deterministic fallback artifacts, OCR-capable fallback worker, and refs-quality resolution gating
+Phase: 10 of 12 (Contracts + core workflow simplification)
+Plan: 1 of 7 (10-01 Contracts arc)
+Status: Not started
+Last activity: 2026-02-20 — Verified 09.3 cutover with repeatable script; created Phase 10 scaffolding
 
 Progress: ████████████ 100%
 
@@ -98,8 +100,16 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-- Run full cleanup protocol pass (see `.planning/CLEANUP_PROTOCOL.md`) and re-verify UI flows.
-- Proceed to Phase 9.3 (spine everywhere + legacy removal).
+- Phase 9.3 is verified via `scripts/dev/verify_09_3_spine_cutover.sh`.
+
+- Next milestone: Phase 10 (mirrors `.planning/PRIORITIES.md`), in order:
+  - 10-01 Contracts arc (stage boundaries)
+  - 10-02 Core workflow simplification (happy path)
+  - 10-03 Graph as navigation (Cytoscape routing)
+  - 10-04 Durable decisions/events
+  - 10-05 Demo + trace replay
+  - 10-06 Optional add-ons
+  - 10-07 Deprioritized ops/cloud direction (doc-only)
 
 ### Blockers/Concerns
 
@@ -108,6 +118,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-02-14T12:48:41Z
-Stopped at: Completed 09.1-11-PLAN.md
-Resume file: None
+Last session: 2026-02-20
+Stopped at: Phase 9.3 closeout prep (verification script + Phase 10 scaffolding)
+Resume file: `.planning/phases/09.3-spine-everywhere-legacy-removal/09.3-SHADOW-PROGRESS.md`

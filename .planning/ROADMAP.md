@@ -4,6 +4,8 @@
 
 OS-ERIN delivers an end-to-end citation validation workflow, starting with reliable PDF ingestion and citation extraction, then moving through claim review, evidence matching, and human judgment capture. The phases build progressively from structured extraction to evidence-backed validation and exportable judgments, with lightweight workspace organization utilities at the end.
 
+For current "what to do next" ordering, see `.planning/PRIORITIES.md`.
+
 ## Phases
 
 **Phase Numbering:**
@@ -25,6 +27,8 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 9: Claim Graph + Multi-User Consensus** - Local multi-user judgments and an interactive claim graph showing consensus/disagreement.
 - [ ] **Phase 9.1: Ingestion replumbing + solid spine** (INSERTED) - Make the system runnable/distributable and ingestion automatable via a robust job/attempt spine (containers, Postgres, object store, worker services).
 - [ ] **Phase 9.2: Ingestion automation robustness + fallback extraction** (INSERTED) - Make ingestion runs resilient and automatable, with deterministic fallback extraction when TEI/GROBID fails.
+- [ ] **Phase 9.3: Spine Everywhere + Legacy Removal** (INSERTED) - Move remaining workflow state off local disk and delete legacy filesystem stores.
+- [ ] **Phase 10: Contracts + Core Workflow Simplification** (INSERTED) - Define stage contracts and simplify the core workflow so add-ons plug in cleanly.
 
 ## Phase Details
 
@@ -257,7 +261,22 @@ Plans:
 - [ ] 09.3-06-PLAN.md — Delete legacy stores + remove compat flags; spine is the only runtime
 
 **Details:**
-[To be added during planning]
+
+- Verification script: `scripts/dev/verify_09_3_spine_cutover.sh`
+- Verification doc: `.planning/phases/09.3-spine-everywhere-legacy-removal/09.3-VERIFICATION.md`
+
+### Phase 10: Contracts + Core Workflow Simplification (INSERTED)
+**Goal**: Make stage boundaries explicit (contracts) and simplify the core workflow so components can swap (e.g. rerankers) without rewiring callers.
+**Depends on**: Phase 9.3
+
+Plans:
+- [ ] 10-01-PLAN.md — Contracts arc (stage boundaries + artifact contracts)
+- [ ] 10-02-PLAN.md — Core workflow simplification (happy-path + minimal orchestrator)
+- [ ] 10-03-PLAN.md — Graph as navigation (Cytoscape routing + recursive retrieval)
+- [ ] 10-04-PLAN.md — Durable decisions/events (evidence decisions as events)
+- [ ] 10-05-PLAN.md — Demo + trace replay (reproducible E2E)
+- [ ] 10-06-PLAN.md — Optional add-ons (hosted inference, tri-level assessment)
+- [ ] 10-07-PLAN.md — Deprioritized ops/cloud direction (doc-only backlog)
 
 **Multi-user cloud note:** keep `project_id` and `created_by_user_id` first-class
 in all spine tables and endpoints so OIDC (Azure Entra) can be layered on later.
@@ -274,7 +293,7 @@ After Phase 9.2 stabilizes ingestion/extraction robustness, return to product UX
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 8.1 → 8.2 → 9 → 9.1 → 9.2
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 8.1 → 8.2 → 9 → 9.1 → 9.2 → 9.3 → 10
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -290,5 +309,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 8.2. Demo Dataset + Trace Replay | 0/TBD | Not started | - |
 | 9. Claim Graph + Multi-User Consensus | 7/7 | Complete | 2026-02-09 |
 | 9.1. Ingestion replumbing + solid spine | 15/15 | Complete | 2026-02-16 |
-| 9.2. Ingestion automation robustness + fallback extraction | 0/7 | Not started | - |
-| 9.3. Spine Everywhere + Legacy Removal | 0/6 | Not started | - |
+| 9.2. Ingestion automation robustness + fallback extraction | 7/7 | Complete | 2026-02-17 |
+| 9.3. Spine Everywhere + Legacy Removal | 6/6 | Complete | 2026-02-20 |
+| 10. Contracts + Core Workflow Simplification | 0/7 | Not started | - |

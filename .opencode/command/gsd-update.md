@@ -8,6 +8,13 @@ Check for GSD updates, install if available, and display what changed.
 Provides a better update experience than raw `npx get-shit-done-cc` by showing version diff and changelog entries.
 </objective>
 
+<notes>
+
+- This repo vendors GSD under `.opencode/` so everyone uses the same workflow.
+- The update action is intentionally destructive for the vendored directories; keep local customizations outside the `gsd-*` files/folders described below.
+
+</notes>
+
 <process>
 
 <step name="get_installed_version">

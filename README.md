@@ -53,3 +53,7 @@ This repo runs as multiple services under Compose (see `docker-compose.yml`):
 ## Troubleshooting
 
 - If curl to `http://localhost:8000` hangs/resets, try IPv4: `http://127.0.0.1:8000`
+
+## Specs
+
+- Repo functional description + technical spec: `docs/REPO_SPEC.md`

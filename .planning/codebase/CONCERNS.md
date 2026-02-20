@@ -1,148 +1,215 @@
 # Codebase Concerns
 
-**Analysis Date:** 2026-01-23
+**Analysis Date:** 2026-02-20
 
 ## Tech Debt
 
-**Hybrid ColBERT internal mode is a stub:**
-- Issue: `mode == "internal"` uses `...` and `reranked_internal` placeholder, so selecting internal mode will crash.
-- Files: `backend/hybrid.py`
-- Impact: Hybrid pipeline cannot run with internal ColBERT, blocking expected reranking path.
-- Fix approach: Implement internal ColBERT rerank path or remove the mode and validate `COLBERT_MODE` values.
+**Monolithic app entrypoints (hard to change safely):**
+- Issue: Very large, multi-responsibility modules (API routing + ingestion + graph + dev utilities + background orchestration) accumulate cross-cutting logic and implicit coupling.
+- Files: `backend/main.py`, `frontend/ui.py`, `frontend/components/live_surfing_panel.py`
+- Impact: High regression risk; difficult to reason about side effects; slow iteration; merge conflicts.
+- Fix approach: Split by feature area into routers/modules (FastAPI routers, Streamlit components), keep IO boundaries explicit, and introduce thin orchestration layers.
 
-**Parser caption support is parked in comments:**
-- Issue: Figure/table caption handling is commented out and marked FIXME, with no implementation path.
-- Files: `backend/parser.py`
-- Impact: Caption evidence is never indexed, so claims referencing figures/tables miss relevant context.
-- Fix approach: Implement caption extraction with stable `p_id` and integrate into window stream.
+**Stateful globals in the API process:**
+- Issue: Process-wide mutable caches used as application state.
+- Files: `backend/main.py` (global `retrievers`/`results`), `backend/citation_graph.py` (`OPENALEX_CACHE`, `CITED_BY_CACHE`), `backend/utils.py` (`_loaded_models`, `_ensure_index` cache)
+- Impact: Memory growth over time; hard-to-reproduce bugs; unsafe with multiple workers; non-deterministic behavior after hot reload.
+- Fix approach: Replace with bounded caches (size + TTL), move durable state to Postgres/S3, and make caches request-scoped or keyed by immutable config (folder hash, model, parameters).
 
-**Frontend UI is a monolith:**
-- Issue: Single 700+ line Streamlit module mixes API calls, state, rendering, and business logic.
-- Files: `frontend/ui.py`
-- Impact: High change risk and makes isolated testing/refactoring difficult.
-- Fix approach: Split into modules (api, state, rendering, helpers) and add unit tests.
+**In-process background worker pool (non-resilient):**
+- Issue: Extraction jobs run in daemon threads inside the API container/process.
+- Files: `backend/spine/extraction_pool.py`, `backend/main.py`
+- Impact: Jobs are lost on process restart; no horizontal scaling; difficult observability; concurrency hazards.
+- Fix approach: Move job execution to a separate worker service/queue (or at least an explicit worker process) with durable job leasing and retries.
 
-**Global retriever cache has no lifecycle management:**
-- Issue: `retrievers` dict grows without eviction or persistence strategy.
-- Files: `backend/main.py`
-- Impact: Memory usage grows with each segment/row; long-lived server can degrade or OOM.
-- Fix approach: Add LRU eviction, explicit teardown, or on-disk cache with size limits.
+**Schema management via large idempotent DDL list:**
+- Issue: Migrations implemented as a long list of DDL statements executed on startup/tests.
+- Files: `backend/db/migrate.py`, `backend/main.py`, `tests/conftest.py`
+- Impact: Slow startup; hard to evolve schema safely; limited rollback/visibility; drift risk.
+- Fix approach: Introduce schema versioning and structured migrations (even if still idempotent), and minimize per-startup DDL execution.
+
+**Hybrid pipeline is marked as scaffold but selectable in runtime:**
+- Issue: Experimental/verbose implementation is selectable via `PIPELINE_MODE=hybrid`.
+- Files: `backend/pipeline_registry.py`, `backend/hybrid.py`, `backend/settings.py`
+- Impact: Production-like runs can hit incomplete logic, heavy imports, debug prints, and missing dependency failures.
+- Fix approach: Gate behind an explicit feature flag, add dependency checks, and align hybrid behavior/contracts with the classic pipeline.
+
+**Repo-local runtime artifact committed into source tree:**
+- Issue: Model selection history persisted to a file within the code directory.
+- Files: `backend/model_cache.py`, `backend/model_cache.json`
+- Impact: Dirty worktrees and merge conflicts; unclear environment separation.
+- Fix approach: Move runtime caches under `data/` or user config dir, and ensure they are gitignored.
 
 ## Known Bugs
 
-**Unhandled exception path on request failure:**
-- Symptoms: If `requests.post` raises before `response` is assigned, the exception handler references an undefined variable.
+**UI error handling references undefined `response` and catches `BaseException`:**
+- Symptoms: On request failure, UI can throw `UnboundLocalError` or hide real failures; also swallows `KeyboardInterrupt`/`SystemExit`.
 - Files: `frontend/ui.py`
-- Trigger: Network errors or connection refusal during segment POST.
-- Workaround: Not available; current handler can raise `UnboundLocalError`.
+- Trigger: Any exception before `response` is assigned in `requests.post(...)` blocks (e.g. backend down) or user interrupts.
+- Workaround: None (restart UI); failures can appear as empty/incorrect results.
 
-**Incorrect NLI helper signature usage:**
-- Symptoms: `predict_nli` calls `get_nli_pipeline()` without required `model_name`.
-- Files: `backend/nli.py`
-- Trigger: Any call to `predict_nli`.
-- Workaround: Call `get_nli_pipeline(model_name)` directly.
+**HTTP requests without timeouts (hang risk):**
+- Symptoms: UI or backend call can hang indefinitely, blocking request threads and/or Streamlit render.
+- Files: `frontend/ui.py` (calls to backend without `timeout=`), `backend/utils.py` (`requests.post(f"{api_url}/search", ...)` without `timeout=`)
+- Trigger: Network stall, backend deadlock, ColBERT service not responding.
+- Workaround: Restart processes.
 
-**Broken tests in repository:**
-- Symptoms: `tests/test_segment_endpoint.py` references `first_ev` without definition, and `tests/test_parser.py` asserts `meta['type'] == 'sentence'` although parser produces `sentence_window`.
-- Files: `tests/test_segment_endpoint.py`, `tests/test_parser.py`, `backend/parser.py`
-- Trigger: Running pytest.
-- Workaround: None; tests must be updated to current behavior.
+**ColBERT rerank assumes exact text match and can raise `StopIteration`:**
+- Symptoms: Rerank crashes if ColBERT returns text that does not exactly match a window (normalization, duplicates, truncation).
+- Files: `backend/utils.py` (`colbert_api_rerank`)
+- Trigger: Duplicate window texts or service-side normalization.
+- Workaround: Disable ColBERT rerank path.
+
+**Potential contract mismatch in `filter_and_snap`:**
+- Symptoms: Indexing errors or type errors if called with FAISS IDs instead of integer indices.
+- Files: `backend/utils.py`
+- Trigger: Passing string ids (as returned by `Retriever.search`) into `filter_and_snap`.
+- Workaround: Avoid calling `filter_and_snap` unless inputs are verified integer indices.
+
+**Launcher does not start the ColBERT server despite building command:**
+- Symptoms: `application.py` mentions starting ColBERT but never executes `colbert_cmd`.
+- Files: `application.py`
+- Trigger: Running `python application.py` expecting ColBERT availability.
+- Workaround: Start ColBERT server separately.
 
 ## Security Considerations
 
-**Backend CORS is fully open:**
-- Risk: Any origin can issue browser requests to the API, enabling accidental exposure in shared networks.
+**No authentication/authorization on API endpoints:**
+- Risk: Anyone who can reach the API can ingest documents, wipe data, and access project artifacts.
 - Files: `backend/main.py`
-- Current mitigation: None beyond FastAPI defaults.
-- Recommendations: Restrict `allow_origins` to known frontend URLs or make it configurable.
+- Current mitigation: None detected (no auth middleware / per-route checks).
+- Recommendations: Add auth (at minimum bearer token), restrict privileged endpoints, and isolate dev-only routes.
 
-**API key is entered and displayed in plain text:**
-- Risk: Users can leak keys via screen sharing or logs; keys live in session state.
-- Files: `frontend/ui.py`
-- Current mitigation: None.
-- Recommendations: Use `type="password"` for the Streamlit input and avoid logging keys.
+**Dangerous dev wipe endpoint is publicly exposed:**
+- Risk: Remote data loss (Postgres TRUNCATE + S3 delete-all) if API is reachable.
+- Files: `backend/main.py` (`POST /dev/wipe`), `backend/object_store/s3.py` (`delete_all`)
+- Current mitigation: Requires JSON body `{"confirm":"WIPE"}` only.
+- Recommendations: Require admin auth, remove from production builds, or gate behind environment flag.
+
+**Overly permissive CORS configuration:**
+- Risk: Cross-site requests from arbitrary origins; also `allow_credentials=True` with `allow_origins=["*"]` is incompatible with browsers.
+- Files: `backend/main.py`
+- Current mitigation: None detected.
+- Recommendations: Restrict `allow_origins` to trusted UI origins and set `allow_credentials` accordingly.
+
+**Client-controlled filesystem paths used by server-side indexing:**
+- Risk: If the API is exposed beyond localhost, a caller can point `folder` to arbitrary server directories and potentially exfiltrate content via downstream processing.
+- Files: `backend/main.py` (`/segment`, `/prebuild`), `backend/retriever.py`, `backend/parser.py`
+- Current mitigation: None detected.
+- Recommendations: Never accept raw server paths from clients; require uploads into a controlled workspace and validate paths against that workspace.
+
+**HTML injection surface in Streamlit UI:**
+- Risk: `unsafe_allow_html=True` renders HTML built from backend/external data; if any untrusted content flows into these blocks, it can enable script injection in the browser.
+- Files: `frontend/ui.py`, `frontend/components/evidence_card.py`, `frontend/components/chasing_panel.py`, `frontend/components/rationale_sidebar.py`
+- Current mitigation: None detected.
+- Recommendations: Avoid `unsafe_allow_html=True` for untrusted strings; sanitize/escape user and network-derived fields.
+
+**XML parsing of untrusted documents (XXE / entity expansion):**
+- Risk: TEI/XML parsing without hardened parser settings can expose entity expansion or external fetch risks.
+- Files: `backend/parser.py` (lxml `etree.parse`), `backend/bl_client.py` (`xml.etree.ElementTree.parse`)
+- Current mitigation: Not detected.
+- Recommendations: Configure parsers with safe options (no network, no entity resolution) and treat uploads as untrusted.
+
+**Insecure defaults for tokens/credentials in dev configuration:**
+- Risk: Accidentally deploying with default secrets (`dev-internal-token`, `minio12345`) or wide-open local endpoints.
+- Files: `backend/settings.py`, `docker-compose.yml`, `.env.example`
+- Current mitigation: `.env` is gitignored via `.gitignore`.
+- Recommendations: Require explicit secrets in production, remove default tokens, and use separate dev/prod config.
 
 ## Performance Bottlenecks
 
-**Hybrid pipeline builds full in-memory FAISS per request:**
-- Problem: `build_all` embeds all windows and performs FAISS search from scratch.
-- Files: `backend/hybrid.py`
-- Cause: No reuse of cached embeddings/indices across requests.
-- Improvement path: Cache FAISS indices per document or prebuild them once via a background job.
+**Ingest reads entire PDF into memory:**
+- Problem: `UploadFile.read()` buffers the full PDF; large uploads can spike memory.
+- Files: `backend/main.py`
+- Cause: Full in-memory read for hashing/storage.
+- Improvement path: Stream upload to object store while hashing; enforce file size limits.
 
-**Model availability check is N+1 network calls:**
-- Problem: UI pings the completions endpoint for every model during sidebar render.
-- Files: `frontend/ui.py`
-- Cause: `get_responsive_models` loops sequentially over model IDs.
-- Improvement path: Add caching in session state and batch validation where possible.
+**CPU-bound embedding/NLI work runs inline on request thread/event loop:**
+- Problem: Heavy ML inference blocks API responsiveness.
+- Files: `backend/main.py` (`/segment`), `backend/utils.py`, `backend/nli.py`
+- Cause: Local model inference and embedding done directly in request handlers.
+- Improvement path: Offload to worker queue or dedicated service; add caching keyed by (model, inputs) where appropriate.
 
-**Large session state payloads scale with dataset size:**
-- Problem: Entire CSV results, segments, and evidence are stored in Streamlit session state.
-- Files: `frontend/ui.py`
-- Cause: In-memory per-row state accumulation.
-- Improvement path: Store results on disk or page through data instead of keeping all rows in memory.
+**Unbounded model caches can grow without limit:**
+- Problem: Caching multiple HF models/pipelines increases RAM/VRAM usage.
+- Files: `backend/nli.py` (`@lru_cache(maxsize=None)`), `backend/utils.py` (`_loaded_models`)
+- Cause: Cache keys include model names; no eviction.
+- Improvement path: Set bounded cache sizes + explicit eviction; track loaded model footprints.
+
+**Repeated heavy imports/initialization in hot paths:**
+- Problem: Some rerankers initialize expensive objects per call.
+- Files: `backend/utils.py` (`sbert_rerank`, `bm25_rerank`)
+- Cause: Model/tokenizer/NLP objects created on demand.
+- Improvement path: Cache model instances and tokenizers; avoid per-request initialization.
+
+**Naive in-memory caching for citation graph expansion:**
+- Problem: Caches grow with unique identifiers and are never evicted.
+- Files: `backend/citation_graph.py`
+- Cause: Global dict caches without TTL/size cap.
+- Improvement path: Add bounded TTL cache and/or store cache in external store.
 
 ## Fragile Areas
 
-**Paragraph IDs are derived from incrementing counters:**
-- Files: `backend/parser.py`
-- Why fragile: `p_id` uses a running counter fallback, so ID stability depends on parsing order; captions/tables would disrupt alignment.
-- Safe modification: Introduce stable paragraph IDs and keep mapping logic centralized.
-- Test coverage: Missing stable-ID tests (no coverage in `tests/test_parser.py`).
-
-**Shared global retriever state is not concurrency-safe:**
+**Segment/prebuild cache invalidation and concurrency:**
 - Files: `backend/main.py`
-- Why fragile: Concurrent requests mutate shared dicts without locks, risking inconsistent cache state.
-- Safe modification: Guard updates with locks or move cache to an external store.
-- Test coverage: No concurrency tests (no coverage in `tests/`).
+- Why fragile: Global `retrievers` is mutated (`clear()`/`update()`) without locking; concurrent users/requests can see partially rebuilt state or stale indexes.
+- Safe modification: Introduce per-request retriever creation or lock + versioned cache keys (folder hash + embed model + parameters).
+- Test coverage: Not detected for concurrent requests.
+
+**Graph and span graph stores are large and tightly coupled to schema:**
+- Files: `backend/graph_store.py`, `backend/span_graph_store.py`, `backend/db/migrate.py`
+- Why fragile: Many SQL contracts and implicit assumptions; schema evolution requires coordinated changes.
+- Safe modification: Add focused integration tests per store method and keep schema changes localized with migrations.
+- Test coverage: Partial (tests exist, but coverage of edge cases and migrations not guaranteed).
+
+**Hybrid pipeline behavior depends on optional, environment-specific dependencies:**
+- Files: `backend/hybrid.py`, `backend/utils.py`, `colbert_server/colbert.py`
+- Why fragile: `faiss`, `torch`, `sentence-transformers`, and external ColBERT service vary across environments.
+- Safe modification: Make dependency availability explicit and add graceful fallback paths.
+- Test coverage: Not detected for hybrid path end-to-end.
 
 ## Scaling Limits
 
-**In-memory FAISS indexes are unbounded:**
-- Current capacity: Limited by process RAM; every segment can add entries to `retrievers`.
-- Files: `backend/main.py`, `backend/retriever.py`
-- Limit: Large datasets or many users can exhaust memory and slow queries.
-- Scaling path: External index service or persistent cache with eviction and size caps.
-
-**Streamlit state scales linearly with rows:**
-- Current capacity: Entire dataset and results live in RAM per user session.
-- Files: `frontend/ui.py`
-- Limit: Large CSVs can slow UI and exhaust memory.
-- Scaling path: Pagination plus storing results in files or a database.
+**Single-process state and background threads prevent horizontal scaling:**
+- Current capacity: One API instance with in-process caches and threads.
+- Limit: Multiple replicas do not share caches; extraction thread pool does not coordinate; memory grows per replica.
+- Scaling path: Externalize background work (queue + worker), move caches out of process, add stateless API layer.
 
 ## Dependencies at Risk
 
-**Optional dependencies are assumed present:**
-- Risk: `fastcoref` and `colbert` imports are executed in runtime paths without guard rails when modes are enabled.
-- Impact: Missing packages crash the hybrid path or tests.
-- Migration plan: Add optional dependency checks and clearer error messages.
-- Files: `backend/hybrid.py`, `tests/test_coref.py`, `tests/test_colbert.py`
+**Unpinned "latest" container images in Compose:**
+- Risk: Breaking changes or supply-chain issues.
+- Impact: Non-reproducible dev/prod environments.
+- Migration plan: Pin images to specific versions/digests.
+- Files: `docker-compose.yml`
+
+**ML stack version churn and device semantics:**
+- Risk: Transformers/Torch API changes (eg. device handling, caching env vars) can break runtime.
+- Impact: Runtime failures and hard-to-debug performance regressions.
+- Migration plan: Keep lockfiles current, add smoke tests for model loading/inference.
+- Files: `requirements/app.lock.txt`, `backend/nli.py`, `backend/main.py`
 
 ## Missing Critical Features
 
-**Not detected:**
-- No explicit missing feature markers found in `backend/*.py`, `frontend/*.py`.
+**Production-grade auth and multi-tenant isolation:**
+- Problem: Project/user scoping exists in settings but enforcement and authentication are not implemented for API requests.
+- Blocks: Secure multi-user deployments.
+- Files: `backend/settings.py`, `backend/main.py`
 
 ## Test Coverage Gaps
 
-**Hybrid pipeline is largely untested:**
-- What's not tested: Core hybrid build flow, reranking, and coref integration.
-- Files: `backend/hybrid.py`
-- Risk: Regressions in hybrid mode go undetected.
-- Priority: High.
+**Tests depend on live Postgres and do not isolate object store:**
+- What's not tested: Clean-room runs without external services; object store cleanup and lifecycle.
+- Files: `tests/conftest.py`, `backend/db/pg.py`, `backend/object_store/s3.py`
+- Risk: CI instability; local tests pass with leftover S3 objects; environment-specific failures.
+- Priority: High
 
-**Frontend has no automated tests:**
-- What's not tested: UI flow, API payloads, session state updates.
-- Files: `frontend/ui.py`
-- Risk: UI regressions and integration failures surface late.
-- Priority: Medium.
-
-**Scripts under tests/ are not real tests:**
-- What's not tested: ColBERT and coref scripts are not pytest cases and provide no assertions.
-- Files: `tests/test_colbert.py`, `tests/test_coref.py`, `tests/test_blablador.py`
-- Risk: CI passes without covering key integrations.
-- Priority: Medium.
+**No automated coverage for the Streamlit UI and browser-level flows:**
+- What's not tested: UI rendering/interaction, XSS surfaces, and full-stack flows.
+- Files: `frontend/ui.py`, `frontend/components/*`
+- Risk: Regressions ship unnoticed; security issues not caught.
+- Priority: Medium
 
 ---
 
-*Concerns audit: 2026-01-23*
+*Concerns audit: 2026-02-20*

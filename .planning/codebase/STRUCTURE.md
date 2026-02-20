@@ -1,124 +1,166 @@
 # Codebase Structure
 
-**Analysis Date:** 2026-01-23
+**Analysis Date:** 2026-02-20
 
 ## Directory Layout
 
 ```
 [project-root]/
-├── application.py             # CLI launcher for backend/UI/ColBERT services
-├── backend/                   # FastAPI app + ML pipeline modules
-├── frontend/                  # Streamlit UI
-├── colbert_server/            # ColBERT FastAPI reranker service
-├── ColBERT/                   # Vendored ColBERT repository
-├── data/                      # ColBERT collections and indexes
-├── experiments/               # Experiment artifacts (indexes, metadata)
-├── tests/                     # Pytest tests and fixtures
-├── environment.yml            # Primary environment definition
-├── smoke.py                   # Dependency smoke check
-└── README.md                  # Project overview and setup
+├── backend/                 # FastAPI backend, spine persistence, pipelines
+├── frontend/                # Streamlit UI, components, API clients
+├── tests/                   # Pytest test suite
+├── docker/                  # Dockerfiles for app-api/app-ui/fallback-worker
+├── scripts/                 # Dev/smoke/e2e helper scripts
+├── docs/                    # Technical specs + workflow docs
+├── requirements/            # Pinned runtime deps (app.in + app.lock.txt)
+├── fixtures/                # Small PDFs and fixture inputs for smoke/tests
+├── data/                    # Local disposable artifacts + legacy stores
+├── corpus/                  # Local corpus folders (focus/local/ok)
+├── colbert_server/          # Optional ColBERT microservice (uvicorn app)
+├── ColBERT/                 # Vendored upstream ColBERT repo
+├── .planning/               # Project planning + codebase maps
+├── .opencode/               # Vendored OpenCode/GSD workflow tooling
+├── docker-compose.yml       # Multi-service local stack
+├── application.py           # Local dev launcher (backend + UI + optional ColBERT)
+└── README.md                # Quickstart + service overview
 ```
 
 ## Directory Purposes
 
-**backend/**
-- Purpose: FastAPI API layer plus retrieval, parsing, and NLI pipeline logic.
-- Contains: Core pipeline modules, settings, schemas, utilities.
-- Key files: `backend/main.py`, `backend/retriever.py`, `backend/hybrid.py`, `backend/parser.py`, `backend/settings.py`.
+**backend/:**
+- Purpose: Backend API surface + all durable persistence + pipelines.
+- Contains: `backend/main.py` routes; spine modules in `backend/spine/`; graph stores (`backend/graph_store.py`, `backend/span_graph_store.py`); evidence pipeline (`backend/evidence_matching/*`); attachment processing (`backend/attachment_pipeline.py`, `backend/attachment_store.py`).
+- Key files: `backend/main.py`, `backend/settings.py`, `backend/db/migrate.py`, `backend/object_store/s3.py`.
 
-**frontend/**
-- Purpose: Streamlit user interface for upload, segmentation, and results.
-- Contains: Single Streamlit app entrypoint.
-- Key files: `frontend/ui.py`.
+**backend/spine/:**
+- Purpose: Postgres-first primitives for ingestion and durable workflow state.
+- Contains: helpers for works/documents/versions, attempts/jobs/artifacts, project meta, settings/workflows/locators.
+- Key files: `backend/spine/ingest_view.py`, `backend/spine/extraction_pool.py`, `backend/spine/attempts.py`.
 
-**colbert_server/**
-- Purpose: Separate FastAPI service that hosts ColBERT build/search APIs.
-- Contains: ColBERT API app and its environment definition.
-- Key files: `colbert_server/colbert.py`, `colbert_server/environment.yml`.
+**backend/evidence_matching/:**
+- Purpose: Evidence rerun orchestration + pipeline code.
+- Contains: deterministic seeding, pipeline execution, serialization, persistence.
+- Key files: `backend/evidence_matching/service.py`, `backend/evidence_matching/pipeline.py`, `backend/evidence_matching/store.py`.
 
-**ColBERT/**
-- Purpose: Local ColBERT source checkout used by the reranker service.
-- Contains: ColBERT library and utilities.
-- Key files: `ColBERT/colbert`, `ColBERT/server.py`.
+**frontend/:**
+- Purpose: Streamlit UI shell and client-side state helpers.
+- Contains: UI app (`frontend/ui.py`), API clients (`frontend/*_api.py`), session-state stores (`frontend/*_store.py`), and panel components.
+- Key files: `frontend/ui.py`, `frontend/ingestion_api.py`, `frontend/evidence_api.py`, `frontend/components/live_surfing_panel.py`.
 
-**data/**
-- Purpose: Local ColBERT data artifacts (collections, indexes).
-- Contains: Default collection/index data.
-- Key files: `data/colbert/collections/default.tsv`.
+**frontend/components/:**
+- Purpose: Reusable Streamlit UI panels and renderers.
+- Contains: “workspace” panels (chasing, evidence cards, graph/surfing) and Cytoscape component wrappers.
+- Key files: `frontend/components/chasing_panel.py`, `frontend/components/evidence_card.py`, `frontend/components/live_surfing_panel.py`.
 
-**experiments/**
-- Purpose: Index artifacts produced by ColBERT runs.
-- Contains: Default experiment outputs.
-- Key files: `experiments/default/indexes/default/metadata.json`.
+**tests/:**
+- Purpose: Automated verification via pytest.
+- Contains: `test_*.py` files and shared fixtures in `tests/conftest.py`.
+- Key files: `tests/conftest.py`, `tests/test_segment_endpoint.py`, `tests/test_evidence_matching_pipeline.py`.
 
-**tests/**
-- Purpose: Automated tests for parsing, retrieval, coreference, and endpoints.
-- Contains: Pytest files and dummy data.
-- Key files: `tests/test_parser.py`, `tests/test_retriever.py`, `tests/test_segment_endpoint.py`.
+**docker/:**
+- Purpose: Container builds for the Compose stack.
+- Contains: `docker/app-api/Dockerfile`, `docker/app-ui/Dockerfile`, `docker/fallback-worker/Dockerfile`.
+
+**scripts/:**
+- Purpose: Dev/smoke/e2e utilities for running the stack and workflows.
+- Contains: `scripts/dev/up.sh`, `scripts/dev/smoke_ingest.sh`, `scripts/dev/pytest_docker.sh`.
+
+**docs/:**
+- Purpose: Repo specification and operational docs.
+- Contains: `docs/REPO_SPEC.md` (technical spec), `docs/GSD.md` (workflow), `docs/PUBLISH_PUBLIC.md`.
+
+**requirements/:**
+- Purpose: Dependency inputs and pinned lock.
+- Contains: `requirements/app.in`, `requirements/app.lock.txt`.
+
+**fixtures/:**
+- Purpose: Small deterministic fixture PDFs and corpus lists.
+- Contains: `fixtures/sample.pdf`, `fixtures/scanned-1.pdf`, `fixtures/text-1.pdf`.
+
+**data/:**
+- Purpose: Local/dev artifacts and legacy durable stores.
+- Contains: `data/graph.db`, `data/claims.db`, `data/poc_graph.json`, and temporary caches.
+- Generated: Yes (runtime output).
+- Committed: Mixed (directory exists in repo; contents are not a durable contract).
+
+**colbert_server/:**
+- Purpose: Optional ColBERT reranking service.
+- Contains: `colbert_server/colbert.py` uvicorn app.
+
+**ColBERT/:**
+- Purpose: Vendored upstream ColBERT codebase.
+- Contains: its own `ColBERT/server.py`, package sources, and docs.
+- Generated: No (vendored source).
+- Committed: Yes.
 
 ## Key File Locations
 
 **Entry Points:**
-- `application.py`: CLI launcher for all services.
-- `backend/main.py`: FastAPI backend application.
-- `frontend/ui.py`: Streamlit UI entrypoint.
-- `colbert_server/colbert.py`: ColBERT FastAPI service.
+- `backend/main.py`: FastAPI application and routes.
+- `frontend/ui.py`: Streamlit application.
+- `application.py`: Local launcher for backend + UI (+ optional ColBERT server).
+- `backend/ocr_worker_app.py`: Optional OCR fallback worker FastAPI app.
+- `docker-compose.yml`: Compose orchestration for API/UI/GROBID/Postgres/MinIO.
 
 **Configuration:**
-- `backend/settings.py`: Runtime settings and env bindings.
-- `.streamlit/config.toml`: Streamlit configuration.
-- `environment.yml`: Base environment dependencies.
-- `colbert_server/environment.yml`: ColBERT environment dependencies.
+- `backend/settings.py`: Centralized `AppSettings` (env + `.env`).
+- `docker-compose.yml`: Service wiring + env vars for local stack.
+- `requirements/app.in`: Unpinned dependency list.
+- `requirements/app.lock.txt`: Pinned install list used in Dockerfiles.
 
 **Core Logic:**
-- `backend/retriever.py`: FAISS index builder and query logic.
-- `backend/hybrid.py`: Hybrid pipeline implementation.
-- `backend/parser.py`: TEI/CSV parsing and windowing.
-- `backend/nli.py`: NLI inference pipeline.
-- `backend/utils.py`: Embedding, reranking, and helper utilities.
+- Ingestion spine: `backend/spine/*`, schema DDL in `backend/db/migrate.py`.
+- Object store: `backend/object_store/s3.py`.
+- Extraction: `backend/grobid_client.py`, `backend/extraction.py`, `backend/tei_body.py`, worker pool `backend/spine/extraction_pool.py`.
+- Attachments: `backend/attachment_store.py`, `backend/attachment_pipeline.py`.
+- Evidence: `backend/evidence_matching/*`, NLI `backend/nli.py`.
+- Graph: `backend/graph_store.py`, `backend/span_graph_store.py`.
 
 **Testing:**
-- `tests/test_parser.py`: TEI/CSV parsing tests.
-- `tests/test_retriever.py`: FAISS retrieval tests.
-- `tests/test_segment_endpoint.py`: FastAPI endpoint tests.
+- `tests/`: pytest tests.
+- `pytest.ini`: pytest configuration.
 
 ## Naming Conventions
 
 **Files:**
-- Snake_case module files for Python code (`backend/retriever.py`, `frontend/ui.py`).
+- Backend stores/persistence helpers: `backend/*_store.py` (e.g. `backend/attachment_store.py`).
+- Frontend HTTP clients: `frontend/*_api.py` (e.g. `frontend/ingestion_api.py`).
+- Streamlit components/panels: `frontend/components/*_panel.py` (e.g. `frontend/components/chasing_panel.py`).
+- Tests: `tests/test_*.py`.
 
 **Directories:**
-- Lowercase for project code (`backend`, `frontend`, `tests`), capitalized for vendored repo (`ColBERT`).
+- Top-level app modules: `backend/`, `frontend/`.
+- Feature clusters: `backend/spine/`, `backend/evidence_matching/`, `frontend/components/`.
 
 ## Where to Add New Code
 
-**New Feature:**
-- Primary code: `backend/main.py` (endpoint wiring) and `backend/schemas.py` (payload models).
-- Tests: `tests/` with `test_*.py` naming (`tests/test_segment_endpoint.py`).
+**New Feature (end-to-end workflow step):**
+- Primary code: add API endpoints and orchestration in `backend/main.py` (or introduce a new module and import from `backend/main.py` to keep route handlers thin).
+- Persistence: prefer Postgres + S3 via `backend/spine/*` and `backend/object_store/s3.py` (avoid adding new durable state under `data/`).
+- UI: add a new panel/component in `frontend/components/` and wire it into `frontend/ui.py`.
+- Tests: add pytest coverage in `tests/` (follow existing `test_*.py` naming).
 
 **New Component/Module:**
-- Implementation: `backend/` as a new snake_case module imported by `backend/main.py`.
+- Backend domain module: place under `backend/` with a clear suffix (`*_store.py`, `*_client.py`, `*_pipeline.py`).
+- Spine primitive/helper: place under `backend/spine/` when it reads/writes durable tables or artifacts.
+- Frontend API wrapper: add a new `frontend/<area>_api.py` when introducing new endpoints.
 
 **Utilities:**
-- Shared helpers: `backend/utils.py`.
+- Shared backend helpers: `backend/utils.py`.
+- Shared frontend state keys: `frontend/state_keys.py`.
 
 ## Special Directories
 
-**data/**
-- Purpose: ColBERT collections and index files.
-- Generated: Yes.
+**.planning/:**
+- Purpose: Project roadmap/state and generated codebase maps.
+- Generated: Mixed.
 - Committed: Yes.
 
-**experiments/**
-- Purpose: ColBERT experiment outputs.
-- Generated: Yes.
-- Committed: Yes.
-
-**__pycache__/**
-- Purpose: Python bytecode caches.
-- Generated: Yes.
-- Committed: No.
+**.opencode/:**
+- Purpose: Vendored OpenCode/GSD tooling (Bun-based).
+- Generated: `.opencode/node_modules/` is generated.
+- Committed: Source is committed; dependencies are not.
 
 ---
 
-*Structure analysis: 2026-01-23*
+*Structure analysis: 2026-02-20*

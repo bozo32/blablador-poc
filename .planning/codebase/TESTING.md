@@ -1,142 +1,140 @@
 # Testing Patterns
 
-**Analysis Date:** 2026-01-23
+**Analysis Date:** 2026-02-20
 
 ## Test Framework
 
 **Runner:**
-- pytest (imported in `tests/test_retriever.py`)
-- Config: Not detected (no `pytest.ini`, `pyproject.toml`, or `setup.cfg`)
+- pytest (not pinned in `requirements/app.in`; must be installed in the dev/test environment)
+- Config: `pytest.ini` (scopes discovery to `tests/`)
 
 **Assertion Library:**
-- pytest plain `assert` statements in `tests/test_retriever.py` and `tests/test_parser.py`.
+- Built-in `assert` + `pytest.raises` (e.g. `tests/test_evidence_selection_store.py:16`, `tests/test_evidence_store.py:108`).
 
 **Run Commands:**
 ```bash
-pytest                     # Run all tests
-pytest -k <pattern>        # Targeted subset (no watch config detected)
-Not detected               # Coverage command
+pytest -q              # Run all tests
+pytest -q tests/test_attachment_store.py   # Run a single file
+pytest -q -k rerun     # Run by keyword expression
 ```
-
-**Containerized (recommended):**
-```bash
-bash scripts/dev/pytest_docker.sh  # Unit tests inside Docker
-bash scripts/dev/e2e_docker.sh     # End-to-end ingestion smoke
-bash scripts/dev/test_docker.sh    # Unit + E2E (sequential)
-```
-
-### Environment Notes (2026-02)
-
-- Host conda envs can fail pytest collection if NumPy 2.x is installed with
-  pandas/scipy/sklearn wheels built against NumPy 1.x.
-- Fix options:
-  - Containerized tests (recommended): `bash scripts/dev/pytest_docker.sh`
-  - Repair active conda env in place: `CONFIRM=1 bash scripts/dev/fix_local_conda_env.sh`
-
-**Container pytest stability:**
-- `scripts/dev/pytest_docker.sh` runs `scripts/dev/pytest_runner.py`, which calls pytest and then exits via
-  `os._exit(code)` to avoid intermittent native teardown aborts observed in some container environments.
 
 ## Test File Organization
 
 **Location:**
-- Tests live under `tests/` with mostly flat structure (`tests/test_retriever.py`, `tests/test_parser.py`).
+- Centralized under `tests/` (enforced by `pytest.ini`).
 
 **Naming:**
-- Use `test_*.py` filenames for pytest discovery (`tests/test_retriever.py`, `tests/test_parser.py`).
+- Files: `tests/test_*.py`
+- Test functions: `test_*`
 
 **Structure:**
 ```
 tests/
-├── test_retriever.py
-├── test_parser.py
-├── test_blablador.py
-├── test_coref.py
-├── test_colbert.py
-└── dummy data/
+  conftest.py
+  test_attachment_*.py
+  test_evidence_*.py
+  test_span_graph_*.py
 ```
 
 ## Test Structure
 
 **Suite Organization:**
 ```python
-import pytest
+from pathlib import Path
 
-@pytest.fixture
-def dummy_chunks():
-    return [{"text": "...", "meta": {"id": "0", "type": "sentence"}}]
+from backend import attachment_pipeline, attachment_store
 
-def test_max_sentences_cap(tmp_path, monkeypatch, dummy_chunks):
+
+def _make_source(tmp_path: Path) -> Path:
+    source = tmp_path / "sample.pdf"
+    source.write_bytes(b"%PDF-sample")
+    return source
+
+
+def test_process_attachment_creates_artifacts(tmp_path, monkeypatch):
+    source = _make_source(tmp_path)
+    record = attachment_store.create_attachment(
+        claim_id="claim-1",
+        doc_id="doc-9",
+        local_path=source,
+        claim_text="Pipeline claim text",
+    )
+    monkeypatch.setattr(attachment_pipeline.grobid_client, "extract_tei", lambda _: "<TEI/>")
     ...
 ```
 
 **Patterns:**
-- Use pytest fixtures for shared data (`tests/test_retriever.py`).
-- Use `tmp_path` for filesystem isolation (`tests/test_retriever.py`).
-- Use direct asserts with descriptive messages (`tests/test_parser.py`).
+- Setup via `tmp_path` for filesystem artifacts and `monkeypatch` for dependency injection (e.g. `tests/test_attachment_pipeline.py:19`).
+- FastAPI endpoints exercised using `fastapi.testclient.TestClient` against `backend/main.py` app with globals patched (e.g. `tests/test_span_graph_rebuild.py:9`).
 
 ## Mocking
 
-**Framework:** pytest monkeypatch (`tests/test_retriever.py`).
+**Framework:**
+- pytest `monkeypatch` + `types.SimpleNamespace`
 
 **Patterns:**
 ```python
-def fake_embed(texts):
-    return np.arange(len(texts), dtype="float32").reshape(-1, 1)
-
-monkeypatch.setattr(utils, "embed", fake_embed)
+def test_process_attachment_creates_artifacts(tmp_path, monkeypatch):
+    monkeypatch.setattr(attachment_pipeline.grobid_client, "extract_tei", lambda _: "<TEI/>")
+    monkeypatch.setattr(attachment_pipeline.utils, "embed", lambda texts, **_: [[1.0] for _ in texts])
+    ...
 ```
 
 **What to Mock:**
-- Mock embedding/model calls to keep tests deterministic (`tests/test_retriever.py`).
+- Expensive / external work: GROBID calls, embedding model calls, NLI scoring (e.g. `tests/test_attachment_pipeline.py:28`, `tests/test_evidence_matching_pipeline.py:190`).
+- Global singletons in `backend/main.py` by patching module attributes before constructing `TestClient` (e.g. `tests/test_span_graph_rebuild.py:11`).
 
 **What NOT to Mock:**
-- Leave file parsing and metadata structure intact for unit checks (`tests/test_parser.py`).
+- Avoid stubbing `sys.modules` during import-time in tests; it leaks cross-test state (explicit note in `tests/test_evidence_matching_api.py:11`).
 
 ## Fixtures and Factories
 
 **Test Data:**
-```python
-@pytest.fixture
-def dummy_chunks():
-    return [{"text": f"sentence {i}", "meta": {"id": str(i), "type": "sentence"}} for i in range(20)]
-```
+- Use small helper factories that write minimal PDF-like bytes to `tmp_path` (e.g. `tests/test_attachment_store.py:7`, `tests/test_attachment_pipeline.py:13`).
+- Use in-test constants for TEI stubs and sentence rows (e.g. `tests/test_attachment_pipeline.py:6`).
 
 **Location:**
-- Fixtures are defined inline in test modules (`tests/test_retriever.py`).
-- Static fixtures/data files live under `tests/dummy data/` (e.g., `tests/dummy data/source.csv`).
+- Shared fixtures live in `tests/conftest.py`.
 
 ## Coverage
 
-**Requirements:** None enforced (no coverage config detected in repo root).
+**Requirements:** None enforced/detected.
 
 **View Coverage:**
 ```bash
-Not detected
+Not detected (no coverage tool/config committed)
 ```
 
 ## Test Types
 
 **Unit Tests:**
-- Parser/retriever unit tests use pytest (`tests/test_parser.py`, `tests/test_retriever.py`).
+- Pure-ish logic and store behavior with stubbed APIs/UI shims (e.g. `tests/test_claim_queue.py`, `tests/test_evidence_store.py`).
 
 **Integration Tests:**
-- External service checks are implemented as runnable scripts in `tests/test_blablador.py` and `tests/test_colbert.py`.
-- Model sanity checks are script-style in `tests/test_coref.py`.
+- Tests rely on real Postgres DDL + truncation between tests via `tests/conftest.py` (`backend/db/migrate.py`, `backend/db/pg.py`).
+- Tests rely on a reachable S3-compatible object store for attachment PDFs (e.g. `tests/test_attachment_store.py:26` uses `backend/object_store/s3.py`).
+
+**Integration Test Requirements:**
+- Postgres configured via `POSTGRES_DSN` (default in `backend/settings.py:74`).
+- S3/MinIO configured via `S3_ENDPOINT_URL`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET_WORKS` (defaults in `backend/settings.py:81`).
 
 **E2E Tests:**
-- API-level E2E smoke is implemented as a script:
-  - `scripts/dev/e2e_flow.py` (drives ingest -> extract -> fallback/OCR -> body -> claim confirm -> basic graph check)
-  - `scripts/dev/e2e_docker.sh` (brings up compose stack, generates fixtures, runs the flow)
+- Not detected (smoke workflows exist outside pytest via `scripts/dev/*` and `smoke.py`).
 
 ## Common Patterns
 
 **Async Testing:**
-- Not detected in `tests/test_retriever.py` or `tests/test_parser.py`.
+- Not a primary pattern; concurrency is tested using threads/events and deterministic timeouts (e.g. `tests/test_evidence_matching_api.py:203`).
 
 **Error Testing:**
-- No explicit error-case assertions found; tests focus on successful paths (`tests/test_retriever.py`, `tests/test_parser.py`).
+```python
+import pytest
+
+
+with pytest.raises(SomeError):
+    ...
+```
 
 ---
 
-*Testing analysis: 2026-01-23*
+*Testing analysis: 2026-02-20*

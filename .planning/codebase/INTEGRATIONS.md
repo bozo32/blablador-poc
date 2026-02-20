@@ -1,88 +1,138 @@
 # External Integrations
 
-**Analysis Date:** 2026-01-23
+**Analysis Date:** 2026-02-20
 
 ## APIs & External Services
 
-**LLM/Embedding API:**
-- Blablador API (OpenAI-compatible) - completions and embeddings
-  - SDK/Client: `requests` in `backend/bl_client.py`, `frontend/ui.py`
-  - Auth: `API_KEY` via `backend/settings.py`, `application.py`
+**LLM / NLP APIs:**
+- Blablador API (Helmholtz Blablador)
+  - Used for: completions and embeddings in some paths (e.g. best-passage rationale)
+  - Implementation: `backend/bl_client.py`, `backend/utils.py`, `frontend/ui.py`
+  - SDK/Client: `requests` (custom client)
+  - Auth: `API_KEY`
+  - Base URL: `API_BASE`
+  - Default model alias: `DEFAULT_LLM_MODEL`
 
-**Model Hub:**
-- Hugging Face model downloads for embeddings/NLI
-  - SDK/Client: `transformers` and `sentence-transformers` in `backend/nli.py`, `backend/utils.py`
-  - Auth: Not detected
+**Scholarly metadata / citation graph:**
+- OpenAlex Works API
+  - Used for: citation graph expansion and reference resolution
+  - Implementation: `backend/citation_graph.py`, `backend/reference_resolver.py`, `backend/main.py`
+  - SDK/Client: `requests`
+  - Auth: optional `OPENALEX_API_KEY`
+  - Base URL: `OPENALEX_API_URL`
 
-**Reranker Service:**
-- ColBERT API server (local FastAPI service)
-  - SDK/Client: `requests` in `backend/utils.py`, `backend/hybrid.py`
-  - Auth: Not detected
+- Crossref REST API
+  - Used for: reference resolution by DOI / bibliographic query
+  - Implementation: `backend/reference_resolver.py`
+  - SDK/Client: `requests`
+  - Auth: none (requires contact email)
+  - Contact param: `CROSSREF_MAILTO`
+  - Base URL: `CROSSREF_API_URL`
 
-**Bibliographic Metadata:**
-- Crossref REST API for reference resolution
-  - SDK/Client: `requests` in `backend/reference_resolver.py`
-  - Auth: `CROSSREF_MAILTO` contact email in `backend/settings.py`
+**Model hosting:**
+- Hugging Face Inference API
+  - Used for: optional remote NLI scoring when enabled
+  - Implementation: `backend/utils.py` (`hf_inference_post`), `backend/nli.py`
+  - Auth: `HF_API_TOKEN`
+  - Toggle: `HF_REMOTE_INFERENCE`
+
+**Document structure extraction:**
+- GROBID (containerized service)
+  - Used for: PDF -> TEI conversion and reference extraction
+  - Client: `backend/grobid_client.py`
+  - Service URL: `GROBID_URL`
+  - Compose image: `lfoppiano/grobid:0.8.0` (`docker-compose.yml`)
+
+**Optional internal services:**
+- Fallback OCR Worker (FastAPI)
+  - Used for: optional OCR-capable fallback extraction delegated from spine extraction
+  - API: `POST /v1/fallback` (`backend/ocr_worker_app.py`)
+  - Service URL: `FALLBACK_WORKER_URL` (`backend/settings.py`, `docker-compose.yml`)
+  - Auth: `INTERNAL_SERVICE_TOKEN` (Bearer)
+
+- ColBERT API Server (FastAPI microservice)
+  - Used for: optional reranking when hybrid pipeline enables ColBERT
+  - Implementation: `colbert_server/colbert.py`
+  - Service URL: `COLBERT_API_URL` (default `http://localhost:7001`, `backend/settings.py`)
 
 ## Data Storage
 
 **Databases:**
-- Not detected
+- Postgres (spine system-of-record)
+  - Connection: `POSTGRES_DSN` (`backend/settings.py`, `docker-compose.yml`)
+  - Client: `psycopg` wrapper (`backend/db/pg.py`)
+  - Schema bootstrap/migrations: `backend/db/migrate.py`
+  - Compose image: `postgres:16-alpine` (`docker-compose.yml`)
 
 **File Storage:**
-- Local filesystem only (FAISS index files) - `backend/retriever.py`
-- ColBERT index/collection storage - `colbert_server/colbert.py`
+- S3-compatible object store (MinIO in dev)
+  - Used for: PDFs and large extraction artifacts
+  - Client: `backend/object_store/s3.py` (boto3 client, path-style addressing)
+  - Connection/auth:
+    - `S3_ENDPOINT_URL`
+    - `S3_ACCESS_KEY`
+    - `S3_SECRET_KEY`
+    - `S3_BUCKET_WORKS`
+    - `S3_REGION`
+    - `S3_USE_SSL`
+  - Compose image: `minio/minio:latest` + init job `minio/mc:latest` (`docker-compose.yml`)
 
 **Caching:**
-- Local in-memory and on-disk model caches (Hugging Face) - `backend/nli.py`, `backend/utils.py`
+- In-memory process caches only (e.g. OpenAlex response caches in `backend/citation_graph.py`)
 
 ## Authentication & Identity
 
 **Auth Provider:**
-- API key header for Blablador API
-  - Implementation: Bearer token via `requests` in `backend/bl_client.py`, `frontend/ui.py`
+- None for end-user authentication (single-user/POC mode)
+  - Internal service auth: shared bearer token `INTERNAL_SERVICE_TOKEN` used by worker endpoints (`backend/ocr_worker_app.py`, `backend/spine/extraction_pool.py`)
+  - External API keys:
+    - `API_KEY` for Blablador (`backend/bl_client.py`)
+    - `OPENALEX_API_KEY` optional (`backend/citation_graph.py`, `backend/reference_resolver.py`)
+    - `HF_API_TOKEN` optional (`backend/nli.py`)
 
 ## Monitoring & Observability
 
 **Error Tracking:**
-- None
+- Not detected
 
 **Logs:**
-- Python logging/stdout in `backend/main.py`, `backend/nli.py`, `application.py`
+- Standard Python logging / stdout (e.g. `backend/nli.py`, Docker container logs)
 
 ## CI/CD & Deployment
 
 **Hosting:**
-- Local process execution (uvicorn + streamlit) - `application.py`
+- Docker Compose local stack (API + UI + Grobid + Postgres + MinIO + optional worker) (`docker-compose.yml`, `scripts/dev/up.sh`)
 
 **CI Pipeline:**
-- None
+- Not detected (no `.github/workflows/*`)
 
 ## Environment Configuration
 
 **Required env vars:**
-- `API_KEY` - Blablador API auth in `backend/settings.py`, `application.py`
-- `API_BASE` - Blablador API base URL in `backend/settings.py`, `application.py`
-- `BACKEND_URL` - UI to backend routing in `backend/settings.py`, `frontend/ui.py`
-- `PIPELINE_MODE` - classic/hybrid selection in `backend/settings.py`
-- `CROSSREF_MAILTO` - Crossref REST API contact email in `backend/settings.py`
-- `CROSSREF_API_URL` - Crossref REST API base URL in `backend/settings.py`
-- `COLBERT_API_URL` - ColBERT service URL in `backend/settings.py`, `backend/hybrid.py`
-- `COLBERT_INDEX`, `COLBERT_COLLECTION`, `COLBERT_CHECKPOINT` - ColBERT paths in `colbert_server/colbert.py`
-- `COLBERT_CONDA_ENV` - ColBERT server env name in `application.py`
+- Core (local-first): `BACKEND_URL` (UI -> API), `GROBID_URL`
+- Spine persistence: `POSTGRES_DSN`, `S3_ENDPOINT_URL`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET_WORKS`, `S3_REGION`, `S3_USE_SSL`
+- Internal auth: `INTERNAL_SERVICE_TOKEN`
+
+**Optional env vars (feature toggles / external calls):**
+- Blablador: `API_KEY`, `API_BASE`, `DEFAULT_LLM_MODEL` (`backend/settings.py`, `.env.example`)
+- OpenAlex: `OPENALEX_API_KEY`, `OPENALEX_API_URL`
+- Crossref: `CROSSREF_MAILTO`, `CROSSREF_API_URL`
+- HF inference: `HF_REMOTE_INFERENCE`, `HF_API_TOKEN`
+- Fallback worker: `FALLBACK_WORKER_URL`, `FALLBACK_OCR_LANGUAGES`, `FALLBACK_TEXT_MIN_CHARS`, `FALLBACK_OCR_DPI_STEPS`
+- ColBERT: `COLBERT_MODE`, `COLBERT_API_URL` (and service-side `COLBERT_INDEX`, `COLBERT_COLLECTION`, `COLBERT_CHECKPOINT` in `colbert_server/colbert.py`)
 
 **Secrets location:**
-- `.env` via `backend/settings.py`
-- CLI flags `--api_key`/`--api_base` in `application.py`
+- Local dev: repo-root `.env` loaded by `backend/settings.py` and `python-dotenv` (`application.py`)
+- Compose dev: service env injected directly in `docker-compose.yml`
 
 ## Webhooks & Callbacks
 
 **Incoming:**
-- None
+- None detected
 
 **Outgoing:**
-- None
+- None detected (HTTP calls are direct API requests, not webhook delivery)
 
 ---
 
-*Integration audit: 2026-01-23*
+*Integration audit: 2026-02-20*

@@ -1,85 +1,100 @@
 # Coding Conventions
 
-**Analysis Date:** 2026-01-23
+**Analysis Date:** 2026-02-20
 
 ## Naming Patterns
 
 **Files:**
-- Use snake_case for Python modules and scripts (e.g., `backend/retriever.py`, `backend/model_cache.py`, `frontend/ui.py`, `tests/test_retriever.py`).
+- Python modules use `snake_case.py` in `backend/` and `frontend/` (e.g. `backend/attachment_store.py`, `frontend/project_api.py`).
+- Test files use `tests/test_*.py` (e.g. `tests/test_attachment_pipeline.py`).
 
 **Functions:**
-- Use snake_case for functions and methods (e.g., `backend/parser.py` uses `tei_to_chunks`, `backend/utils.py` uses `set_sane_threads`, `backend/retriever.py` uses `query_many`).
+- Use `snake_case` for functions and methods (e.g. `backend/object_store/s3.py:67` `put_bytes`, `backend/evidence_matching/service.py:79` `ensure_current_run`).
 
 **Variables:**
-- Use snake_case for locals/params (e.g., `backend/main.py` uses `pipeline_mode`, `backend/utils.py` uses `texts`), and ALL_CAPS for module constants (e.g., `backend/utils.py` uses `MODEL_CACHE_DIR`, `backend/main.py` uses `CSV_PATH`).
+- Module constants use `UPPER_SNAKE_CASE` (e.g. `frontend/project_api.py:9` `DEFAULT_TIMEOUT`, `backend/utils.py:17` `HF_INFERENCE_API_BASE`).
+- Local variables use `snake_case`.
 
 **Types:**
-- Use PascalCase for classes (e.g., `backend/schemas.py` uses `RequestSettings`, `SegmentRequest`) and TitleCase aliases (e.g., `backend/model_cache.py` uses `ModelCategory`).
+- Classes use `PascalCase` (e.g. `backend/settings.py:14` `AppSettings`, `backend/evidence_matching/service.py:28` `EvidenceMatchingService`).
+- Enums use `PascalCase` with `UPPER_SNAKE_CASE` members (e.g. `backend/evidence_matching/types.py:10` `EvidenceLabel.ENTAILS`).
 
 ## Code Style
 
 **Formatting:**
-- Use 4-space indentation and standard PEP 8 spacing as in `backend/main.py` and `backend/parser.py`.
-- Keep line-length reasonable with multi-line arguments aligned by parentheses (see `backend/utils.py` and `frontend/ui.py`).
-- No formatter config detected in repo root (`pyproject.toml`, `setup.cfg`, `.prettierrc`).
+- Tool: Black
+- Config: `.pre-commit-config.yaml` (rev `23.9.1`, `language_version: python3.11`)
 
 **Linting:**
-- Not detected (no `pyproject.toml`, `setup.cfg`, `.flake8`, or `ruff.toml` present in repo root).
+- Tool: Flake8
+- Config: `.flake8` (`max-line-length = 88`)
+- Pre-commit: `.pre-commit-config.yaml` (rev `6.1.0` + `flake8-docstrings`)
+- Key ignores: `.flake8` `extend-ignore = E203, W503, D100, D101, D102, D103, E402`
+  - `E402` being ignored enables deliberate "set env vars, then import" patterns in `backend/main.py`.
 
 ## Import Organization
 
 **Order:**
-1. Standard library imports (e.g., `backend/parser.py` uses `logging`, `re`, `Path`, `typing`).
-2. Third-party imports (e.g., `backend/parser.py` uses `lxml`, `backend/retriever.py` uses `faiss`, `numpy`).
-3. Local application imports (e.g., `backend/parser.py` uses `from .utils import read_csv`).
+1. Standard library
+2. Third-party
+3. Local application (`backend.*`, `frontend.*`)
+
+**Pattern examples:**
+- `backend/evidence_matching/service.py` keeps stdlib imports first, then internal imports, then local package imports.
+- `backend/main.py` intentionally imports `backend/utils.py` early to set env/threading before heavy ML deps, then continues with normal imports (`.flake8` ignores `E402`).
 
 **Path Aliases:**
-- No import alias system detected; use absolute package imports like `from backend import utils` in `backend/main.py` and relative package imports like `from .utils import read_csv` in `backend/parser.py`.
+- Not applicable (Python package imports use `backend.*` / `frontend.*` directly).
 
 ## Error Handling
 
 **Patterns:**
-- API handlers raise `HTTPException` with status/detail on failures in `backend/main.py`.
-- Utility functions raise concrete exceptions for failure states (e.g., `RuntimeError` in `backend/utils.py`, `ValueError` in `backend/retriever.py`).
-- Use `try/except` with logging before returning fallbacks (e.g., `backend/nli.py` logs and returns empty evidence, `backend/utils.py` logs JSON parsing failures).
+- FastAPI endpoints raise `fastapi.HTTPException` with explicit `status_code` and `detail` (e.g. `backend/main.py:253`, `backend/main.py:315`).
+- Validation errors are surfaced via `pydantic.ValidationError` in API handlers and tests (e.g. `backend/main.py:57`, `tests/test_judgment_store.py:26`).
+- Internal helpers often raise `RuntimeError` for "caller must handle / fallback" semantics (e.g. `backend/utils.py:20` `hf_inference_post`).
+- Broad exception catches are allowed when explicitly documented and/or marked with `# noqa: BLE001` (e.g. `backend/utils.py:41`).
 
 ## Logging
 
-**Framework:** `logging`
+**Framework:** `logging` (stdlib)
 
 **Patterns:**
-- Configure logging via `logging.basicConfig` and module-level loggers (e.g., `backend/main.py`, `backend/nli.py`, `backend/parser.py`).
-- Use `logger.debug/info/warning/error` for trace-level pipeline steps (`backend/main.py`, `backend/nli.py`).
-- CLI-style scripts use `print` for user feedback (e.g., `backend/hybrid.py`, `application.py`).
+- Module-level logger: `logger = logging.getLogger(__name__)` (e.g. `backend/attachment_pipeline.py:34`, `backend/evidence_matching/service.py:25`).
+- Central `basicConfig` in API entrypoint with dependency log-level suppression (e.g. `backend/main.py:138`).
+- Prefer structured-ish messages with parameterized args (`logger.warning("... %s", value)`) in long-running/retry loops (e.g. `backend/main.py:186`).
 
 ## Comments
 
 **When to Comment:**
-- Use module-level docstrings for context and constraints (e.g., `backend/parser.py`).
-- Use inline step markers and section separators for long pipelines (e.g., `backend/hybrid.py`).
+- Use short comments for non-obvious runtime constraints and ordering (e.g. `backend/main.py:17` threading env vars before importing numpy/torch).
+- Use phase/intent notes where behavior is driven by repo roadmap constraints (e.g. `tests/conftest.py:10`).
 
 **JSDoc/TSDoc:**
-- Not applicable; Python code uses docstrings in `backend/utils.py` and `backend/parser.py`.
+- Not applicable.
+
+**Docstrings:**
+- Docstrings are used for modules/classes and key public methods (e.g. `backend/evidence_matching/service.py:1`, `backend/evidence_matching/service.py:28`).
+- Flake8-docstrings is enabled but missing docstrings are largely not enforced (`.flake8` ignores `D100..D103`); imperative mood rules still apply for docstrings that exist.
 
 ## Function Design
 
 **Size:**
-- Prefer small helpers for single responsibilities (e.g., `_strip_citations`, `_clean` in `backend/parser.py`, `filter_and_snap` in `backend/utils.py`).
+- Keep orchestration in service classes and route handlers; keep data shaping/normalization in small helpers (e.g. `_normalize_label` nested helper in `backend/evidence_matching/service.py:137`).
 
 **Parameters:**
-- Use type hints with `list[str]`, `Optional`, and `Literal` where possible (e.g., `backend/utils.py`, `backend/schemas.py`).
+- Use keyword-only parameters for complex call signatures (e.g. `backend/evidence_matching/service.py:82` `ensure_current_run(..., *, claim_text=..., force=..., execute=...)`).
 
 **Return Values:**
-- Return dictionaries/lists for pipeline data structures and include metadata keys consistently (e.g., `backend/retriever.py`, `backend/parser.py`).
+- Backend service methods frequently return dict payloads intended for API consumption (e.g. `backend/evidence_matching/service.py:87`).
 
 ## Module Design
 
 **Exports:**
-- Define explicit public API in `backend/utils.py` via `__all__`.
+- Some modules define explicit public exports via `__all__` (e.g. `backend/evidence_matching/types.py:249`).
 
 **Barrel Files:**
-- Not used; modules are imported directly by path (e.g., `backend/main.py` imports `backend.pipeline_registry`).
+- Not applicable.
 
 ---
 
-*Convention analysis: 2026-01-23*
+*Convention analysis: 2026-02-20*

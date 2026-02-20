@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Optional
 from uuid import uuid4
 
@@ -25,15 +24,7 @@ def _now() -> str:
 class EvidenceSelectionStore:
     def __init__(self, *, settings: AppSettings = app_settings) -> None:
         """Create a selection store backed by Postgres."""
-        # Keep a settings handle for backward compatibility with older tests.
         self.settings = settings
-
-    @property
-    def root_dir(self) -> Path:
-        base = getattr(self.settings, "EVIDENCE_STORE_DIR", None)
-        if base is None:
-            return Path("data") / "evidence_selections"
-        return Path(base).parent / "evidence_selections"
 
     def read(
         self, claim_id: str, reviewer_uid: str = "default"

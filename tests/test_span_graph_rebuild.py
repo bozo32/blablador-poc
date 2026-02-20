@@ -279,15 +279,6 @@ def test_evidence_selection_mirrors_to_assertion(tmp_path, monkeypatch):
     monkeypatch.setattr(backend_main, "claim_store", _NoopClaimStore())
     monkeypatch.setattr(backend_main, "graph_store", _NoopGraphStore())
 
-    # Keep evidence selection writes under tmp.
-    from backend.evidence_selection_store import EvidenceSelectionStore
-
-    monkeypatch.setattr(
-        EvidenceSelectionStore,
-        "root_dir",
-        property(lambda self: tmp_path / "evidence_selections"),
-    )
-
     # Seed span graph via /claims/confirm.
     client = TestClient(backend_main.app)
     resp = client.post(

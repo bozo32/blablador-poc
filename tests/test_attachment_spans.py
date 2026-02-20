@@ -1,15 +1,6 @@
 from pathlib import Path
 
-import pytest
-
 from backend import attachment_spans, attachment_store
-from backend.settings import settings
-
-
-@pytest.fixture(autouse=True)
-def attachment_dir(tmp_path: Path):
-    settings.ATTACHMENT_DIR = tmp_path / "attachments"
-    yield
 
 
 def _create_ready_attachment(tmp_path: Path, tei_xml: str) -> str:

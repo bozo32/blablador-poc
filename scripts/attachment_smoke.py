@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import tempfile
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
@@ -86,10 +85,6 @@ def _http_transport(base_url: str) -> _Transport:
 
 def _local_transport() -> _Transport:
     from backend import attachment_pipeline, attachment_store
-    from backend.settings import settings
-
-    tmp_dir = Path(tempfile.mkdtemp(prefix="attachment-smoke-"))
-    settings.ATTACHMENT_DIR = tmp_dir
 
     def fake_extract(path: str | Path) -> str:
         data = Path(path).read_text(encoding="utf-8", errors="ignore")

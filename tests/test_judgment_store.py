@@ -13,7 +13,6 @@ from backend.settings import settings
 
 @pytest.fixture()
 def store(tmp_path: Path, monkeypatch) -> JudgmentStore:
-    monkeypatch.setattr(settings, "EVIDENCE_STORE_DIR", tmp_path / "evidence_runs")
     # JudgmentStore is spine-backed (Postgres), so isolate tests by truncating.
     from backend.db.pg import connect
 

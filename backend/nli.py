@@ -9,7 +9,6 @@ import torch
 
 from backend.settings import AppSettings, settings as app_settings
 from backend.utils import hf_inference_post
-from transformers import AutoModelForSequenceClassification, AutoTokenizer, pipeline
 
 _log_level_name = os.environ.get("LOG_LEVEL", "INFO").upper().strip()
 _log_level = getattr(logging, _log_level_name, logging.INFO)
@@ -52,6 +51,15 @@ def get_nli_pipeline(model_name: str, *, device: str | None = None):
 
     Cached to avoid reloading.
     """
+    try:
+        from transformers import (  # type: ignore[import-not-found]
+            AutoModelForSequenceClassification,
+            AutoTokenizer,
+            pipeline,
+        )
+    except Exception as exc:  # noqa: BLE001 - optional heavy deps
+        raise RuntimeError(f"transformers unavailable: {_safe_err(exc)}") from exc
+
     # Load tokenizer and model from Hugging Face
     tokenizer = AutoTokenizer.from_pretrained(
         model_name,
@@ -79,7 +87,11 @@ def predict_nli(premise: str, hypothesis: str, *, nli_model: str | None = None):
     model_to_use = nli_model or getattr(app_settings, "NLI_MODEL", None)
     if not model_to_use:
         model_to_use = "cross-encoder/nli-deberta-v3-base"
-    nli_pipeline = get_nli_pipeline(model_to_use)
+    try:
+        nli_pipeline = get_nli_pipeline(model_to_use)
+    except Exception as exc:  # noqa: BLE001
+        logging.warning("[NLI] local pipeline unavailable (%s)", _safe_err(exc))
+        return []
     return nli_pipeline(
         f"{premise} [SEP] {hypothesis}",
         top_k=None,
@@ -277,7 +289,11 @@ def assess(
 
     model_to_use = nli_model or "cross-encoder/nli-deberta-v3-base"
     logging.debug(f"[NLI] using model {model_to_use}")
-    pipe = get_nli_pipeline(model_to_use)
+    try:
+        pipe = get_nli_pipeline(model_to_use)
+    except Exception as exc:  # noqa: BLE001
+        logging.warning("[NLI] local pipeline unavailable (%s)", _safe_err(exc))
+        return []
 
     input_texts = [f"{text} [SEP] {claim}" for text in passages]
     batch_size = _effective_batch_size(effective_settings)

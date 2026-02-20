@@ -9,7 +9,6 @@ from backend.settings import settings
 
 @pytest.fixture()
 def store(tmp_path: Path, monkeypatch) -> EvidenceSelectionStore:
-    monkeypatch.setattr(settings, "EVIDENCE_STORE_DIR", tmp_path / "evidence_runs")
     return EvidenceSelectionStore(settings=settings)
 
 

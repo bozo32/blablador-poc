@@ -27,7 +27,6 @@ from backend.settings import settings
 
 @pytest.fixture()
 def run_store(tmp_path, monkeypatch) -> EvidenceRunStore:
-    monkeypatch.setattr(settings, "EVIDENCE_STORE_DIR", tmp_path / "runs")
     monkeypatch.setattr(settings, "EVIDENCE_HISTORY_DEPTH", 3)
     return EvidenceRunStore(settings=settings)
 
@@ -121,7 +120,6 @@ def test_store_delta_metadata_reflects_rank_changes(run_store: EvidenceRunStore)
 
 @pytest.fixture()
 def service_store(tmp_path, monkeypatch) -> EvidenceRunStore:
-    monkeypatch.setattr(settings, "EVIDENCE_STORE_DIR", tmp_path / "service-runs")
     return EvidenceRunStore(settings=settings)
 
 
@@ -256,7 +254,6 @@ def test_service_request_rerun_serializes_queue(monkeypatch, service_store):
 
 
 def test_service_auto_rerun_triggered_by_attachment_pipeline(tmp_path, monkeypatch):
-    settings.ATTACHMENT_DIR = tmp_path / "attachments"
     source = tmp_path / "auto.pdf"
     source.write_bytes(b"%PDF-auto")
     record = attachment_store.create_attachment(

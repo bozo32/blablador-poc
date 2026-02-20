@@ -1,15 +1,6 @@
 from pathlib import Path
 
-import pytest
-
 from backend import attachment_store
-from backend.settings import settings
-
-
-@pytest.fixture(autouse=True)
-def attachment_dir(tmp_path):
-    settings.ATTACHMENT_DIR = tmp_path / "attachments"
-    yield
 
 
 def _make_source(tmp_path: Path, name: str = "source.pdf") -> Path:

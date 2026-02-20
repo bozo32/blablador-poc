@@ -7,6 +7,7 @@ import asyncio
 import json
 import hashlib
 import io
+import tempfile
 import zipfile
 from uuid import uuid4
 
@@ -42,10 +43,7 @@ from backend import (
     attachment_spans,
     citation_context,
     citation_graph,
-    extraction,
-    fallback_text,
     evidence_selection_store,
-    grobid_client,
     judgment_store,
     schemas,
     tei_body,
@@ -69,14 +67,6 @@ from backend.reference_resolver import apply_resolution_selection, resolve_refer
 from backend.settings import settings as app_settings  # global default settings
 from backend.db import apply_migrations, connect
 from backend.object_store import s3 as object_store_s3
-from backend.ingestion_store import (
-    create_ingested_document,
-    get_ingested_document,
-    get_tei_xml,
-    store_extraction,
-    store_resolution,
-    update_ingested_document,
-)
 from backend.spine.ids import pdf_object_key_for_work_pdf, work_id_from_doc_id
 from backend.spine.ingest_view import (
     build_ingested_document_from_spine,
@@ -88,19 +78,13 @@ from backend.spine.works import upsert_work_from_pdf
 from backend.spine.attempts import (
     create_or_get_attempt,
     get_latest_attempt_for_work,
-    merge_attempt_quality_json,
     mark_attempt_cancelled,
-    mark_attempt_failed,
-    mark_attempt_partial,
-    mark_attempt_running,
-    mark_attempt_succeeded,
 )
 from backend.spine.artifacts import (
     create_artifact,
     get_artifact_for_attempt,
     list_artifacts_for_attempt,
 )
-from backend.spine.jobs import create_job, set_job_state
 from backend.spine.jobs import list_jobs_for_attempt
 from backend.spine.documents import (
     ensure_project_document,
@@ -129,10 +113,8 @@ from backend.claim_store import claim_store
 from backend.reference_retrieval import build_retrieval_dossier
 from backend.graph_store import GraphStore
 from backend.span_graph_store import SpanGraphStore
-from backend.ingest_pipeline import IngestWorkerPool
 from backend.spine.extraction_pool import SpineExtractionPool
 from backend import fallback_body
-from backend import project_io
 from backend.spine.project_meta import (
     export_project_meta_json,
     get_or_create_project_meta,
@@ -158,14 +140,8 @@ for _logger_name in (
 logger = logging.getLogger(__name__)
 
 
-graph_store = GraphStore(app_settings.GRAPH_DB_PATH)
-span_graph_store = SpanGraphStore(app_settings.GRAPH_DB_PATH)
-
-ingest_pool = IngestWorkerPool(
-    graph_db_path=app_settings.GRAPH_DB_PATH,
-    max_workers=app_settings.INGEST_PIPELINE_WORKERS,
-    max_queue=app_settings.INGEST_PIPELINE_QUEUE_MAX,
-)
+graph_store = GraphStore(settings=app_settings)
+span_graph_store = SpanGraphStore(settings=app_settings)
 
 spine_extract_pool = SpineExtractionPool(
     max_workers=max(1, int(getattr(app_settings, "INGEST_PIPELINE_WORKERS", 1) or 1)),
@@ -187,6 +163,8 @@ SOURCE_DIR = Path(os.environ.get("SOURCE_DIR", CSV_PATH.parent / "source")).reso
 
 @app.on_event("startup")
 async def startup_event():
+    _require_spine_only_runtime()
+
     # Ensure V2 spine infra is usable before serving requests.
     for attempt in range(1, 31):
         try:
@@ -253,33 +231,33 @@ def _is_pdf_upload(file: UploadFile) -> bool:
     return filename.endswith(".pdf") and content_type == "application/pdf"
 
 
-def _spine_mode() -> str:
-    mode = str(os.environ.get("SPINE_MODE", "spine")).strip().lower()
-    if mode not in {"legacy", "dual", "spine"}:
-        return "spine"
-    return mode
-
-
-def _spine_reads_enabled() -> bool:
-    return _spine_mode() in {"dual", "spine"}
-
-
-def _legacy_ingestion_enabled() -> bool:
-    return _spine_mode() in {"legacy", "dual"}
-
-
-def _enqueue_ingest_pipeline(doc_id: str) -> None:
-    if background_state.get_state().get("paused"):
-        return
-    if _spine_mode() == "spine":
-        return
-    ingest_pool.enqueue(str(doc_id))
+def _require_spine_only_runtime() -> None:
+    mode = str(os.environ.get("SPINE_MODE", "spine") or "spine").strip().lower()
+    if mode and mode != "spine":
+        raise RuntimeError(
+            "Legacy/dual SPINE_MODE values were removed; set SPINE_MODE=spine"
+        )
 
 
 def _serialize_attachment(record: Optional[dict]) -> schemas.AttachmentStatus:
     if record is None:
         raise HTTPException(status_code=404, detail="Attachment not found")
-    return schemas.AttachmentStatus(**record)
+    data = dict(record or {})
+
+    # Backward-compatible field normalization.
+    # Older payloads use uploaded_at; spine-backed attachments use created_at.
+    if not data.get("uploaded_at"):
+        data["uploaded_at"] = (
+            data.get("created_at")
+            or data.get("updated_at")
+            or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        )
+    if not data.get("updated_at"):
+        data["updated_at"] = data.get("uploaded_at") or data.get("created_at")
+    if data.get("size") is None and data.get("size_bytes") is not None:
+        data["size"] = data.get("size_bytes")
+
+    return schemas.AttachmentStatus(**data)
 
 
 @app.post("/ingest", response_model=schemas.IngestUploadResponse)
@@ -292,116 +270,12 @@ async def ingest_document(
     if not _is_pdf_upload(file):
         raise HTTPException(status_code=400, detail="Only PDF uploads are supported")
 
-    mode = _spine_mode()
     file_bytes = await file.read()
 
     project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
     user_id = str(app_settings.DEFAULT_USER_ID)
     filename = str(file.filename or "").strip() or "document.pdf"
 
-    metadata: dict
-
-    # legacy: filesystem-only, background pipeline allowed.
-    if mode == "legacy":
-        metadata = create_ingested_document(file_bytes, filename)
-        try:
-            graph_store.index_ingest_upload(metadata)
-        except Exception:
-            logger.exception("Graph index failed for ingest upload")
-        if bool(auto_process):
-            doc_id = str(metadata.get("id") or "").strip()
-            if doc_id:
-                _enqueue_ingest_pipeline(doc_id)
-        return {"document": metadata}
-
-    # dual: write both legacy + spine.
-    if mode == "dual":
-        metadata = create_ingested_document(file_bytes, filename)
-        doc_id = str(metadata.get("id") or "").strip()
-        if not doc_id:
-            raise HTTPException(status_code=500, detail="Ingestion metadata missing id")
-        sha256 = str(metadata.get("sha256") or "").strip().lower()
-        if not sha256:
-            raise HTTPException(
-                status_code=500, detail="Ingestion metadata missing sha256"
-            )
-        size_bytes = int(metadata.get("size_bytes") or len(file_bytes))
-
-        work_id = work_id_from_doc_id(doc_id)
-        pdf_object_key = pdf_object_key_for_work_pdf(work_id, sha256)
-
-        try:
-            object_store_s3.put_bytes(
-                pdf_object_key, file_bytes, content_type="application/pdf"
-            )
-        except Exception as exc:
-            logger.exception("S3 upload failed for work_id=%s", work_id)
-            raise HTTPException(
-                status_code=503, detail="Object store unavailable"
-            ) from exc
-
-        try:
-            upsert_work_from_pdf(
-                work_id=work_id,
-                project_id=project_id,
-                created_by_user_id=user_id,
-                filename=str(metadata.get("filename") or filename),
-                sha256=sha256,
-                size_bytes=size_bytes,
-                pdf_object_key=pdf_object_key,
-            )
-        except Exception as exc:
-            logger.exception("Postgres upsert failed for work_id=%s", work_id)
-            raise HTTPException(status_code=503, detail="Postgres unavailable") from exc
-
-        # Identity split scaffolding (transition): treat doc_id/work_id as both
-        # document_id and document_version_id until reconciliation/merge exists.
-        try:
-            get_or_create_document(doc_id, created_by_user_id=user_id)
-            upsert_document_version(
-                doc_id,
-                document_id=doc_id,
-                sha256=sha256,
-                size_bytes=size_bytes,
-                pdf_object_key=pdf_object_key,
-                filename=str(metadata.get("filename") or filename),
-                created_by_user_id=user_id,
-            )
-            ensure_project_document(
-                project_id,
-                document_id=doc_id,
-                added_by_user_id=user_id,
-            )
-        except Exception as exc:
-            logger.exception("Identity upsert failed for doc_id=%s", doc_id)
-            raise HTTPException(status_code=503, detail="Postgres unavailable") from exc
-
-        try:
-            metadata = update_ingested_document(
-                doc_id,
-                {
-                    "project_id": project_id,
-                    "spine": {"work_id": work_id, "pdf_object_key": pdf_object_key},
-                },
-            )
-        except Exception as exc:
-            logger.exception("Failed to persist spine metadata for doc_id=%s", doc_id)
-            raise HTTPException(
-                status_code=500, detail="Failed to persist metadata"
-            ) from exc
-
-        try:
-            graph_store.index_ingest_upload(metadata)
-        except Exception:
-            logger.exception("Graph index failed for ingest upload")
-
-        if bool(auto_process):
-            doc_id = str(metadata.get("id") or "").strip()
-            if doc_id:
-                _enqueue_ingest_pipeline(doc_id)
-        return {"document": metadata}
-
-    # spine: write spine only; ignore legacy ingestion store.
     sha256 = hashlib.sha256(file_bytes).hexdigest().lower()
     existing = get_document_version_by_sha256(sha256=sha256)
 
@@ -473,7 +347,17 @@ async def ingest_document(
     except Exception:
         logger.exception("Graph index failed for ingest upload")
 
-    # In spine-only mode, ignore auto_process to avoid the legacy ingestion worker.
+    if bool(auto_process) and not background_state.get_state().get("paused"):
+        try:
+            spine_extract_pool.enqueue(
+                doc_id=work_id,
+                project_id=project_id,
+                user_id=user_id,
+                force_fallback=False,
+            )
+        except Exception:
+            logger.exception("Unable to enqueue extraction for doc_id=%s", doc_id)
+
     return {"document": doc}
 
 
@@ -483,21 +367,13 @@ def list_ingest_documents(
 ):
     project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
 
-    out: list[dict] = []
-    by_id: dict[str, dict] = {}
+    try:
+        out = list_ingests_from_spine(project_id=project_id, limit=200)
+    except Exception as exc:
+        logger.exception("Spine list failed")
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    if _spine_reads_enabled():
-        try:
-            for doc in list_ingests_from_spine(project_id=project_id, limit=200):
-                did = str(doc.get("id") or "").strip()
-                if did:
-                    by_id[did] = doc
-        except Exception:
-            logger.exception("Spine list failed; falling back to legacy")
-
-    # Legacy ingestion store is deprecated; spine is the system of record.
-
-    out = list(by_id.values())
+    out = list(out or [])
     out.sort(key=lambda item: str(item.get("uploaded_at") or ""), reverse=True)
     return {"documents": out}
 
@@ -508,21 +384,19 @@ def get_ingest_document(
     x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
 ):
     project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
-    if _spine_reads_enabled():
-        try:
-            doc = build_ingested_document_from_spine(
-                work_id=str(doc_id),
-                project_id=project_id,
-                include_extraction_data=True,
-            )
-            if doc is not None:
-                return doc
-        except Exception:
-            logger.exception(
-                "Spine get failed for doc_id=%s; falling back to legacy", doc_id
-            )
+    try:
+        doc = build_ingested_document_from_spine(
+            work_id=str(doc_id),
+            project_id=project_id,
+            include_extraction_data=True,
+        )
+    except Exception as exc:
+        logger.exception("Spine get failed for doc_id=%s", doc_id)
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    raise HTTPException(status_code=404, detail="Document not found")
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return doc
 
 
 @app.get("/ledger", response_model=schemas.LedgerResponse)
@@ -535,16 +409,13 @@ def get_document_ledger():
     by_ingest: dict[str, dict] = {}
 
     project_id = str(app_settings.DEFAULT_PROJECT_ID)
-    if _spine_reads_enabled():
-        try:
-            for doc in list_ingests_from_spine(project_id=project_id, limit=2000):
-                ingest_id = str(doc.get("id") or "").strip()
-                if ingest_id:
-                    by_ingest[ingest_id] = doc
-        except Exception:
-            logger.exception("Spine list failed for ledger enrichment")
-
-    # Legacy ingestion store is deprecated; spine is the system of record.
+    try:
+        for doc in list_ingests_from_spine(project_id=project_id, limit=2000):
+            ingest_id = str(doc.get("id") or "").strip()
+            if ingest_id:
+                by_ingest[ingest_id] = doc
+    except Exception:
+        logger.exception("Spine list failed for ledger enrichment")
 
     for row in rows:
         if not isinstance(row, dict):
@@ -575,9 +446,7 @@ def get_project_meta(
 ):
     project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
     user_id = str(app_settings.DEFAULT_USER_ID)
-    if _spine_reads_enabled():
-        return get_or_create_project_meta(project_id=project_id, user_id=user_id)
-    return project_io.read_project_meta()
+    return get_or_create_project_meta(project_id=project_id, user_id=user_id)
 
 
 class ProjectMetaUpdate(BaseModel):
@@ -598,11 +467,7 @@ def put_project_meta(
     project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
     user_id = str(app_settings.DEFAULT_USER_ID)
     try:
-        if _spine_reads_enabled():
-            return update_project_meta(
-                project_id=project_id, user_id=user_id, patch=patch
-            )
-        return project_io.write_project_meta_update(patch)
+        return update_project_meta(project_id=project_id, user_id=user_id, patch=patch)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -769,51 +634,38 @@ def spine_list_locators_for_document_version(
 
 @app.get("/project/export")
 def export_project():
-    if _spine_reads_enabled():
-        project_id = str(app_settings.DEFAULT_PROJECT_ID)
-        meta = get_or_create_project_meta(project_id=project_id)
-        name = (meta.get("name") or "project").strip() or "project"
-        safe = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in name)
-        filename = f"{safe}.zip"
+    project_id = str(app_settings.DEFAULT_PROJECT_ID)
+    meta = get_or_create_project_meta(project_id=project_id)
+    name = (meta.get("name") or "project").strip() or "project"
+    safe = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in name)
+    filename = f"{safe}.zip"
 
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr("project.json", export_project_meta_json(project_id=project_id))
-        headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
-        return Response(
-            content=buf.getvalue(),
-            media_type="application/zip",
-            headers=headers,
-        )
-
-    payload = project_io.export_project_zip()
-    meta2 = project_io.read_project_meta()
-    name2 = (meta2.get("name") or "project").strip() or "project"
-    safe2 = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in name2)
-    filename2 = f"{safe2}.zip"
-    headers2 = {"Content-Disposition": f'attachment; filename="{filename2}"'}
-    return Response(content=payload, media_type="application/zip", headers=headers2)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("project.json", export_project_meta_json(project_id=project_id))
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/zip",
+        headers=headers,
+    )
 
 
 @app.post("/project/import", response_model=schemas.ProjectImportResponse)
 async def import_project(file: UploadFile = File(...), overwrite: bool = False):
     blob = await file.read()
-    if _spine_reads_enabled():
-        project_id = str(app_settings.DEFAULT_PROJECT_ID)
-        user_id = str(app_settings.DEFAULT_USER_ID)
-        try:
-            with zipfile.ZipFile(io.BytesIO(blob), "r") as zf:
-                meta_raw = json.loads(zf.read("project.json").decode("utf-8"))
-        except Exception as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        import_project_meta_json(project_id=project_id, user_id=user_id, meta=meta_raw)
-        return {"ok": True, "backup_zip": None}
-
+    _ = overwrite
+    project_id = str(app_settings.DEFAULT_PROJECT_ID)
+    user_id = str(app_settings.DEFAULT_USER_ID)
     try:
-        result = project_io.import_project_zip(blob, overwrite=bool(overwrite))
-    except RuntimeError as exc:
+        with zipfile.ZipFile(io.BytesIO(blob), "r") as zf:
+            meta_raw = json.loads(zf.read("project.json").decode("utf-8"))
+    except Exception as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return result
+
+    import_project_meta_json(project_id=project_id, user_id=user_id, meta=meta_raw)
+    project = get_or_create_project_meta(project_id=project_id, user_id=user_id)
+    return {"ok": True, "backup_zip": "", "project": project}
 
 
 @app.post(
@@ -856,17 +708,28 @@ def auto_place_claim_source(
             break
 
     if donor_same_target:
-        try:
-            source_path = Path(str(donor_same_target.get("file_path") or ""))
-        except Exception:
-            source_path = None
-        if source_path and source_path.exists():
-            filename = donor_same_target.get("filename") or source_path.name
+        donor_pdf_key = str(donor_same_target.get("pdf_object_key") or "").strip()
+        if donor_pdf_key:
+            tmp_path = None
             try:
+                blob = object_store_s3.get_bytes(donor_pdf_key)
+                tmp = tempfile.NamedTemporaryFile(
+                    prefix="attachment-",
+                    suffix=".pdf",
+                    delete=False,
+                )
+                try:
+                    tmp.write(blob)
+                    tmp.flush()
+                finally:
+                    tmp.close()
+                tmp_path = Path(tmp.name)
+
+                filename = donor_same_target.get("filename") or "attachment.pdf"
                 record = attachment_store.create_attachment(
                     claim_id=claim_id,
                     doc_id=doc_id,
-                    local_path=source_path,
+                    local_path=tmp_path,
                     filename=filename,
                     reference_hint={"reference_id": target_id},
                     citation_index=citation_index,
@@ -875,36 +738,40 @@ def auto_place_claim_source(
                 )
             except FileNotFoundError as exc:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
+            except Exception:
+                logger.exception("Unable to clone donor attachment PDF")
+                record = None
+            finally:
+                try:
+                    if tmp_path and tmp_path.exists():
+                        tmp_path.unlink()
+                except Exception:
+                    pass
 
-            donor_artifacts = donor_same_target.get("artifacts") or {}
-            dest_dir = Path(app_settings.ATTACHMENT_DIR) / str(record["id"])
-            dest_dir.mkdir(parents=True, exist_ok=True)
-            copied = {}
-            for key in ("tei_xml", "tei_json", "sentences"):
-                src = donor_artifacts.get(key)
-                if not src:
-                    continue
-                src_path = Path(str(src))
-                if not src_path.exists():
-                    continue
-                dst_path = dest_dir / src_path.name
-                shutil.copy2(src_path, dst_path)
-                copied[key] = str(dst_path)
-            if copied:
-                attachment_store.mark_matched(str(record["id"]), artifacts=copied)
-            else:
-                # If we couldn't copy artifacts, enqueue processing like a normal
-                # upload.
-                if not background_state.get_state().get("paused"):
-                    if background_tasks is not None:
-                        background_tasks.add_task(
-                            attachment_pipeline.process_attachment, record["id"]
+            if record is not None:
+                donor_artifacts = donor_same_target.get("artifacts") or {}
+                if isinstance(donor_artifacts, dict) and donor_artifacts:
+                    try:
+                        attachment_store.mark_matched(
+                            str(record["id"]), artifacts=dict(donor_artifacts)
                         )
-                    else:
-                        attachment_pipeline.enqueue_processing(record["id"])
+                    except Exception:
+                        logger.exception("Unable to reuse donor attachment artifacts")
+                else:
+                    # No donor artifacts; process like a normal upload.
+                    if not background_state.get_state().get("paused"):
+                        if background_tasks is not None:
+                            background_tasks.add_task(
+                                attachment_pipeline.process_attachment, record["id"]
+                            )
+                        else:
+                            attachment_pipeline.enqueue_processing(record["id"])
 
-            public_record = attachment_store.public_status(record["id"]) or {}
-            return {"attachment": _serialize_attachment(public_record), "reused": False}
+                public_record = attachment_store.public_status(record["id"]) or {}
+                return {
+                    "attachment": _serialize_attachment(public_record),
+                    "reused": False,
+                }
 
     cited_ingest_id = graph_store.resolve_reference_to_ingest_id(
         citing_doc_id=doc_id,
@@ -970,21 +837,13 @@ def auto_place_claim_source(
     # If a donor exists, clone artifacts and mark ready (skip reprocessing).
     if donor and donor.get("artifacts"):
         donor_artifacts = donor.get("artifacts") or {}
-        dest_dir = Path(app_settings.ATTACHMENT_DIR) / str(record["id"])
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        copied = {}
-        for key in ("tei_xml", "tei_json", "sentences"):
-            src = donor_artifacts.get(key)
-            if not src:
-                continue
-            src_path = Path(str(src))
-            if not src_path.exists():
-                continue
-            dst_path = dest_dir / src_path.name
-            shutil.copy2(src_path, dst_path)
-            copied[key] = str(dst_path)
-        if copied:
-            attachment_store.mark_matched(str(record["id"]), artifacts=copied)
+        if isinstance(donor_artifacts, dict) and donor_artifacts:
+            try:
+                attachment_store.mark_matched(
+                    str(record["id"]), artifacts=dict(donor_artifacts)
+                )
+            except Exception:
+                logger.exception("Unable to reuse donor attachment artifacts")
     else:
         if not background_state.get_state().get("paused"):
             if background_tasks is not None:
@@ -1145,23 +1004,20 @@ def reindex_graph_documents():
     """
     project_id = str(app_settings.DEFAULT_PROJECT_ID)
     docs: list[dict] = []
-    if _spine_reads_enabled():
-        try:
-            for brief in list_ingests_from_spine(project_id=project_id, limit=2000):
-                did = str(brief.get("id") or "").strip()
-                if not did:
-                    continue
-                full = build_ingested_document_from_spine(
-                    work_id=did,
-                    project_id=project_id,
-                    include_extraction_data=True,
-                )
-                if full is not None:
-                    docs.append(full)
-        except Exception:
-            logger.exception("Spine list/get failed for reindex")
-
-    # Legacy ingestion store is deprecated; spine is the system of record.
+    try:
+        for brief in list_ingests_from_spine(project_id=project_id, limit=2000):
+            did = str(brief.get("id") or "").strip()
+            if not did:
+                continue
+            full = build_ingested_document_from_spine(
+                work_id=did,
+                project_id=project_id,
+                include_extraction_data=True,
+            )
+            if full is not None:
+                docs.append(full)
+    except Exception:
+        logger.exception("Spine list/get failed for reindex")
     indexed = 0
     errors: list[str] = []
     for doc in docs:
@@ -1203,36 +1059,25 @@ def reextract_all_ingested_documents(
     """
     project_id = str(app_settings.DEFAULT_PROJECT_ID)
     docs: list[dict] = []
-    if _spine_reads_enabled():
-        try:
-            docs = list_ingests_from_spine(project_id=project_id, limit=2000)
-        except Exception:
-            logger.exception("Spine list failed for reextract-all")
-            docs = []
 
-    # Legacy ingestion store is deprecated; spine is the system of record.
+    try:
+        docs = list_ingests_from_spine(project_id=project_id, limit=2000)
+    except Exception:
+        logger.exception("Spine list failed for reextract-all")
+        docs = []
+
     if int(limit) > 0:
         docs = docs[: int(limit)]
     doc_ids = [
         str(d.get("id") or "").strip() for d in docs if str(d.get("id") or "").strip()
     ]
 
-    if _spine_mode() == "spine":
-        scheduled = 0
-        for doc_id in doc_ids:
-            background_tasks.add_task(extract_ingested_document, doc_id, project_id)
-            background_tasks.add_task(resolve_ingested_references, doc_id, project_id)
-            scheduled += 1
-        return {"ok": True, "scheduled": int(scheduled)}
-
-    queued = 0
-    dropped = 0
+    scheduled = 0
     for doc_id in doc_ids:
-        if ingest_pool.enqueue(doc_id):
-            queued += 1
-        else:
-            dropped += 1
-    return {"ok": True, "queued": int(queued), "dropped": int(dropped)}
+        background_tasks.add_task(extract_ingested_document, doc_id, project_id)
+        background_tasks.add_task(resolve_ingested_references, doc_id, project_id)
+        scheduled += 1
+    return {"ok": True, "scheduled": int(scheduled)}
 
 
 class DevWipeRequest(BaseModel):
@@ -1249,7 +1094,11 @@ def dev_wipe(payload: DevWipeRequest):
         )
 
     # 1) Postgres spine tables.
+    #
+    # Keep this list aligned with `tests/conftest.py` truncation so local dev
+    # and tests have consistent "wipe everything" behavior.
     tables = [
+        # V2 ingestion spine
         "locators",
         "workflow_versions",
         "workflow_definitions",
@@ -1263,6 +1112,34 @@ def dev_wipe(payload: DevWipeRequest):
         "jobs",
         "attempts",
         "works",
+        # 09.3: attachments/evidence/judgments/project meta
+        "attachment_artifacts",
+        "attachment_events",
+        "attachments",
+        "background_state",
+        "evidence_runs",
+        "evidence_selections",
+        "judgments",
+        "confirmed_claims",
+        "project_meta",
+        # 09.3-05: durable graph + span graph workboard state
+        "graph_edge_votes",
+        "graph_edges",
+        "graph_aliases",
+        "graph_nodes",
+        "span_graph_neighborhood_candidates",
+        "span_graph_neighborhood_runs",
+        "span_graph_review_marks",
+        "span_graph_assertions",
+        "span_graph_claim_span_atoms",
+        "span_graph_claim_atoms",
+        "span_graph_claim_spans",
+        "span_graph_span_cite_roles",
+        "span_graph_citation_span_index",
+        "span_graph_span_cites",
+        "span_graph_spans",
+        "span_graph_work_cites",
+        "span_graph_works",
     ]
     with connect(autocommit=True) as conn:
         with conn.cursor() as cur:
@@ -1271,7 +1148,11 @@ def dev_wipe(payload: DevWipeRequest):
     # 2) Object store (MinIO/S3).
     deleted_objects = object_store_s3.delete_all()
 
-    # 3) Local SQLite stores.
+    # 3) Graph/claim workboard stores.
+    #
+    # Historically these were local SQLite stores; as of Phase 09.3 they are
+    # spine-backed. Keep these calls as best-effort in case future variants
+    # reintroduce disposable local caches.
     try:
         graph_store.wipe()
     except Exception:
@@ -1285,14 +1166,13 @@ def dev_wipe(payload: DevWipeRequest):
     except Exception:
         logger.exception("ClaimStore wipe failed")
 
-    # 4) Local data directories.
+    # 4) Local disposable caches.
+    #
+    # Phase 09.3 removes required durable local state under ./data/**, but some
+    # optional retrieval indexes (ColBERT) may still be stored locally.
     paths = [
-        Path(app_settings.INGESTION_DIR),
-        Path(app_settings.ATTACHMENT_DIR),
-        Path(app_settings.EVIDENCE_STORE_DIR),
         Path(app_settings.COLBERT_ROOT),
         Path(app_settings.COLBERT_INDEX_PATH),
-        Path(__file__).parent.parent / "data" / "judgments",
     ]
     removed = 0
     for p in paths:
@@ -1302,12 +1182,6 @@ def dev_wipe(payload: DevWipeRequest):
                 removed += 1
         except Exception:
             pass
-    try:
-        if project_io.PROJECT_META_PATH.exists():
-            project_io.PROJECT_META_PATH.unlink()
-    except Exception:
-        pass
-
     return {
         "ok": True,
         "spine_tables_truncated": True,
@@ -2167,28 +2041,20 @@ def extract_ingested_document(
     project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
     user_id = str(app_settings.DEFAULT_USER_ID)
 
-    document = None
-    if _spine_reads_enabled():
-        try:
-            document = build_ingested_document_from_spine(
-                work_id=str(doc_id),
-                project_id=project_id,
-                include_extraction_data=True,
-            )
-        except Exception:
-            document = None
-
-    if document is None and _legacy_ingestion_enabled():
-        document = get_ingested_document(doc_id)
+    try:
+        document = build_ingested_document_from_spine(
+            work_id=str(doc_id),
+            project_id=project_id,
+            include_extraction_data=True,
+        )
+    except Exception as exc:
+        logger.exception("Spine get failed for doc_id=%s", doc_id)
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    spine_meta = document.get("spine") if isinstance(document, dict) else None
-    spine_meta = spine_meta if isinstance(spine_meta, dict) else {}
-    work_id = str(spine_meta.get("work_id") or "").strip() or work_id_from_doc_id(
-        doc_id
-    )
+    work_id = work_id_from_doc_id(doc_id)
     extraction_stage = document.get("extraction") or {}
     extraction_data = (
         (extraction_stage.get("data") or {})
@@ -2205,372 +2071,26 @@ def extract_ingested_document(
     if extraction_status == "complete" and extraction_data:
         return {"document_id": doc_id, "extraction": document.get("extraction")}
 
-    attempt_id: Optional[str] = None
-    job_id: Optional[str] = None
     try:
-        attempt_id, _state = create_or_get_attempt(
-            project_id,
-            user_id,
-            work_id,
-            "primary",
-            settings_json={},
-        )
-        if _legacy_ingestion_enabled():
-            try:
-                update_ingested_document(
-                    doc_id,
-                    {"spine": {"work_id": work_id, "active_attempt_id": attempt_id}},
-                )
-            except Exception:
-                pass
-
-        # Spine mode: enqueue extraction work and return quickly.
-        if _spine_mode() == "spine":
-            if attempt_id:
-                try:
-                    # Don't re-enqueue if already running.
-                    attempt = get_latest_attempt_for_work(
-                        project_id=project_id,
-                        work_id=work_id,
-                        kind="primary",
-                    )
-                    if attempt and str(attempt.get("state") or "") in {"running"}:
-                        return {
-                            "document_id": doc_id,
-                            "extraction": document.get("extraction"),
-                        }
-                except Exception:
-                    pass
-
-                job_id = spine_extract_pool.enqueue(
-                    doc_id=work_id,
-                    project_id=project_id,
-                    user_id=user_id,
-                    force_fallback=False,
-                )
-                try:
-                    mark_attempt_running(attempt_id)
-                except Exception:
-                    pass
-            return {"document_id": doc_id, "extraction": {"status": "running"}}
-
-        if attempt_id:
-            try:
-                mark_attempt_running(attempt_id)
-            except Exception:
-                pass
-            try:
-                job_id = create_job(
-                    project_id,
-                    user_id,
-                    attempt_id,
-                    worker="grobid",
-                    state="running",
-                    progress_json={"stage": "extract"},
-                )
-            except Exception:
-                job_id = None
-
-        tmp_pdf_path = get_pdf_temp_path(
-            doc_id=doc_id,
-            work_id=work_id,
+        attempt = get_latest_attempt_for_work(
             project_id=project_id,
-            document=None,
+            work_id=work_id,
+            kind="primary",
         )
-        pdf_path = tmp_pdf_path
+        if attempt and str(attempt.get("state") or "") in {"running"}:
+            return {"document_id": doc_id, "extraction": {"status": "running"}}
+    except Exception:
+        pass
 
-        mode = "fulltext"
-        quality_patch: dict = {}
-        tei_xml: Optional[str] = None
-        extraction_payload: Optional[dict] = None
-        try:
-            try:
-                try:
-                    tei_xml = grobid_client.extract_tei_fulltext(pdf_path)
-                except grobid_client.GrobidError:
-                    header_xml = None
-                    try:
-                        header_xml = grobid_client.extract_tei_header(pdf_path)
-                    except grobid_client.GrobidError:
-                        quality_patch = {"primary": {"header_failed": True}}
-                        header_xml = None
-
-                    refs_xml = grobid_client.extract_tei_references(pdf_path)
-                    if header_xml:
-                        mode = "header+references"
-                        tei_xml = grobid_client.merge_header_and_references_tei(
-                            header_xml=header_xml,
-                            references_xml=refs_xml,
-                        )
-                    else:
-                        mode = "refs-only"
-                        quality_patch = {
-                            **(quality_patch or {}),
-                            "primary": {
-                                **((quality_patch or {}).get("primary") or {}),
-                                "refs_only": True,
-                            },
-                        }
-                        tei_xml = refs_xml
-
-                if tei_xml is None:
-                    raise grobid_client.GrobidError("GROBID returned no TEI")
-                extraction_payload = extraction.parse_tei(tei_xml)
-            except grobid_client.GrobidError as exc:
-                # Deterministic fallback: text-layer extraction to produce
-                # inspectable artifacts in the spine.
-                pages = fallback_text.extract_fallback_pages(Path(pdf_path))
-                pages_jsonl = fallback_text.pages_to_jsonl(pages)
-                body_txt = fallback_text.pages_to_body_text(pages)
-                refs_json = b"[]\n"
-                quality_patch = {
-                    **(quality_patch or {}),
-                    **fallback_text.fallback_quality(pages),
-                }
-
-                if attempt_id:
-                    fb_pages_key = (
-                        f"extract/{work_id}/attempts/{attempt_id}/fallback/pages.jsonl"
-                    )
-                    object_store_s3.put_bytes(
-                        fb_pages_key,
-                        pages_jsonl,
-                        content_type="application/x-ndjson",
-                    )
-                    create_artifact(
-                        project_id,
-                        user_id,
-                        attempt_id,
-                        "fallback.pages.jsonl",
-                        fb_pages_key,
-                        len(pages_jsonl),
-                        "application/x-ndjson",
-                    )
-
-                    fb_body_key = (
-                        f"extract/{work_id}/attempts/{attempt_id}/fallback/body.txt"
-                    )
-                    object_store_s3.put_bytes(
-                        fb_body_key,
-                        body_txt,
-                        content_type="text/plain",
-                    )
-                    create_artifact(
-                        project_id,
-                        user_id,
-                        attempt_id,
-                        "fallback.body.txt",
-                        fb_body_key,
-                        len(body_txt),
-                        "text/plain",
-                    )
-
-                    fb_refs_key = (
-                        f"extract/{work_id}/attempts/{attempt_id}/fallback/refs.json"
-                    )
-                    object_store_s3.put_bytes(
-                        fb_refs_key,
-                        refs_json,
-                        content_type="application/json",
-                    )
-                    create_artifact(
-                        project_id,
-                        user_id,
-                        attempt_id,
-                        "fallback.refs.json",
-                        fb_refs_key,
-                        len(refs_json),
-                        "application/json",
-                    )
-
-                # Minimal extraction payload so the API remains usable.
-                extraction_payload = {
-                    "extraction_version": "fallback-v1",
-                    "metadata": {
-                        "title": None,
-                        "authors": [],
-                        "year": None,
-                        "journal": None,
-                        "container": None,
-                        "doi": None,
-                        "url": None,
-                    },
-                    "citations": [],
-                    "references": [],
-                    "fallback": {"error": str(exc)},
-                }
-                mode = "fallback"
-        finally:
-            cleanup_temp_path(tmp_pdf_path)
-
-        if attempt_id:
-            if quality_patch:
-                try:
-                    merge_attempt_quality_json(str(attempt_id), quality_patch)
-                except Exception:
-                    pass
-
-            if tei_xml is not None and mode in {
-                "fulltext",
-                "header+references",
-                "refs-only",
-            }:
-                tei_key = f"extract/{work_id}/attempts/{attempt_id}/primary/tei.xml"
-                tei_bytes = tei_xml.encode("utf-8", errors="ignore")
-                object_store_s3.put_bytes(
-                    tei_key,
-                    tei_bytes,
-                    content_type="application/xml",
-                )
-                create_artifact(
-                    project_id,
-                    user_id,
-                    attempt_id,
-                    "tei.xml",
-                    tei_key,
-                    len(tei_bytes),
-                    "application/xml",
-                )
-
-            extraction_key = (
-                f"extract/{work_id}/attempts/{attempt_id}/primary/extraction.json"
-            )
-            extraction_bytes = json.dumps(
-                extraction_payload or {},
-                sort_keys=True,
-                ensure_ascii=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-            object_store_s3.put_bytes(
-                extraction_key,
-                extraction_bytes,
-                content_type="application/json",
-            )
-            create_artifact(
-                project_id,
-                user_id,
-                attempt_id,
-                "extraction.json",
-                extraction_key,
-                len(extraction_bytes),
-                "application/json",
-            )
-
-        stored = None
-        if _legacy_ingestion_enabled():
-            if tei_xml is not None:
-                stored = store_extraction(doc_id, tei_xml, extraction_payload)
-            else:
-                try:
-                    update_ingested_document(
-                        doc_id,
-                        {
-                            "extraction": {
-                                "status": "complete",
-                                "extracted_at": datetime.now(timezone.utc)
-                                .isoformat()
-                                .replace("+00:00", "Z"),
-                                "data": extraction_payload,
-                            }
-                        },
-                    )
-                except Exception:
-                    pass
-            try:
-                update_ingested_document(
-                    doc_id,
-                    {
-                        "body_extraction": {
-                            "status": "complete" if mode == "fulltext" else "error",
-                            "error": None
-                            if mode == "fulltext"
-                            else (
-                                "Fulltext TEI failed; used header+references fallback."
-                            ),
-                        }
-                    },
-                )
-            except Exception:
-                pass
-        if extraction_payload is not None:
-            try:
-                graph_store.index_extraction(
-                    ingest_meta=(
-                        stored or {"id": str(doc_id), "project_id": project_id}
-                    ),
-                    extraction_data=extraction_payload,
-                )
-            except Exception:
-                logger.exception("Graph index failed for extraction")
-
-        if attempt_id:
-            try:
-                if mode == "fulltext":
-                    mark_attempt_succeeded(attempt_id)
-                else:
-                    mark_attempt_partial(attempt_id)
-            except Exception:
-                pass
-        if job_id:
-            try:
-                set_job_state(
-                    job_id,
-                    "succeeded" if mode == "fulltext" else "partial",
-                    progress_json={"stage": "done", "mode": mode},
-                )
-            except Exception:
-                pass
-    except Exception as exc:
-        logger.exception("Extraction failed for document %s", doc_id)
-
-        if attempt_id:
-            try:
-                mark_attempt_failed(
-                    attempt_id,
-                    failure_reason=type(exc).__name__,
-                    failure_detail=str(exc),
-                )
-            except Exception:
-                pass
-        if job_id:
-            try:
-                set_job_state(
-                    job_id,
-                    "failed",
-                    progress_json={"stage": "error", "error": str(exc)},
-                )
-            except Exception:
-                pass
-
-        try:
-            update_ingested_document(
-                doc_id,
-                {
-                    "extraction": {"status": "error", "error": str(exc), "data": None},
-                    "body_extraction": {
-                        "status": "error",
-                        "error": str(exc),
-                        "data": None,
-                    },
-                },
-            )
-        except Exception:
-            pass
-
-        status = 503 if isinstance(exc, grobid_client.GrobidError) else 500
-        raise HTTPException(status_code=status, detail=f"Extraction failed: {exc}")
-
-    if stored is not None:
-        return {"document_id": doc_id, "extraction": stored.get("extraction")}
-    extracted_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-    return {
-        "document_id": doc_id,
-        "extraction": {
-            "status": "complete",
-            "extracted_at": extracted_at,
-            "data": extraction_payload,
-        },
-    }
+    job_id = spine_extract_pool.enqueue(
+        doc_id=work_id,
+        project_id=project_id,
+        user_id=user_id,
+        force_fallback=False,
+    )
+    if not job_id:
+        raise HTTPException(status_code=503, detail="Unable to enqueue extraction")
+    return {"document_id": doc_id, "extraction": {"status": "running"}}
 
 
 @app.post("/ingest/{doc_id}/fallback-extract")
@@ -2581,10 +2101,6 @@ def fallback_extract_ingested_document(
     """Force a fallback extraction attempt (spine mode only)."""
     project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
     user_id = str(app_settings.DEFAULT_USER_ID)
-    if _spine_mode() != "spine":
-        raise HTTPException(
-            status_code=404, detail="Fallback extract only supported in spine mode"
-        )
 
     work_id = str(doc_id or "").strip()
     if not work_id:
@@ -2609,10 +2125,6 @@ def cancel_extraction(
     x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
 ):
     project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
-    if _spine_mode() != "spine":
-        raise HTTPException(
-            status_code=404, detail="Cancellation only supported in spine mode"
-        )
     wid = str(doc_id or "").strip()
     if not wid:
         raise HTTPException(status_code=400, detail="doc_id is required")
@@ -2639,28 +2151,19 @@ def get_ingested_extraction(
     x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
 ):
     project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
-    if _spine_reads_enabled():
-        try:
-            doc = build_ingested_document_from_spine(
-                work_id=str(doc_id),
-                project_id=project_id,
-                include_extraction_data=True,
-            )
-            if doc is not None:
-                return doc.get("extraction")
-        except Exception:
-            logger.exception(
-                "Spine extraction read failed for doc_id=%s; falling back to legacy",
-                doc_id,
-            )
+    try:
+        doc = build_ingested_document_from_spine(
+            work_id=str(doc_id),
+            project_id=project_id,
+            include_extraction_data=True,
+        )
+    except Exception as exc:
+        logger.exception("Spine extraction read failed for doc_id=%s", doc_id)
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    if _legacy_ingestion_enabled():
-        document = get_ingested_document(doc_id)
-        if document is None:
-            raise HTTPException(status_code=404, detail="Document not found")
-        return document.get("extraction")
-
-    raise HTTPException(status_code=404, detail="Document not found")
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return doc.get("extraction")
 
 
 @app.get("/ingest/{doc_id}/spine")
@@ -2677,8 +2180,6 @@ def get_ingest_spine_debug(
     wid = str(doc_id or "").strip()
     if not wid:
         raise HTTPException(status_code=400, detail="doc_id is required")
-    if not _spine_reads_enabled():
-        raise HTTPException(status_code=404, detail="Spine reads disabled")
 
     doc = build_ingested_document_from_spine(
         work_id=wid,
@@ -2719,14 +2220,9 @@ def get_ingested_body(
 ):
     project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
 
-    tei_xml: Optional[str] = None
-    if _spine_reads_enabled():
-        tei_xml = get_tei_xml_from_spine(work_id=str(doc_id), project_id=project_id)
-    if not tei_xml and _legacy_ingestion_enabled():
-        try:
-            tei_xml = get_tei_xml(doc_id)
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    tei_xml: Optional[str] = get_tei_xml_from_spine(
+        work_id=str(doc_id), project_id=project_id
+    )
 
     tei_payload: Optional[dict] = None
     if tei_xml:
@@ -2737,31 +2233,30 @@ def get_ingested_body(
             return {"document_id": doc_id, **tei_payload}
 
     # Fallback body from spine artifact.
-    if _spine_reads_enabled():
-        attempt = get_latest_attempt_for_work(
-            project_id=project_id,
-            work_id=str(doc_id),
-            kind="primary",
-        )
-        if attempt and attempt.get("attempt_id"):
+    attempt = get_latest_attempt_for_work(
+        project_id=project_id,
+        work_id=str(doc_id),
+        kind="primary",
+    )
+    if attempt and attempt.get("attempt_id"):
+        art = None
+        try:
+            art = get_artifact_for_attempt(
+                attempt_id=str(attempt["attempt_id"]),
+                artifact_type="fallback.body.txt",
+            )
+        except Exception:
             art = None
+        if art and art.get("object_key"):
             try:
-                art = get_artifact_for_attempt(
-                    attempt_id=str(attempt["attempt_id"]),
-                    artifact_type="fallback.body.txt",
+                raw = object_store_s3.get_bytes(str(art["object_key"]))
+                text = raw.decode("utf-8", errors="ignore")
+                return fallback_body.build_body_from_plaintext(
+                    document_id=str(doc_id),
+                    text=text,
                 )
             except Exception:
-                art = None
-            if art and art.get("object_key"):
-                try:
-                    raw = object_store_s3.get_bytes(str(art["object_key"]))
-                    text = raw.decode("utf-8", errors="ignore")
-                    return fallback_body.build_body_from_plaintext(
-                        document_id=str(doc_id),
-                        text=text,
-                    )
-                except Exception:
-                    pass
+                pass
 
     # TEI exists but was empty and no fallback artifact was found.
     if tei_payload is not None:
@@ -2779,42 +2274,33 @@ def resolve_ingested_references(
     project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
     user_id = str(app_settings.DEFAULT_USER_ID)
 
-    document = None
-    if _spine_reads_enabled():
-        try:
-            document = build_ingested_document_from_spine(
-                work_id=str(doc_id),
-                project_id=project_id,
-                include_extraction_data=True,
-            )
-        except Exception:
-            document = None
-
-    if document is None and _legacy_ingestion_enabled():
-        document = get_ingested_document(doc_id)
+    try:
+        document = build_ingested_document_from_spine(
+            work_id=str(doc_id),
+            project_id=project_id,
+            include_extraction_data=True,
+        )
+    except Exception as exc:
+        logger.exception("Spine get failed for doc_id=%s", doc_id)
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    spine_meta = document.get("spine") if isinstance(document, dict) else None
-    spine_meta = spine_meta if isinstance(spine_meta, dict) else {}
-    work_id = str(spine_meta.get("work_id") or "").strip() or work_id_from_doc_id(
-        doc_id
-    )
+    work_id = work_id_from_doc_id(doc_id)
     attempt_id: Optional[str] = None
     attempt = None
-    if _spine_reads_enabled():
-        try:
-            attempt = get_latest_attempt_for_work(
-                project_id=project_id,
-                work_id=work_id,
-                kind="primary",
-            )
-            if attempt and attempt.get("attempt_id"):
-                attempt_id = str(attempt["attempt_id"])
-        except Exception:
-            attempt = None
-            attempt_id = None
+    try:
+        attempt = get_latest_attempt_for_work(
+            project_id=project_id,
+            work_id=work_id,
+            kind="primary",
+        )
+        if attempt and attempt.get("attempt_id"):
+            attempt_id = str(attempt["attempt_id"])
+    except Exception:
+        attempt = None
+        attempt_id = None
 
     extraction = document.get("extraction") or {}
     extraction_data = extraction.get("data") or {}
@@ -2871,14 +2357,6 @@ def resolve_ingested_references(
             except Exception:
                 attempt_id = None
 
-        # Persist to legacy store (best-effort) for compatibility.
-        stored = None
-        if _legacy_ingestion_enabled():
-            try:
-                stored = store_resolution(doc_id, resolved)
-            except Exception:
-                stored = None
-
         # Persist to the spine (S3 + artifacts table).
         if attempt_id:
             resolution_key = (
@@ -2915,8 +2393,6 @@ def resolve_ingested_references(
             status_code=500, detail=f"Reference resolution failed: {exc}"
         )
 
-    if stored and isinstance(stored, dict) and stored.get("resolution"):
-        return {"document_id": doc_id, "resolution": stored.get("resolution")}
     # Spine-only / best-effort response.
     resolved_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     return {
@@ -2936,32 +2412,17 @@ def get_ingested_resolution(
 ):
     project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
 
-    if _spine_reads_enabled():
-        try:
-            data = get_resolution_from_spine(work_id=str(doc_id), project_id=project_id)
-            if data is not None:
-                # Best-effort timestamp; artifacts carry created_at but this endpoint
-                # only needs to return a ResolutionResult payload.
-                resolved_at = (
-                    datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-                )
-                return {"status": "complete", "resolved_at": resolved_at, "data": data}
-        except Exception:
-            logger.exception(
-                "Spine resolution read failed for doc_id=%s; falling back to legacy",
-                doc_id,
-            )
+    try:
+        data = get_resolution_from_spine(work_id=str(doc_id), project_id=project_id)
+    except Exception as exc:
+        logger.exception("Spine resolution read failed for doc_id=%s", doc_id)
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    if _legacy_ingestion_enabled():
-        document = get_ingested_document(doc_id)
-        if document is None:
-            raise HTTPException(status_code=404, detail="Document not found")
-        resolution = document.get("resolution")
-        if not resolution or not resolution.get("data"):
-            raise HTTPException(status_code=404, detail="Resolution data not found")
-        return resolution
+    if data is None:
+        raise HTTPException(status_code=404, detail="Resolution data not found")
 
-    raise HTTPException(status_code=404, detail="Resolution data not found")
+    resolved_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return {"status": "complete", "resolved_at": resolved_at, "data": data}
 
 
 @app.post(
@@ -2975,21 +2436,13 @@ def select_resolution_source(
     user_id = str(app_settings.DEFAULT_USER_ID)
 
     resolution: dict = {}
-    resolution_data: list = []
-    stored_legacy = None
-
-    if _spine_reads_enabled():
-        data = get_resolution_from_spine(work_id=str(doc_id), project_id=project_id)
-        if data is not None:
-            resolution_data = data
-            resolution = {"data": resolution_data}
-
-    if not resolution_data and _legacy_ingestion_enabled():
-        document = get_ingested_document(doc_id)
-        if document is None:
-            raise HTTPException(status_code=404, detail="Document not found")
-        resolution = document.get("resolution") or {}
-        resolution_data = resolution.get("data") or []
+    try:
+        resolution_data = (
+            get_resolution_from_spine(work_id=str(doc_id), project_id=project_id) or []
+        )
+    except Exception as exc:
+        logger.exception("Spine resolution read failed for doc_id=%s", doc_id)
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     if not resolution_data:
         raise HTTPException(status_code=404, detail="Resolution data not found")
@@ -3020,54 +2473,42 @@ def select_resolution_source(
         "data": updated_entries,
     }
 
-    if _spine_reads_enabled():
-        attempt = get_latest_attempt_for_work(
-            project_id=project_id,
-            work_id=str(doc_id),
-            kind="primary",
-        )
-        attempt_id = str((attempt or {}).get("attempt_id") or "").strip() or None
-        if not attempt_id:
-            attempt_id, _state = create_or_get_attempt(
-                project_id,
-                user_id,
-                str(doc_id),
-                "primary",
-                settings_json={},
-            )
-
-        resolution_key = (
-            f"resolve/{doc_id}/attempts/{attempt_id}/primary/resolution.json"
-        )
-        resolution_bytes = json.dumps(
-            updated_entries,
-            sort_keys=True,
-            ensure_ascii=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        object_store_s3.put_bytes(
-            resolution_key,
-            resolution_bytes,
-            content_type="application/json",
-        )
-        create_artifact(
+    attempt = get_latest_attempt_for_work(
+        project_id=project_id,
+        work_id=str(doc_id),
+        kind="primary",
+    )
+    attempt_id = str((attempt or {}).get("attempt_id") or "").strip() or None
+    if not attempt_id:
+        attempt_id, _state = create_or_get_attempt(
             project_id,
             user_id,
-            attempt_id,
-            "resolution.json",
-            resolution_key,
-            len(resolution_bytes),
-            "application/json",
+            str(doc_id),
+            "primary",
+            settings_json={},
         )
 
-    if _legacy_ingestion_enabled():
-        try:
-            stored_legacy = update_ingested_document(
-                doc_id,
-                {"resolution": resolution_payload},
-            )
-        except Exception:
-            stored_legacy = None
+    resolution_key = f"resolve/{doc_id}/attempts/{attempt_id}/primary/resolution.json"
+    resolution_bytes = json.dumps(
+        updated_entries,
+        sort_keys=True,
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    object_store_s3.put_bytes(
+        resolution_key,
+        resolution_bytes,
+        content_type="application/json",
+    )
+    create_artifact(
+        project_id,
+        user_id,
+        attempt_id,
+        "resolution.json",
+        resolution_key,
+        len(resolution_bytes),
+        "application/json",
+    )
 
     # Keep the claim graph's reference -> ingest anchoring up to date.
     try:
@@ -3077,8 +2518,6 @@ def select_resolution_source(
         )
     except Exception:
         logger.exception("Graph index failed for resolution selection")
-    if stored_legacy and isinstance(stored_legacy, dict):
-        return {"document_id": doc_id, "resolution": stored_legacy.get("resolution")}
     return {"document_id": doc_id, "resolution": resolution_payload}
 
 
@@ -3335,32 +2774,20 @@ def get_citation_context(
 ):
     project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
 
-    document = None
-    tei_xml: Optional[str] = None
+    try:
+        document = build_ingested_document_from_spine(
+            work_id=str(doc_id),
+            project_id=project_id,
+            include_extraction_data=True,
+        )
+    except Exception as exc:
+        logger.exception("Spine document read failed for doc_id=%s", doc_id)
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    if _spine_reads_enabled():
-        try:
-            document = build_ingested_document_from_spine(
-                work_id=str(doc_id),
-                project_id=project_id,
-                include_extraction_data=True,
-            )
-        except Exception:
-            logger.exception("Spine document read failed for doc_id=%s", doc_id)
-            document = None
-        try:
-            tei_xml = get_tei_xml_from_spine(work_id=str(doc_id), project_id=project_id)
-        except Exception:
-            tei_xml = None
-
-    if document is None and _legacy_ingestion_enabled():
-        document = get_ingested_document(doc_id)
-
-    if tei_xml is None and _legacy_ingestion_enabled():
-        try:
-            tei_xml = get_tei_xml(doc_id)
-        except FileNotFoundError:
-            tei_xml = None
+    try:
+        tei_xml = get_tei_xml_from_spine(work_id=str(doc_id), project_id=project_id)
+    except Exception:
+        tei_xml = None
 
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -3412,21 +2839,16 @@ def get_citation_graph(
     x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
 ):
     project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
-    document = None
 
-    if _spine_reads_enabled():
-        try:
-            document = build_ingested_document_from_spine(
-                work_id=str(doc_id),
-                project_id=project_id,
-                include_extraction_data=True,
-            )
-        except Exception:
-            logger.exception("Spine document read failed for doc_id=%s", doc_id)
-            document = None
-
-    if document is None and _legacy_ingestion_enabled():
-        document = get_ingested_document(doc_id)
+    try:
+        document = build_ingested_document_from_spine(
+            work_id=str(doc_id),
+            project_id=project_id,
+            include_extraction_data=True,
+        )
+    except Exception as exc:
+        logger.exception("Spine document read failed for doc_id=%s", doc_id)
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found")

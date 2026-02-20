@@ -13,7 +13,6 @@ from backend.settings import settings
 
 @pytest.fixture(autouse=True)
 def attachment_workspace(tmp_path):
-    settings.ATTACHMENT_DIR = tmp_path / "attachments"
     attachment_store.clear_sentence_cache()
     yield
     attachment_store.clear_sentence_cache()

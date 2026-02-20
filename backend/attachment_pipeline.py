@@ -116,7 +116,7 @@ def _maybe_ingest_matched_attachment(record: dict) -> None:
         logger.exception("Spine upsert failed for attachment ingest")
         return
 
-    graph_store = GraphStore(settings.GRAPH_DB_PATH)
+    graph_store = GraphStore(settings=settings)
     ingest_meta = build_ingested_document_from_spine(
         work_id=ingest_id,
         project_id=project_id,

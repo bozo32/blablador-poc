@@ -299,22 +299,6 @@ class AppSettings(PydanticBaseSettings):
         / "default",
         description="Where ColBERT index files are actually stored",
     )
-    INGESTION_DIR: Path = Field(
-        Path(__file__).parent.parent / "data" / "ingestion",
-        description="Root directory for local ingestion storage",
-    )
-    ATTACHMENT_DIR: Path = Field(
-        Path(__file__).parent.parent / "data" / "attachments",
-        description="Root directory for claim attachment storage",
-    )
-    CLAIM_DB_PATH: Path = Field(
-        Path(__file__).parent.parent / "data" / "claims.db",
-        description="SQLite path for storing confirmed claim parses",
-    )
-    GRAPH_DB_PATH: Path = Field(
-        Path(__file__).parent.parent / "data" / "graph.db",
-        description="SQLite path for the document/claim knowledge graph",
-    )
     COLBERT_DIM: int = Field(128)
     COLBERT_MAXLEN: int = Field(180)
     COLBERT_TOP_K: int = Field(20)
@@ -353,10 +337,6 @@ class AppSettings(PydanticBaseSettings):
         description="Upper bound on deterministic BM25 seeds",
     )
 
-    EVIDENCE_STORE_DIR: Path = Field(
-        Path(__file__).parent.parent / "data" / "evidence_runs",
-        description="Root directory for persisted evidence runs",
-    )
     EVIDENCE_HISTORY_DEPTH: int = Field(
         5,
         description="Maximum historical runs to retain per claim",

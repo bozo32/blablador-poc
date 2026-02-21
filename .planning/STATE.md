@@ -13,10 +13,10 @@ Planning index: `.planning/PRIORITIES.md`
 
 Phase: 10 of 12 (Contracts + core workflow simplification)
 Plan: 1 of 7 (10-01 Contracts arc)
-Status: Not started
-Last activity: 2026-02-20 — Verified 09.3 cutover with repeatable script; created Phase 10 scaffolding
+Status: In progress
+Last activity: 2026-02-21 — Completed 10-01 Contracts arc (contracts + persistence + API)
 
-Progress: ████████████ 100%
+Progress: █████████░░░ 75%
 
 ## Performance Metrics
 
@@ -118,6 +118,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-02-20
-Stopped at: Phase 9.3 closeout prep (verification script + Phase 10 scaffolding)
-Resume file: `.planning/phases/09.3-spine-everywhere-legacy-removal/09.3-SHADOW-PROGRESS.md`
+Last session: 2026-02-21 08:37Z
+Stopped at: Completed 10-01-PLAN.md
+Resume file: None

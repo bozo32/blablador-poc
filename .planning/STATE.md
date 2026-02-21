@@ -12,9 +12,9 @@ Planning index: `.planning/PRIORITIES.md`
 ## Current Position
 
 Phase: 10 of 12 (Contracts + core workflow simplification)
-Plan: 1 of 7 (10-01 Contracts arc)
+Plan: 2 of 7 (10-02 Core workflow simplification)
 Status: In progress
-Last activity: 2026-02-21 — Completed 10-01 Contracts arc (contracts + persistence + API)
+Last activity: 2026-02-21 — Completed + verified 10-01 Contracts arc (contracts + persistence + API)
 
 Progress: █████████░░░ 75%
 

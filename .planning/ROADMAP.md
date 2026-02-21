@@ -270,7 +270,7 @@ Plans:
 **Depends on**: Phase 9.3
 
 Plans:
-- [ ] 10-01-PLAN.md — Contracts arc (stage boundaries + artifact contracts)
+- [x] 10-01-PLAN.md — Contracts arc (stage boundaries + artifact contracts)
 - [ ] 10-02-PLAN.md — Core workflow simplification (happy-path + minimal orchestrator)
 - [ ] 10-03-PLAN.md — Graph as navigation (Cytoscape routing + recursive retrieval)
 - [ ] 10-04-PLAN.md — Durable decisions/events (evidence decisions as events)
@@ -311,4 +311,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 9.1. Ingestion replumbing + solid spine | 15/15 | Complete | 2026-02-16 |
 | 9.2. Ingestion automation robustness + fallback extraction | 7/7 | Complete | 2026-02-17 |
 | 9.3. Spine Everywhere + Legacy Removal | 6/6 | Complete | 2026-02-20 |
-| 10. Contracts + Core Workflow Simplification | 0/7 | Not started | - |
+| 10. Contracts + Core Workflow Simplification | 1/7 | In progress | - |

@@ -33,7 +33,14 @@ TARGET_STATES = {
 }
 
 
-DEFAULT_STAGES = ("extract", "citespans", "retrieval", "filter", "rerank", "nli")
+DEFAULT_STAGES: tuple[str, ...] = (
+    "extract",
+    "citespans",
+    "retrieval",
+    "filter",
+    "rerank",
+    "nli",
+)
 
 
 def _project_id() -> str:
@@ -50,6 +57,43 @@ def _utc_now() -> datetime:
 
 def _iso_now() -> str:
     return _utc_now().isoformat().replace("+00:00", "Z")
+
+
+def _clean_ts(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    s = str(value).strip()
+    return s or None
+
+
+def _normalize_progress(value: Any) -> dict | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        return None
+
+    if "done" in value or "total" in value:
+        try:
+            done = int(value.get("done") or 0)
+            total = int(value.get("total") or 0)
+        except Exception:
+            return None
+        if done < 0:
+            done = 0
+        if total < 0:
+            total = 0
+        return {"done": done, "total": total}
+
+    if "pct" in value:
+        try:
+            pct = float(value.get("pct") or 0.0)
+        except Exception:
+            return None
+        return {"pct": pct}
+
+    return None
 
 
 def _json_dumps(value: Any) -> str:
@@ -134,12 +178,19 @@ def _normalize_stage_state_json(value: Any, *, ensure_defaults: bool) -> Dict[st
         if not isinstance(stage_entry, dict):
             stage_entry = {}
         entry: Dict[str, Any] = dict(stage_entry)
-        entry.setdefault("state", "requested")
-        entry.setdefault("progress", None)
-        entry.setdefault("started_at", None)
-        entry.setdefault("finished_at", None)
-        entry.setdefault("message", None)
-        entry["updated_at"] = str(entry.get("updated_at") or "").strip() or now
+        state = str(entry.get("state") or "").strip() or "requested"
+        entry["state"] = state
+
+        entry["progress"] = _normalize_progress(entry.get("progress"))
+        entry["started_at"] = _clean_ts(entry.get("started_at"))
+        entry["finished_at"] = _clean_ts(entry.get("finished_at"))
+        entry["message"] = (
+            str(entry.get("message") or "").strip() or None
+            if entry.get("message") is not None
+            else None
+        )
+
+        entry["updated_at"] = _clean_ts(entry.get("updated_at")) or now
         out["stages"][stage_name] = entry
     return out
 

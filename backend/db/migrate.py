@@ -820,6 +820,49 @@ _DDL_STATEMENTS: list[str] = [
     CREATE INDEX IF NOT EXISTS span_graph_neighborhood_candidates_project_work_idx
       ON span_graph_neighborhood_candidates(project_id, candidate_work_id);
     """,
+    # ---------------------------------------------------------------------
+    # Phase 10-01: Pipeline stage contracts (runs + per-stage artifacts)
+    # ---------------------------------------------------------------------
+    """
+    CREATE TABLE IF NOT EXISTS pipeline_runs (
+      run_id text PRIMARY KEY,
+      project_id text NOT NULL DEFAULT 'default',
+      created_by_user_id text NOT NULL DEFAULT 'local',
+      work_id text NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      input_fingerprint text NOT NULL,
+      caps_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      settings_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      note text NULL
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS pipeline_runs_work_created_idx
+      ON pipeline_runs(work_id, created_at DESC);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS pipeline_stage_artifacts (
+      artifact_id text PRIMARY KEY,
+      run_id text NOT NULL REFERENCES pipeline_runs(run_id) ON DELETE CASCADE,
+      project_id text NOT NULL DEFAULT 'default',
+      created_by_user_id text NOT NULL DEFAULT 'local',
+      stage text NOT NULL,
+      schema_version int NOT NULL,
+      artifact_type text NOT NULL,
+      object_key text NOT NULL,
+      bytes bigint NULL,
+      content_type text NULL,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS pipeline_stage_artifacts_run_stage_uniq
+      ON pipeline_stage_artifacts(run_id, stage);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS pipeline_stage_artifacts_run_id_idx
+      ON pipeline_stage_artifacts(run_id);
+    """,
 ]
 
 

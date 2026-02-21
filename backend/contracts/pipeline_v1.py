@@ -15,7 +15,14 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Mapping, Optional
 from uuid import UUID
 
-from pydantic import AliasChoices, BaseModel, Field, ValidationError, field_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 StageName = Literal["extract", "citespans", "retrieval", "filter", "rerank", "nli"]
 STAGES: tuple[str, ...] = (
@@ -244,20 +251,18 @@ class PipelineArtifactEnvelope(BaseModel):
 
     @field_validator("artifact_type")
     @classmethod
-    def _validate_artifact_type(cls, v: str, info) -> str:
+    def _validate_artifact_type_present(cls, v: str) -> str:
         at = str(v or "").strip()
         if not at:
             raise ValueError("artifact_type is required")
-        stage = None
-        try:
-            stage = info.data.get("stage")
-        except Exception:
-            stage = None
-        if stage:
-            want = artifact_type_for(str(stage), 1)
-            if at != want:
-                raise ValueError(f"artifact_type must be '{want}'")
         return at
+
+    @model_validator(mode="after")
+    def _validate_artifact_type_matches(self):
+        want = artifact_type_for(str(self.stage), int(self.schema_version))
+        if str(self.artifact_type or "").strip() != want:
+            raise ValueError(f"artifact_type must be '{want}'")
+        return self
 
     @field_validator("created_at")
     @classmethod

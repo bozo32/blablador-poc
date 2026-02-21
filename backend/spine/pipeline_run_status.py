@@ -403,6 +403,8 @@ def get_run_status(run_id: str) -> Optional[Dict[str, Any]]:
     if not rid:
         raise ValueError("run_id is required")
 
+    pid = _project_id()
+
     cols = (
         "run_id",
         "scope_type",
@@ -427,10 +429,11 @@ def get_run_status(run_id: str) -> Optional[Dict[str, Any]]:
                        state, started_at, finished_at,
                        updated_at, error_json, metrics_json
                   FROM pipeline_run_status
-                 WHERE run_id = %s
-                 LIMIT 1
+                 WHERE project_id = %s
+                   AND run_id = %s
+                  LIMIT 1
                 """,
-                (rid,),
+                (pid, rid),
             )
             row = cur.fetchone()
     if row is None:
@@ -450,6 +453,8 @@ def get_target_status(run_id: str, target_id: str) -> Optional[Dict[str, Any]]:
     if not tid:
         raise ValueError("target_id is required")
 
+    pid = _project_id()
+
     cols = (
         "run_id",
         "target_id",
@@ -471,11 +476,12 @@ def get_target_status(run_id: str, target_id: str) -> Optional[Dict[str, Any]]:
                        project_id, updated_at, state,
                        stage_state_json, attempts_json, last_error_json
                   FROM pipeline_target_status
-                 WHERE run_id = %s
+                 WHERE project_id = %s
+                   AND run_id = %s
                    AND target_id = %s
-                 LIMIT 1
+                  LIMIT 1
                 """,
-                (rid, tid),
+                (pid, rid, tid),
             )
             row = cur.fetchone()
     if row is None:
@@ -493,6 +499,8 @@ def list_target_status(run_id: str) -> List[Dict[str, Any]]:
     if not rid:
         raise ValueError("run_id is required")
 
+    pid = _project_id()
+
     cols = (
         "run_id",
         "target_id",
@@ -514,10 +522,11 @@ def list_target_status(run_id: str) -> List[Dict[str, Any]]:
                        project_id, updated_at, state,
                        stage_state_json, attempts_json, last_error_json
                   FROM pipeline_target_status
-                 WHERE run_id = %s
-                 ORDER BY COALESCE(citation_index, 2147483647) ASC, target_id ASC
+                 WHERE project_id = %s
+                   AND run_id = %s
+                  ORDER BY COALESCE(citation_index, 2147483647) ASC, target_id ASC
                 """,
-                (rid,),
+                (pid, rid),
             )
             rows = cur.fetchall() or []
 

@@ -24,7 +24,15 @@ from pydantic import (
     model_validator,
 )
 
-StageName = Literal["extract", "citespans", "retrieval", "filter", "rerank", "nli"]
+StageName = Literal[
+    "extract",
+    "citespans",
+    "retrieval",
+    "filter",
+    "rerank",
+    "nli",
+    "assessment",
+]
 STAGES: tuple[str, ...] = (
     "extract",
     "citespans",
@@ -32,6 +40,7 @@ STAGES: tuple[str, ...] = (
     "filter",
     "rerank",
     "nli",
+    "assessment",
 )
 
 
@@ -211,6 +220,29 @@ class CandidateStageData(BaseModel):
     by_target: Dict[str, CandidateTargetGroup] = Field(default_factory=dict)
 
 
+AssessmentRollupLabel = Literal[
+    "supports",
+    "contradicts",
+    "inconsistent",
+    "silent",
+]
+
+
+class AssessmentByTarget(BaseModel):
+    label: str | None = None
+    evidence_spans: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class AssessmentData(BaseModel):
+    reviewer_uid: str
+    scope_id: str
+    citing_doc_id: str
+    assessed_at: str
+    rollup_label: AssessmentRollupLabel | None = None
+    by_target: Dict[str, AssessmentByTarget] = Field(default_factory=dict)
+    judgment_snapshot: Dict[str, Any] = Field(default_factory=dict)
+
+
 ArtifactStatus = Literal["complete", "partial", "error"]
 
 
@@ -218,7 +250,7 @@ class PipelineArtifactEnvelope(BaseModel):
     schema_version: int = 1
     artifact_type: str
     run_id: str
-    stage: StageName
+    stage: str
     work_id: str = Field(validation_alias=AliasChoices("work_id", "doc_id"))
     created_at: str = Field(default_factory=_utcnow_z)
     status: ArtifactStatus
@@ -227,7 +259,7 @@ class PipelineArtifactEnvelope(BaseModel):
     caps: Caps = Field(default_factory=Caps)
     component: Optional[PipelineArtifactComponent] = None
     input_fingerprint: str
-    data: Dict[str, Any] = Field(default_factory=dict)
+    data: Any = Field(default_factory=dict)
 
     @field_validator("run_id")
     @classmethod
@@ -305,6 +337,11 @@ class NliArtifact(PipelineArtifactEnvelope):
     data: CandidateStageData
 
 
+class AssessmentArtifact(PipelineArtifactEnvelope):
+    stage: Literal["assessment"]
+    data: AssessmentData
+
+
 STAGE_MODEL_BY_NAME = {
     "extract": ExtractArtifact,
     "citespans": CiteSpansArtifact,
@@ -312,6 +349,7 @@ STAGE_MODEL_BY_NAME = {
     "filter": FilterArtifact,
     "rerank": RerankArtifact,
     "nli": NliArtifact,
+    "assessment": AssessmentArtifact,
 }
 
 

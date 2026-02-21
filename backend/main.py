@@ -34,7 +34,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from backend import (
     background_state,
@@ -51,7 +51,7 @@ from backend import (
 )
 from backend.nli import assess
 from backend.evidence_matching.service import evidence_service
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 try:
     from transformers import AdamW  # noqa: F401
@@ -117,6 +117,9 @@ from backend.spine.extraction_pool import SpineExtractionPool
 from backend import fallback_body
 from backend.pipeline_contracts import service as pipeline_contracts_service
 from backend.spine.pipeline_artifacts import StageArtifactAlreadyExists
+from backend.spine import pipeline_run_scopes as run_scopes_spine
+from backend.spine import pipeline_run_status as run_status_spine
+from backend.workflow_happy_path import orchestrator as happy_path_orchestrator
 from backend.spine.project_meta import (
     export_project_meta_json,
     get_or_create_project_meta,
@@ -1101,6 +1104,11 @@ def dev_wipe(payload: DevWipeRequest):
     # and tests have consistent "wipe everything" behavior.
     tables = [
         # 10-01: pipeline stage contracts
+        # 10-02: mutable workflow run status
+        "pipeline_run_events",
+        "pipeline_target_status",
+        "pipeline_run_status",
+        "pipeline_run_scopes",
         "pipeline_stage_artifacts",
         "pipeline_runs",
         # V2 ingestion spine
@@ -1275,6 +1283,244 @@ def get_pipeline_stage(run_id: str, stage: str):
     if artifact is None:
         raise HTTPException(status_code=404, detail="Stage artifact not found")
     return artifact
+
+
+# ---------------------------------------------------------------------------
+# Phase 10-02: Happy-path workflow API (runs + status + events)
+# ---------------------------------------------------------------------------
+
+
+class WorkflowStartRunRequest(BaseModel):
+    reviewer_uid: str
+    citing_doc_id: str
+
+
+@app.post("/workflow/claimspans/{claim_id}/runs")
+def workflow_start_run(claim_id: str, payload: WorkflowStartRunRequest):
+    try:
+        out = happy_path_orchestrator.start_run_for_claimspan(
+            claim_id=str(claim_id),
+            reviewer_uid=str(payload.reviewer_uid),
+            citing_doc_id=str(payload.citing_doc_id),
+        )
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return out
+
+
+class WorkflowAssessmentFinalizeRequest(BaseModel):
+    reviewer_uid: str
+    citing_doc_id: str
+    assessed_at: str
+    rollup_label: Optional[str] = None
+    by_target: Optional[dict] = None
+    judgment_snapshot: dict = Field(default_factory=dict)
+
+
+@app.post("/workflow/claimspans/{claim_id}/assessment/finalize")
+def workflow_finalize_assessment(
+    claim_id: str, payload: WorkflowAssessmentFinalizeRequest
+):
+    cid = str(claim_id or "").strip()
+    reviewer_uid = str(payload.reviewer_uid or "").strip() or "default"
+    citing_doc_id = str(payload.citing_doc_id or "").strip()
+    assessed_at = str(payload.assessed_at or "").strip()
+    if not cid:
+        raise HTTPException(status_code=422, detail="claim_id is required")
+    if not citing_doc_id:
+        raise HTTPException(status_code=422, detail="citing_doc_id is required")
+    if not assessed_at:
+        raise HTTPException(status_code=422, detail="assessed_at is required")
+
+    run_id = run_scopes_spine.latest_run_id(
+        scope_type="claimspan",
+        scope_id=cid,
+        reviewer_uid=reviewer_uid,
+    )
+    if run_id is None:
+        run = pipeline_contracts_service.create_run(
+            work_id=work_id_from_doc_id(citing_doc_id),
+            note="assessment-only",
+        )
+        run_id = str(run.get("run_id") or "").strip() or None
+        if not run_id:
+            raise HTTPException(
+                status_code=500, detail="create_run did not return run_id"
+            )
+        run_scopes_spine.insert_scope(
+            scope_type="claimspan",
+            scope_id=cid,
+            reviewer_uid=reviewer_uid,
+            run_id=run_id,
+            citing_doc_id=citing_doc_id,
+        )
+        run_status_spine.upsert_run_status(
+            run_id,
+            scope_type="claimspan",
+            scope_id=cid,
+            reviewer_uid=reviewer_uid,
+            citing_doc_id=citing_doc_id,
+            state="queued"
+            if not background_state.get_state().get("paused")
+            else "blocked",
+        )
+
+    assessment_data = {
+        "reviewer_uid": reviewer_uid,
+        "scope_id": cid,
+        "citing_doc_id": citing_doc_id,
+        "assessed_at": assessed_at,
+        "rollup_label": (
+            str(payload.rollup_label).strip()
+            if payload.rollup_label is not None
+            else None
+        )
+        or None,
+        "by_target": dict(payload.by_target or {}),
+        "judgment_snapshot": dict(payload.judgment_snapshot or {}),
+    }
+
+    try:
+        pipeline_contracts_service.store_stage(
+            run_id=str(run_id),
+            stage="assessment",
+            status="complete",
+            data=assessment_data,
+        )
+        already = False
+    except StageArtifactAlreadyExists:
+        already = True
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    # Best-effort: reflect assessment in per-target stage_state_json.
+    try:
+        for tgt in run_status_spine.list_target_status(str(run_id)):
+            tid = str((tgt or {}).get("target_id") or "").strip()
+            if not tid:
+                continue
+            run_status_spine.upsert_target_status(
+                str(run_id),
+                tid,
+                state=str((tgt or {}).get("state") or "requested"),
+                citation_index=(tgt or {}).get("citation_index"),
+                reference_id=(tgt or {}).get("reference_id"),
+                attachment_id=(tgt or {}).get("attachment_id"),
+                stage_state={
+                    "stages": {
+                        "assessment": {
+                            "state": "done",
+                            "started_at": assessed_at,
+                            "finished_at": assessed_at,
+                            "message": "finalized",
+                        }
+                    }
+                },
+            )
+    except Exception:
+        pass
+
+    return {"run_id": run_id, "already_stored": bool(already)}
+
+
+@app.post("/workflow/runs/{run_id}/resume")
+def workflow_resume_run(run_id: str):
+    try:
+        return happy_path_orchestrator.resume_run(str(run_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/workflow/claimspans/{claim_id}/runs/latest")
+def workflow_latest_run(claim_id: str, reviewer_uid: str = Query(...)):
+    try:
+        rid = run_scopes_spine.latest_run_id(
+            scope_type="claimspan",
+            scope_id=str(claim_id),
+            reviewer_uid=str(reviewer_uid),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"run_id": rid}
+
+
+@app.get("/workflow/runs/{run_id}/status")
+def workflow_get_run_status(run_id: str):
+    try:
+        run = run_status_spine.get_run_status(str(run_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if run is None:
+        raise HTTPException(status_code=404, detail="run not found")
+
+    targets = run_status_spine.list_target_status(str(run_id))
+    queue = [
+        {
+            "target_id": t.get("target_id"),
+            "reference_id": t.get("reference_id"),
+            "citation_index": t.get("citation_index"),
+            "attachment_id": t.get("attachment_id"),
+            "state": t.get("state"),
+            "updated_at": t.get("updated_at"),
+        }
+        for t in targets
+        if isinstance(t, dict)
+    ]
+    return {"run": run, "targets": targets, "queue": queue}
+
+
+@app.post("/workflow/runs/{run_id}/targets/{target_id}/cancel")
+def workflow_cancel_target(run_id: str, target_id: str):
+    try:
+        return happy_path_orchestrator.cancel_target(str(run_id), str(target_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/workflow/runs/{run_id}/events")
+def workflow_events_sse(
+    run_id: str,
+    after_event_id: int = Query(0, ge=0),
+    heartbeat_ms: int = Query(10000, ge=250, le=60000),
+):
+    rid = str(run_id or "").strip()
+    if not rid:
+        raise HTTPException(status_code=422, detail="run_id is required")
+
+    async def _gen():
+        last = int(after_event_id)
+        heartbeat_s = max(0.25, float(heartbeat_ms) / 1000.0)
+        while True:
+            events = []
+            try:
+                events = run_status_spine.list_events(
+                    rid, after_event_id=last, limit=200
+                )
+            except Exception:
+                events = []
+
+            if events:
+                for ev in events:
+                    if not isinstance(ev, dict):
+                        continue
+                    last = int(ev.get("event_id") or last)
+                    et = str(ev.get("type") or "message").strip() or "message"
+                    payload = json.dumps(ev, ensure_ascii=True, sort_keys=True)
+                    yield f"event: {et}\n"
+                    yield f"data: {payload}\n\n"
+            else:
+                yield ": heartbeat\n\n"
+            await asyncio.sleep(heartbeat_s)
+
+    return StreamingResponse(_gen(), media_type="text/event-stream")
 
 
 @app.get(

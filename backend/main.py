@@ -34,7 +34,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 
 from backend import (
     background_state,
@@ -115,6 +115,8 @@ from backend.graph_store import GraphStore
 from backend.span_graph_store import SpanGraphStore
 from backend.spine.extraction_pool import SpineExtractionPool
 from backend import fallback_body
+from backend.pipeline_contracts import service as pipeline_contracts_service
+from backend.spine.pipeline_artifacts import StageArtifactAlreadyExists
 from backend.spine.project_meta import (
     export_project_meta_json,
     get_or_create_project_meta,
@@ -1098,6 +1100,9 @@ def dev_wipe(payload: DevWipeRequest):
     # Keep this list aligned with `tests/conftest.py` truncation so local dev
     # and tests have consistent "wipe everything" behavior.
     tables = [
+        # 10-01: pipeline stage contracts
+        "pipeline_stage_artifacts",
+        "pipeline_runs",
         # V2 ingestion spine
         "locators",
         "workflow_versions",
@@ -1188,6 +1193,88 @@ def dev_wipe(payload: DevWipeRequest):
         "s3_deleted_objects": int(deleted_objects),
         "removed_paths": int(removed),
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 10-01: Pipeline stage contract API (minimal POC surface)
+# ---------------------------------------------------------------------------
+
+
+class PipelineRunCreateRequest(BaseModel):
+    work_id: str
+    caps: Optional[dict] = None
+    note: Optional[str] = None
+
+
+@app.post("/pipeline/runs")
+def post_pipeline_run(payload: PipelineRunCreateRequest):
+    try:
+        run = pipeline_contracts_service.create_run(
+            work_id=str(payload.work_id),
+            caps_override=dict(payload.caps or {})
+            if payload.caps is not None
+            else None,
+            note=str(payload.note).strip() if payload.note is not None else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return run
+
+
+class PipelineStagePutRequest(BaseModel):
+    status: str
+    data: dict = {}
+    warnings: Optional[list[str]] = None
+    error: Optional[dict] = None
+    component: Optional[dict] = None
+    caps: Optional[dict] = None
+
+
+@app.put("/pipeline/runs/{run_id}/stages/{stage}")
+def put_pipeline_stage(run_id: str, stage: str, payload: PipelineStagePutRequest):
+    try:
+        stored = pipeline_contracts_service.store_stage(
+            run_id=str(run_id),
+            stage=str(stage),
+            status=str(payload.status),
+            data=dict(payload.data or {}),
+            warnings=list(payload.warnings or [])
+            if payload.warnings is not None
+            else None,
+            error=dict(payload.error or {}) if payload.error is not None else None,
+            component=dict(payload.component or {})
+            if payload.component is not None
+            else None,
+            caps_override=dict(payload.caps or {})
+            if payload.caps is not None
+            else None,
+        )
+    except StageArtifactAlreadyExists as exc:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "error": {
+                    "code": "stage_artifact_exists",
+                    "message": str(exc),
+                }
+            },
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return stored
+
+
+@app.get("/pipeline/runs/{run_id}/stages/{stage}")
+def get_pipeline_stage(run_id: str, stage: str):
+    try:
+        artifact = pipeline_contracts_service.fetch_stage(str(run_id), str(stage))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if artifact is None:
+        raise HTTPException(status_code=404, detail="Stage artifact not found")
+    return artifact
 
 
 @app.get(

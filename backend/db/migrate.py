@@ -863,6 +863,100 @@ _DDL_STATEMENTS: list[str] = [
     CREATE INDEX IF NOT EXISTS pipeline_stage_artifacts_run_id_idx
       ON pipeline_stage_artifacts(run_id);
     """,
+    # ---------------------------------------------------------------------
+    # Phase 10-02: Mutable run status (scopes, per-run, per-target, events)
+    # ---------------------------------------------------------------------
+    """
+    CREATE TABLE IF NOT EXISTS pipeline_run_scopes (
+      scope_type text NOT NULL,
+      scope_id text NOT NULL,
+      reviewer_uid text NOT NULL,
+      run_id text NOT NULL,
+      citing_doc_id text NOT NULL,
+      project_id text NOT NULL DEFAULT 'default',
+      created_by_user_id text NOT NULL DEFAULT 'local',
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS pipeline_run_scopes_project_scope_idx
+      ON pipeline_run_scopes(
+        project_id,
+        scope_type,
+        scope_id,
+        reviewer_uid,
+        created_at DESC
+      );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS pipeline_run_scopes_project_run_idx
+      ON pipeline_run_scopes(project_id, run_id);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS pipeline_run_status (
+      run_id text PRIMARY KEY,
+      scope_type text NOT NULL,
+      scope_id text NOT NULL,
+      reviewer_uid text NOT NULL,
+      citing_doc_id text NOT NULL,
+      project_id text NOT NULL DEFAULT 'default',
+      created_by_user_id text NOT NULL DEFAULT 'local',
+
+      state text NOT NULL,
+      started_at timestamptz NULL,
+      finished_at timestamptz NULL,
+      updated_at timestamptz NOT NULL DEFAULT now(),
+
+      error_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      metrics_json jsonb NOT NULL DEFAULT '{}'::jsonb
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS pipeline_run_status_project_scope_idx
+      ON pipeline_run_status(project_id, scope_id, reviewer_uid, updated_at DESC);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS pipeline_target_status (
+      run_id text NOT NULL,
+      target_id text NOT NULL,
+      reference_id text NULL,
+      citation_index int NULL,
+      attachment_id text NULL,
+
+      project_id text NOT NULL DEFAULT 'default',
+      updated_at timestamptz NOT NULL DEFAULT now(),
+
+      state text NOT NULL,
+      stage_state_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      attempts_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      last_error_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+
+      PRIMARY KEY(run_id, target_id)
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS pipeline_target_status_project_run_idx
+      ON pipeline_target_status(project_id, run_id);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS pipeline_target_status_project_target_idx
+      ON pipeline_target_status(project_id, target_id);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS pipeline_run_events (
+      event_id bigserial PRIMARY KEY,
+      run_id text NOT NULL,
+      target_id text NULL,
+      project_id text NOT NULL DEFAULT 'default',
+      type text NOT NULL,
+      payload_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS pipeline_run_events_project_run_event_idx
+      ON pipeline_run_events(project_id, run_id, event_id);
+    """,
 ]
 
 

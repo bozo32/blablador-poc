@@ -52,16 +52,31 @@ def build_document_body(tei_xml: str | bytes) -> Dict[str, Any]:
     root = _parse_tei_xml(tei_xml)
     tree = root.getroottree()
 
+    para_nodes = root.xpath("//tei:text//tei:body//tei:p", namespaces=NS)
     refs = root.xpath(
         "//tei:text//tei:body//tei:ref[@type='bibr']",
         namespaces=NS,
     )
+
+    # Some small/structure-poor parses (including fixture PDFs) place the
+    # content under teiHeader/profileDesc/abstract instead of tei:text/body.
+    # For navigation + citation workflows, treat abstract paragraphs as a
+    # best-effort body substitute when the real body is empty.
+    if not para_nodes:
+        para_nodes = root.xpath(
+            "//tei:teiHeader//tei:profileDesc//tei:abstract//tei:p",
+            namespaces=NS,
+        )
+        refs = root.xpath(
+            "//tei:teiHeader//tei:profileDesc//tei:abstract//tei:ref[@type='bibr']",
+            namespaces=NS,
+        )
+
     path_to_index: Dict[str, int] = {}
     for idx, ref in enumerate(refs):
         path_to_index[tree.getpath(ref)] = idx
 
     paragraphs: List[Dict[str, Any]] = []
-    para_nodes = root.xpath("//tei:text//tei:body//tei:p", namespaces=NS)
 
     cite_re = re.compile(r"__CITE_(\d+)__")
 

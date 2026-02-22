@@ -25,6 +25,11 @@ def _parse_tei_xml(tei_xml: str | bytes) -> etree._Element:
 
 def _sentence_index(root: etree._Element) -> Dict[etree._Element, int]:
     sentences = root.xpath("//tei:text//tei:body//tei:s", namespaces=TEI_NS)
+    if not sentences:
+        sentences = root.xpath(
+            "//tei:teiHeader//tei:profileDesc//tei:abstract//tei:s",
+            namespaces=TEI_NS,
+        )
     return {sentence: index for index, sentence in enumerate(sentences)}
 
 
@@ -34,6 +39,11 @@ def _callouts(root: etree._Element) -> List[Dict[str, Optional[str]]]:
         "//tei:text//tei:body//tei:ref[@type='bibr']",
         namespaces=TEI_NS,
     )
+    if not refs:
+        refs = root.xpath(
+            "//tei:teiHeader//tei:profileDesc//tei:abstract//tei:ref[@type='bibr']",
+            namespaces=TEI_NS,
+        )
     for ref in refs:
         target_id = (ref.get("target") or "").lstrip("#") or None
         callouts.append(

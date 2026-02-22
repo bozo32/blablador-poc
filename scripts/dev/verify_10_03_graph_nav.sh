@@ -70,10 +70,16 @@ def req(method: str, path: str, **kwargs) -> dict:
 
 
 repo = Path(".").resolve()
-fixtures = [repo / "fixtures" / "sample.pdf", repo / "fixtures" / "text-1.pdf"]
+fixtures = [
+    repo / "fixtures" / "citations-2.pdf",
+    repo / "fixtures" / "sample.pdf",
+    repo / "fixtures" / "text-1.pdf",
+]
 fixtures = [p for p in fixtures if p.exists()]
 if not fixtures:
-    raise RuntimeError("missing fixtures: fixtures/sample.pdf or fixtures/text-1.pdf")
+    raise RuntimeError(
+        "missing fixtures: fixtures/citations-2.pdf (preferred) or fixtures/sample.pdf"
+    )
 
 
 def find_first_citation(body: dict) -> tuple[str, str, int, str]:

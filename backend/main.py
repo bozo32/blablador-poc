@@ -829,6 +829,195 @@ def nav_graph(
                     )
                 )
 
+    # Expansion: show additional citing contexts for expanded works.
+    #
+    # Semantics: expanded work IDs represent "unlock one-hop incoming context".
+    # For each expanded work node, append other citation-window spans that cite
+    # it (across the current project), plus optional claimspans.
+    def _expand_work_incoming(*, work_id: str) -> None:
+        wid = str(work_id or "").strip()
+        if not wid:
+            return
+        try:
+            contexts = span_graph_store.list_citing_contexts_for_work(
+                work_id=wid, reviewer_uid=reviewer, limit=120
+            )
+        except Exception:
+            contexts = []
+        if not contexts:
+            return
+
+        for ctx in contexts[:80]:
+            if not isinstance(ctx, dict):
+                continue
+            citing_doc_id = str(ctx.get("citing_doc_id") or "").strip() or None
+            reference_id = str(ctx.get("reference_id") or "").strip() or None
+            citation_index = ctx.get("citation_index")
+            try:
+                cite_idx = int(citation_index) if citation_index is not None else None
+            except Exception:
+                cite_idx = None
+            if not citing_doc_id or cite_idx is None or not reference_id:
+                continue
+
+            span_id = None
+            try:
+                span_id = span_graph_store.get_citation_span_id(
+                    ingest_id=str(citing_doc_id),
+                    citation_index=int(cite_idx),
+                    target_id=str(reference_id),
+                )
+            except Exception:
+                span_id = None
+            if not span_id:
+                try:
+                    span = span_graph_store.find_citation_span(
+                        ingest_id=str(citing_doc_id),
+                        citation_index=int(cite_idx),
+                        target_id=str(reference_id),
+                    )
+                except Exception:
+                    span = None
+                if isinstance(span, dict):
+                    span_id = str(span.get("span_id") or "").strip() or None
+            if not span_id:
+                continue
+
+            routing = {
+                "citing_doc_id": citing_doc_id,
+                "citation_index": int(cite_idx),
+                "reference_id": reference_id,
+                "sentence_id": ctx.get("sentence_id"),
+            }
+
+            # Citing work node + its citespan.
+            add_node(
+                work_node(
+                    work_id=str(citing_doc_id),
+                    label="Citing",
+                    state="available",
+                    routing=routing,
+                    resolved_ingest_id=str(citing_doc_id),
+                )
+            )
+
+            try:
+                span_status = span_graph_store.span_status(
+                    span_id=str(span_id), reviewer_uid=reviewer
+                )
+            except Exception:
+                span_status = {}
+            span_state = _nav_state_for_span_rollup(
+                span_status if isinstance(span_status, dict) else {}
+            )
+
+            cs_node_id = _nav_citespan_node_id(str(span_id))
+            add_node(
+                citespan_node(
+                    span_id=str(span_id),
+                    label="CiteSpan",
+                    state=span_state,
+                    routing=routing,
+                )
+            )
+            add_edge(
+                edge(
+                    src=_nav_work_node_id(str(citing_doc_id)),
+                    tgt=cs_node_id,
+                    kind="HAS_CITESPAN",
+                    state=span_state,
+                    routing=routing,
+                )
+            )
+
+            resolved_ingest_id = None
+            try:
+                resolved_ingest_id = graph_store.resolve_reference_to_ingest_id(
+                    citing_doc_id=str(citing_doc_id), reference_id=str(reference_id)
+                )
+            except Exception:
+                resolved_ingest_id = None
+            work_state = _nav_state_for_work(
+                work_id=wid,
+                requested_ids=requested_set,
+                resolved=bool(resolved_ingest_id),
+            )
+            add_node(
+                work_node(
+                    work_id=str(wid),
+                    label=str(wid),
+                    state=work_state,
+                    routing=routing,
+                    resolved_ingest_id=str(resolved_ingest_id)
+                    if resolved_ingest_id
+                    else None,
+                )
+            )
+            add_edge(
+                edge(
+                    src=cs_node_id,
+                    tgt=_nav_work_node_id(str(wid)),
+                    kind="CITES",
+                    state=work_state,
+                    routing=routing,
+                )
+            )
+
+            if bool(show_claimspans):
+                try:
+                    claim_spans = span_graph_store.list_claim_spans_for_span(
+                        span_id=str(span_id)
+                    )
+                except Exception:
+                    claim_spans = []
+                for cs in claim_spans or []:
+                    if not isinstance(cs, dict):
+                        continue
+                    csid = str(cs.get("claim_span_id") or "").strip()
+                    if not csid:
+                        continue
+                    order_index = cs.get("order_index")
+                    label = (
+                        f"Claim {int(order_index)}"
+                        if order_index is not None
+                        else "Claim"
+                    )
+                    try:
+                        status = span_graph_store.claim_span_status(
+                            claim_span_id=csid, reviewer_uid=reviewer
+                        )
+                    except Exception:
+                        status = {}
+                    cs_state = _nav_state_for_claim_span_status(
+                        (status or {}).get("status")
+                    )
+                    node_id = _nav_claimspan_node_id(csid)
+                    add_node(
+                        claimspan_node(
+                            claim_span_id=csid,
+                            label=label,
+                            state=cs_state,
+                            routing={
+                                **routing,
+                                "order_index": int(order_index)
+                                if order_index is not None
+                                else None,
+                            },
+                        )
+                    )
+                    add_edge(
+                        edge(
+                            src=cs_node_id,
+                            tgt=node_id,
+                            kind="HAS_CLAIMSPAN",
+                            state=cs_state,
+                            routing=routing,
+                        )
+                    )
+
+    for wid in expanded_ids:
+        _expand_work_incoming(work_id=str(wid))
+
     return {
         "focus": {"type": f_type, "id": f_id},
         "elements": elements,

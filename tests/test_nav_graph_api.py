@@ -91,3 +91,47 @@ def test_nav_contexts_missing_optional_data_never_500(tmp_path, monkeypatch):
     assert resp.status_code == 200
     payload = resp.json()
     assert payload.get("contexts") == []
+
+
+def test_nav_graph_work_focus_show_claimspans_toggle(tmp_path, monkeypatch):
+    store = SpanGraphStore(tmp_path / "graph.db")
+    monkeypatch.setattr(backend_main, "span_graph_store", store)
+    client = TestClient(backend_main.app)
+
+    _ = _seed_one_citing_span(client=client)
+
+    with_claims = client.get(
+        "/nav/graph",
+        params={
+            "reviewer_uid": "alice",
+            "focus_type": "work",
+            "focus_id": "doc-1",
+            "show_claimspans": "true",
+        },
+    )
+    assert with_claims.status_code == 200
+    elements = (with_claims.json() or {}).get("elements") or []
+    assert any(
+        isinstance(el, dict)
+        and isinstance(el.get("data"), dict)
+        and (el.get("data") or {}).get("selectable_type") == "claimspan"
+        for el in elements
+    )
+
+    without_claims = client.get(
+        "/nav/graph",
+        params={
+            "reviewer_uid": "alice",
+            "focus_type": "work",
+            "focus_id": "doc-1",
+            "show_claimspans": "false",
+        },
+    )
+    assert without_claims.status_code == 200
+    elements2 = (without_claims.json() or {}).get("elements") or []
+    assert not any(
+        isinstance(el, dict)
+        and isinstance(el.get("data"), dict)
+        and (el.get("data") or {}).get("selectable_type") == "claimspan"
+        for el in elements2
+    )

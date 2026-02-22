@@ -659,18 +659,175 @@ def nav_graph(
             sid = str(sp.get("span_id") or "").strip()
             if not sid:
                 continue
-            node_id = _nav_citespan_node_id(sid)
+
+            # Derive routing anchor for this citespan (best-effort).
+            try:
+                cites_for_span = span_graph_store.list_span_cites(span_id=sid)
+            except Exception:
+                cites_for_span = []
+            primary = None
+            for c in cites_for_span or []:
+                if isinstance(c, dict) and (
+                    c.get("reference_id") is not None
+                    or c.get("citation_index") is not None
+                ):
+                    primary = c
+                    break
+            primary = primary if isinstance(primary, dict) else {}
+            try:
+                citation_index = (
+                    int(primary.get("citation_index"))
+                    if primary.get("citation_index") is not None
+                    else None
+                )
+            except Exception:
+                citation_index = None
+            reference_id = str(primary.get("reference_id") or "").strip() or None
+            routing = {
+                "citing_doc_id": ingest_id,
+                "citation_index": citation_index,
+                "reference_id": reference_id,
+            }
+
+            # Prefer a rollup state when possible.
+            try:
+                span_status = span_graph_store.span_status(
+                    span_id=str(sid), reviewer_uid=reviewer
+                )
+            except Exception:
+                span_status = {}
+            span_state = _nav_state_for_span_rollup(
+                span_status if isinstance(span_status, dict) else {}
+            )
+
+            cs_node_id = _nav_citespan_node_id(sid)
             add_node(
                 citespan_node(
                     span_id=sid,
                     label="CiteSpan",
-                    state="available",
-                    routing={"citing_doc_id": ingest_id},
+                    state=span_state,
+                    routing=routing,
                 )
             )
             add_edge(
-                edge(src=w_id, tgt=node_id, kind="HAS_CITESPAN", state="available")
+                edge(
+                    src=w_id,
+                    tgt=cs_node_id,
+                    kind="HAS_CITESPAN",
+                    state=span_state,
+                    routing=routing,
+                )
             )
+
+            # ClaimSpan nodes (toggle-controlled).
+            if bool(show_claimspans):
+                try:
+                    claim_spans = span_graph_store.list_claim_spans_for_span(
+                        span_id=str(sid)
+                    )
+                except Exception:
+                    claim_spans = []
+                for cs in claim_spans or []:
+                    if not isinstance(cs, dict):
+                        continue
+                    csid = str(cs.get("claim_span_id") or "").strip()
+                    if not csid:
+                        continue
+                    order_index = cs.get("order_index")
+                    label = (
+                        f"Claim {int(order_index)}"
+                        if order_index is not None
+                        else "Claim"
+                    )
+                    try:
+                        status = span_graph_store.claim_span_status(
+                            claim_span_id=csid, reviewer_uid=reviewer
+                        )
+                    except Exception:
+                        status = {}
+                    state = _nav_state_for_claim_span_status(
+                        (status or {}).get("status")
+                    )
+                    node_id = _nav_claimspan_node_id(csid)
+                    add_node(
+                        claimspan_node(
+                            claim_span_id=csid,
+                            label=label,
+                            state=state,
+                            routing={
+                                **routing,
+                                "order_index": int(order_index)
+                                if order_index is not None
+                                else None,
+                            },
+                        )
+                    )
+                    add_edge(
+                        edge(
+                            src=cs_node_id,
+                            tgt=node_id,
+                            kind="HAS_CLAIMSPAN",
+                            state=state,
+                            routing=routing,
+                        )
+                    )
+
+            # Cited work nodes (1-hop) from this citespan.
+            for c in cites_for_span or []:
+                if not isinstance(c, dict):
+                    continue
+                cited_work_id = str(c.get("cited_work_id") or "").strip()
+                if not cited_work_id:
+                    continue
+                ref2 = str(c.get("reference_id") or "").strip() or reference_id
+                try:
+                    cite_idx2 = (
+                        int(c.get("citation_index"))
+                        if c.get("citation_index") is not None
+                        else citation_index
+                    )
+                except Exception:
+                    cite_idx2 = citation_index
+                routing2 = {
+                    "citing_doc_id": ingest_id,
+                    "citation_index": cite_idx2,
+                    "reference_id": ref2,
+                }
+
+                resolved_ingest_id = None
+                if ingest_id and ref2:
+                    try:
+                        resolved_ingest_id = graph_store.resolve_reference_to_ingest_id(
+                            citing_doc_id=str(ingest_id), reference_id=str(ref2)
+                        )
+                    except Exception:
+                        resolved_ingest_id = None
+                state = _nav_state_for_work(
+                    work_id=cited_work_id,
+                    requested_ids=requested_set,
+                    resolved=bool(resolved_ingest_id),
+                )
+                w_node_id = _nav_work_node_id(cited_work_id)
+                add_node(
+                    work_node(
+                        work_id=cited_work_id,
+                        label=str(cited_work_id or "Cited"),
+                        state=state,
+                        routing=routing2,
+                        resolved_ingest_id=str(resolved_ingest_id)
+                        if resolved_ingest_id
+                        else None,
+                    )
+                )
+                add_edge(
+                    edge(
+                        src=cs_node_id,
+                        tgt=w_node_id,
+                        kind="CITES",
+                        state=state,
+                        routing=routing2,
+                    )
+                )
 
     return {
         "focus": {"type": f_type, "id": f_id},

@@ -14,14 +14,14 @@ Planning index: `.planning/PRIORITIES.md`
 Phase: 10 of 12 (Contracts + core workflow simplification)
 Plan: 3 of 7 (10-03 Graph as navigation)
 Status: Planning
-Last activity: 2026-02-22 — Completed + verified 10-02 Core workflow simplification; captured 10-03 Graph navigation context
+Last activity: 2026-02-22 — Created 10-02 execution summary (re-verified); continuing 10-03 planning
 
-Progress: ████░░░░░░░░ 30%
+Progress: █████████░░░ 74%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 45
+- Total plans completed: 58
 - Average duration: 14 min
 - Total execution time: 3.6 hours
 
@@ -45,6 +45,8 @@ Progress: ████░░░░░░░░ 30%
 
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
+
+  - Workflow happy path uses mutable Postgres run status + pollable stage_state_json; Streamlit is polling-first (10-02).
 
   - TEI body falls back to deterministic sentence segmentation when TEI/GROBID <s> boundaries are suspicious, generating stable sentence_id values (08-01).
 
@@ -118,6 +120,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-02-22
-Stopped at: Captured 10-03 context; ready for /gsd-plan-phase 10-03
+Last session: 2026-02-22T11:02:44Z
+Stopped at: Completed 10-02-SUMMARY.md; ready for /gsd-plan-phase 10-03
 Resume file: None

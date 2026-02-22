@@ -11,6 +11,14 @@ docker compose up -d postgres minio minio-init grobid fallback-worker
 # requiring a full image rebuild (use bind mounts to overlay code).
 docker compose stop app-api >/dev/null 2>&1 || true
 docker compose rm -f app-api >/dev/null 2>&1 || true
+
+# Clean up any prior `docker compose run -d app-api` containers that may still
+# be holding the 8000 port.
+old_ids=$(docker ps -aq --filter "name=blablador-poc-app-api-run" || true)
+if [ -n "${old_ids}" ]; then
+  docker rm -f ${old_ids} >/dev/null 2>&1 || true
+fi
+
 docker compose run -d --service-ports \
   -v "${PWD}/backend:/app/backend" \
   -v "${PWD}/frontend:/app/frontend" \

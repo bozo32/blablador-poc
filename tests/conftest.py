@@ -28,6 +28,10 @@ def _truncate_spine_backed_tables() -> None:
             cur.execute(
                 """
                 TRUNCATE
+                  pipeline_run_events,
+                  pipeline_target_status,
+                  pipeline_run_status,
+                  pipeline_run_scopes,
                   pipeline_stage_artifacts,
                   pipeline_runs,
                   attachment_artifacts,

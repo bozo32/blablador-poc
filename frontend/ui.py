@@ -9,6 +9,7 @@ import pathlib
 import re
 import sys
 import tempfile
+from datetime import datetime, timezone
 
 import graphviz
 import pandas as pd
@@ -34,6 +35,7 @@ from frontend import (
     evidence_store,
     judgment_api,
     judgment_store,
+    workflow_api,
 )
 from frontend.components import chase_queue as chase_queue_component
 from frontend.components import chasing_panel
@@ -2950,6 +2952,29 @@ def render_evidence_panel() -> None:
                         provenance=provenance,
                     )
                     if stored is not None:
+                        if str(status) == "final":
+                            verdict_value = None if verdict is None else str(verdict)
+                            rollup = {
+                                "support": "supports",
+                                "contradict": "contradicts",
+                                "uncertain": "inconsistent",
+                                None: "silent",
+                            }.get(verdict_value, "silent")
+                            try:
+                                workflow_api.finalize_assessment(
+                                    get_api_url(),
+                                    claim_id=str(selected_claim),
+                                    reviewer_uid=str(active_reviewer_uid),
+                                    citing_doc_id=str(provenance.get("doc_id") or ""),
+                                    judgment_snapshot=dict(stored or {}),
+                                    rollup_label=rollup,
+                                    by_target=None,
+                                    assessed_at=datetime.now(timezone.utc)
+                                    .isoformat()
+                                    .replace("+00:00", "Z"),
+                                )
+                            except Exception as exc:
+                                st.warning(f"Assessment mirror failed: {exc}")
                         st.session_state[flash_key] = True
                         st.session_state[notes_open_key] = False
                         _rerun()

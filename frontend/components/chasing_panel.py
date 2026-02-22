@@ -8,8 +8,6 @@ from typing import Callable, Optional
 
 import streamlit as st
 
-from frontend import claim_queue as claim_queue_state
-from frontend import evidence_store
 from frontend.state_keys import (
     canonical_context_edit_key,
     canonical_segments_key,
@@ -18,6 +16,8 @@ from frontend.state_keys import (
 from frontend.ingestion_api import auto_place_claim_source, confirm_claims
 from frontend.citation_anchors import maybe_attach_citation_anchor
 from frontend import judgment_api
+from frontend import workflow_api
+from frontend.components import chase_queue as chase_queue_component
 
 
 def _segment_locally(text: str, base_index: int) -> list[str]:
@@ -323,8 +323,6 @@ def render(
                     f"cite:{doc_id}:{int(citation_index)}:{reviewer_state}:{segment_id}"
                 )
 
-                previous = claim_queue_state.get_claim_record(claim_id) or {}
-                previous_text = (previous.get("claim") or "").strip()
                 claim_queue_register(
                     claim_id,
                     claim=claim_text,
@@ -348,13 +346,7 @@ def render(
                     if (resp or {}).get("attachment"):
                         placed += 1
 
-                if claim_text.strip() and claim_text.strip() != previous_text:
-                    evidence_store.queue_rerun(
-                        claim_id,
-                        claim_text=claim_text,
-                        note="auto-claim-save",
-                        quiet=True,
-                    )
+                # Evidence reruns are orchestrator-owned in the happy path.
 
             st.caption(
                 f"Accepted {len(lines)} claim(s). "
@@ -483,8 +475,6 @@ def render(
                 f"cite:{doc_id}:{int(citation_index)}:{reviewer_state}:{segment_id}"
             )
 
-            previous = claim_queue_state.get_claim_record(claim_id) or {}
-            previous_text = (previous.get("claim") or "").strip()
             claim_queue_register(
                 claim_id,
                 claim=claim_text,
@@ -510,13 +500,23 @@ def render(
                 if (resp or {}).get("attachment"):
                     placed += 1
 
-            if claim_text.strip() and claim_text.strip() != previous_text:
-                evidence_store.queue_rerun(
-                    claim_id,
-                    claim_text=claim_text,
-                    note="auto-claim-save",
-                    quiet=True,
+            # Mint a new workflow run for this claimspan.
+            try:
+                out = workflow_api.start_claimspan_run(
+                    api_url,
+                    claim_id=str(claim_id),
+                    reviewer_uid=str(reviewer_label),
+                    citing_doc_id=str(doc_id),
                 )
+                run_id = str((out or {}).get("run_id") or "").strip() or None
+                if run_id:
+                    st.session_state.setdefault("workflow_runs_by_claim_id", {})[
+                        claim_id
+                    ] = run_id
+            except Exception:
+                pass
+
+            # Evidence reruns are orchestrator-owned in the happy path.
         st.caption(
             f"Saved {len(lines)} claim(s). Auto-placed sources for {placed} claim(s)."
         )
@@ -529,6 +529,113 @@ def render(
         }
         st.session_state[mode_key] = "own"
         rerun()
+
+    # ------------------------------------------------------------------
+    # Workflow status (polling-first)
+    # ------------------------------------------------------------------
+    accepted_lines = reviewer_segments.get(cite_key) or []
+    if isinstance(accepted_lines, list) and accepted_lines:
+        st.markdown("**Workflow**")
+        runs_by_claim = st.session_state.setdefault("workflow_runs_by_claim_id", {})
+        if not isinstance(runs_by_claim, dict):
+            runs_by_claim = {}
+            st.session_state["workflow_runs_by_claim_id"] = runs_by_claim
+
+        status_cache = st.session_state.setdefault("workflow_status_cache", {})
+        if not isinstance(status_cache, dict):
+            status_cache = {}
+            st.session_state["workflow_status_cache"] = status_cache
+
+        def _rollup_icon(state: str) -> str:
+            s = str(state or "").strip().lower()
+            if s in {"complete"}:
+                return "<span style='color:#2f9e44'>●</span>"
+            if s in {"partial", "blocked", "queued", "running"}:
+                return "<span style='color:#f59f00'>●</span>"
+            if s in {"error"}:
+                return "<span style='color:#e03131'>●</span>"
+            if s in {"cancelled"}:
+                return "<span style='color:#495057'>●</span>"
+            return "<span style='color:#adb5bd'>●</span>"
+
+        selected_claim_id = str(
+            st.session_state.get("workflow_selected_claim_id") or ""
+        ).strip()
+        if not selected_claim_id:
+            first = to_segment_dict(str(accepted_lines[0] or ""))
+            seg0 = first.get("segment_id") or "seg-1"
+            selected_claim_id = (
+                f"cite:{doc_id}:{int(citation_index)}:{reviewer_state}:{seg0}"
+            )
+            st.session_state["workflow_selected_claim_id"] = selected_claim_id
+
+        for idx, line in enumerate(accepted_lines):
+            parsed = to_segment_dict(str(line))
+            segment_id = parsed.get("segment_id") or f"seg-{idx+1}"
+            claim_id = (
+                f"cite:{doc_id}:{int(citation_index)}:{reviewer_state}:{segment_id}"
+            )
+            run_id = runs_by_claim.get(claim_id)
+            if not run_id:
+                try:
+                    latest = workflow_api.get_latest_run(
+                        api_url,
+                        claim_id=claim_id,
+                        reviewer_uid=reviewer_label,
+                    )
+                except Exception:
+                    latest = None
+                run_id = (
+                    (latest or {}).get("run_id") if isinstance(latest, dict) else None
+                )
+                if run_id:
+                    runs_by_claim[claim_id] = run_id
+
+            run_state = "requested"
+            if run_id:
+                cached = status_cache.get(run_id)
+                if isinstance(cached, dict):
+                    run_state = str(
+                        ((cached.get("run") or {}).get("state")) or run_state
+                    )
+                else:
+                    try:
+                        cached = workflow_api.get_run_status(api_url, run_id=run_id)
+                        status_cache[run_id] = cached
+                        run_state = str(
+                            ((cached.get("run") or {}).get("state")) or run_state
+                        )
+                    except Exception:
+                        run_state = "error"
+
+            icon = _rollup_icon(run_state)
+            label = html.escape(str(line).split(".", 1)[0])
+            is_selected = claim_id == selected_claim_id
+            cols = st.columns([1, 6, 2], gap="small")
+            with cols[0]:
+                st.markdown(icon, unsafe_allow_html=True)
+            with cols[1]:
+                st.caption(f"{label}")
+            with cols[2]:
+                if st.button(
+                    "Details" if not is_selected else "Open",
+                    key=f"workflow-open::{claim_id}",
+                    use_container_width=True,
+                ):
+                    st.session_state["workflow_selected_claim_id"] = claim_id
+                    rerun()
+
+        selected_run_id = runs_by_claim.get(selected_claim_id)
+        if selected_run_id:
+            with st.expander("Requested works", expanded=True):
+                chase_queue_component.render_requested_works_queue(
+                    api_url=api_url,
+                    run_id=str(selected_run_id),
+                    claim_id=str(selected_claim_id),
+                    citing_doc_id=str(doc_id),
+                    reviewer_uid=reviewer_label,
+                    scope=f"workflow::{selected_claim_id}",
+                )
 
     st.markdown("**Retrieving**")
     reference_id = target_id or (context.get("reference") or {}).get("id")

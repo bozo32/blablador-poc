@@ -10,6 +10,15 @@ from typing import Callable, Dict, List, Optional
 
 import streamlit as st
 
+try:  # Optional dependency for timed polling
+    from streamlit_autorefresh import st_autorefresh
+except ImportError:  # pragma: no cover
+    st_autorefresh = None
+
+import requests
+
+from frontend import workflow_api
+
 
 def entry_key(citation_index: int, target_id: Optional[str]) -> str:
     return f"{int(citation_index)}:{target_id or ''}"
@@ -140,3 +149,132 @@ def render(
             st.markdown("---")
             render_panel(cite_idx, tgt, scope)
             st.markdown("---")
+
+
+def render_requested_works_queue(
+    *,
+    api_url: str,
+    run_id: str,
+    claim_id: str,
+    citing_doc_id: str,
+    reviewer_uid: str,
+    poll_ms: int = 1500,
+    scope: str = "queue",
+) -> None:
+    """Render the requested-works queue for a workflow run (polling-first)."""
+    rid = str(run_id or "").strip()
+    if not rid:
+        st.info("No workflow run yet.")
+        return
+
+    data = {}
+    try:
+        data = workflow_api.get_run_status(api_url, run_id=rid)
+    except Exception as exc:
+        st.warning(f"Workflow status unavailable: {exc}")
+        return
+
+    run = (data or {}).get("run") or {}
+    run_state = str((run or {}).get("state") or "").strip()
+
+    is_terminal = run_state in {"complete", "partial", "error", "cancelled"}
+    if not is_terminal and callable(st_autorefresh):  # pragma: no cover
+        st_autorefresh(
+            interval=int(poll_ms),
+            key=f"{scope}::autorefresh::{rid}",
+        )
+
+    queue = (data or {}).get("queue")
+    if not isinstance(queue, list):
+        queue = []
+
+    st.markdown("**Requested works**")
+    if not queue:
+        st.caption("No targets yet (citation mapping missing).")
+        return
+
+    try:
+        attachments_payload = requests.get(
+            f"{str(api_url).rstrip('/')}/attachments?archived=false",
+            timeout=15,
+        )
+        attachments_payload.raise_for_status()
+        attachments = (attachments_payload.json() or {}).get("attachments") or []
+    except Exception:
+        attachments = []
+    unassigned = [
+        a
+        for a in attachments
+        if isinstance(a, dict)
+        and not a.get("doc_id")
+        and not a.get("target_id")
+        and str(a.get("status") or "") == "matched"
+    ]
+
+    def _chip(state: str) -> str:
+        val = str(state or "").strip().lower()
+        mapping = {
+            "requested": "Requested",
+            "available": "Available",
+            "processing": "Processing",
+            "done": "Done",
+            "error": "Error",
+            "cancelled": "Cancelled",
+            "blocked": "Blocked",
+        }
+        return mapping.get(val, state or "Unknown")
+
+    for entry in queue:
+        if not isinstance(entry, dict):
+            continue
+        target_id = str(entry.get("target_id") or "").strip()
+        reference_id = str(entry.get("reference_id") or "").strip()
+        state = str(entry.get("state") or "").strip().lower()
+        attachment_id = str(entry.get("attachment_id") or "").strip() or None
+
+        label = reference_id or target_id or "(unknown target)"
+        cols = st.columns([5, 2], gap="small")
+        with cols[0]:
+            st.markdown(f"`{label}`")
+        with cols[1]:
+            st.caption(_chip(state))
+
+        if state == "requested" and unassigned:
+            options = [
+                f"{str(a.get('id'))} • {str(a.get('filename') or 'attachment.pdf')}"
+                for a in unassigned
+                if a.get("id")
+            ]
+            choice = st.selectbox(
+                "Assign from Source Bin",
+                options,
+                key=f"{scope}::assign::{rid}::{target_id}",
+                label_visibility="collapsed",
+            )
+            if st.button(
+                "Assign",
+                key=f"{scope}::assign-btn::{rid}::{target_id}",
+                use_container_width=True,
+            ):
+                attachment_id = str(choice).split(" • ", 1)[0].strip()
+                try:
+                    resp = requests.patch(
+                        f"{str(api_url).rstrip('/')}/attachments/{attachment_id}",
+                        json={
+                            "claim_id": str(claim_id),
+                            "doc_id": str(citing_doc_id),
+                            "citation_index": int(str(claim_id).split(":")[2])
+                            if ":" in str(claim_id)
+                            else None,
+                            "target_id": target_id,
+                        },
+                        timeout=30,
+                    )
+                    resp.raise_for_status()
+                    _ = workflow_api.resume_run(api_url, run_id=rid)
+                    st.caption("Assigned; resuming run...")
+                except Exception as exc:
+                    st.warning(f"Assign failed: {exc}")
+
+        if attachment_id:
+            st.caption(f"attachment_id={attachment_id}")

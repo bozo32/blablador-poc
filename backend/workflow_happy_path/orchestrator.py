@@ -400,6 +400,12 @@ def start_run_for_claimspan(
             if isinstance(a, dict) and a.get("citation_index") == citation_index
         ]
 
+    if not anchors:
+        idx = citation_index if citation_index is not None else 0
+        anchors = [
+            {"citation_index": int(idx), "reference_id": None, "target_id": None}
+        ]
+
     # Initialize targets in citation order.
     for pos, anchor in enumerate(anchors):
         if not isinstance(anchor, dict):

@@ -848,7 +848,14 @@ def _render_nav_surfing(*, api_url: str, seed_doc_id: str) -> None:
     st.markdown("**Actions**")
     can_route = bool(citing_doc_id and cite_idx is not None)
     resolved_ingest_id = str(data.get("resolved_ingest_id") or "").strip() or None
-    open_doc_id = resolved_ingest_id or citing_doc_id
+
+    open_doc_id = None
+    if selectable_type == "work":
+        # Only enable when this work is actually ingested/resolved.
+        open_doc_id = resolved_ingest_id
+    elif selectable_type in {"citespan", "claimspan", "edge"}:
+        # For span/edge selection, open the citing document.
+        open_doc_id = citing_doc_id
     cols = st.columns([1, 1, 1, 1, 1], gap="small")
     with cols[0]:
         if st.button(
@@ -885,7 +892,15 @@ def _render_nav_surfing(*, api_url: str, seed_doc_id: str) -> None:
             key=f"graph-nav-open-pdf::{sel_id}",
             disabled=not bool(open_doc_id),
         ):
-            _clear_active_callout()
+            if can_route and citing_doc_id:
+                _set_active_callout(
+                    doc_id=str(citing_doc_id),
+                    sentence_id=sentence_id,
+                    citation_index=int(cite_idx or 0),
+                    target_id=reference_id,
+                )
+            else:
+                _clear_active_callout()
             st.session_state["selected_doc_id"] = str(open_doc_id)
             st.session_state[WORKSPACE_ACTIVE_TAB] = WORKSPACE_TAB_DOCUMENT
             _rerun()

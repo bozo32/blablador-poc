@@ -5,7 +5,7 @@ from typing import Any, Optional
 
 import streamlit as st
 
-from frontend import graph_api, ledger_api
+from frontend import graph_api, ledger_api, nav_api, project_api
 from frontend.ingestion_api import (
     get_document_body,
     get_span_bundle,
@@ -70,6 +70,28 @@ def _seed_state() -> None:
     st.session_state.setdefault("surf_live_layout_nonce", 0)
     st.session_state.setdefault("surf_live_component_nonce", 0)
 
+    # Phase 10-03: graph navigation (backend /nav/*)
+    st.session_state.setdefault("graph_nav_selection", {})
+    st.session_state.setdefault("graph_nav_selected_context", None)
+    st.session_state.setdefault("graph_nav_selection_nonce", 0)
+    st.session_state.setdefault("graph_nav_last_event_seq_by_key", {})
+    st.session_state.setdefault("graph_nav_contexts_cache", {})
+    st.session_state.setdefault("graph_nav_focus", {})
+    st.session_state.setdefault("graph_nav_show_claimspans", True)
+    st.session_state.setdefault("graph_nav_follow_active", True)
+    st.session_state.setdefault("graph_nav_layout_nonce", 0)
+    st.session_state.setdefault("graph_nav_debug", False)
+
+    # Legacy caches/state (kept to avoid KeyError on old paths)
+    st.session_state.setdefault("surf_live_claim_cache", {})
+    st.session_state.setdefault("surf_live_ref_cache", {})
+    st.session_state.setdefault("surf_live_span_cache", {})
+    st.session_state.setdefault("surf_live_bundle_cache", {})
+    st.session_state.setdefault("surf_live_last_event_seq", 0)
+    st.session_state.setdefault("surf_live_citespan_followup", {})
+    st.session_state.setdefault("surf_live_open_todo_by_work", {})
+    st.session_state.setdefault("surf_live_todo_cap_by_work", {})
+
 
 def _active_reviewer_uid() -> str:
     meta = st.session_state.get("project_meta")
@@ -79,14 +101,6 @@ def _active_reviewer_uid() -> str:
             return value
     value2 = str(st.session_state.get("active_reviewer_uid") or "").strip()
     return value2 or "default"
-    st.session_state.setdefault("surf_live_claim_cache", {})
-    st.session_state.setdefault("surf_live_ref_cache", {})
-    st.session_state.setdefault("surf_live_span_cache", {})
-    st.session_state.setdefault("surf_live_bundle_cache", {})
-    st.session_state.setdefault("surf_live_last_event_seq", 0)
-    st.session_state.setdefault("surf_live_citespan_followup", {})
-    st.session_state.setdefault("surf_live_open_todo_by_work", {})
-    st.session_state.setdefault("surf_live_todo_cap_by_work", {})
 
 
 def _get_span_id(
@@ -386,8 +400,550 @@ def _set_active_callout(
     st.session_state["workflow_active_citation"] = int(citation_index)
 
 
+def _clear_active_callout() -> None:
+    st.session_state["citation_selected_index"] = None
+    st.session_state["citation_selected_target"] = None
+    st.session_state["citation_selected_sentence_id"] = None
+    st.session_state["selected_callout_tuple"] = None
+
+    # Mirror the cache-busting keys used by _set_active_callout.
+    st.session_state["citation_context_key"] = None
+    st.session_state["citation_context"] = None
+    st.session_state["citation_context_error"] = None
+    st.session_state["citation_last_context_request"] = None
+    st.session_state["citation_follow_open"] = False
+    st.session_state["citation_graph_key"] = None
+    st.session_state["citation_graph"] = None
+    st.session_state["citation_graph_error"] = None
+    st.session_state["citation_last_graph_request"] = None
+    st.session_state["workflow_active_citation"] = None
+
+
+def _rerun() -> None:
+    rerun = getattr(st, "rerun", None)
+    if callable(rerun):
+        rerun()
+        return
+    experimental = getattr(st, "experimental_rerun", None)
+    if callable(experimental):
+        experimental()
+        return
+    raise RuntimeError("Streamlit rerun is unavailable in this version")
+
+
+def _as_list(value: Any) -> list:
+    return value if isinstance(value, list) else []
+
+
+def _nav_work_id_from_node_id(node_id: str) -> Optional[str]:
+    text = str(node_id or "").strip()
+    if not text.startswith("work:"):
+        return None
+    wid = text.split("work:", 1)[1]
+    return wid.strip() or None
+
+
+def _persist_graph_settings(
+    *,
+    expanded_work_ids: Optional[list[str]] = None,
+    requested_work_ids: Optional[list[str]] = None,
+    cap: int = 500,
+) -> None:
+    try:
+        meta = project_api.get_meta()
+    except Exception as exc:
+        st.error(f"Project meta unavailable: {exc}")
+        return
+
+    graph_settings = meta.get("graph_settings") if isinstance(meta, dict) else None
+    graph_settings = graph_settings if isinstance(graph_settings, dict) else {}
+    gs = dict(graph_settings)
+
+    if expanded_work_ids is not None:
+        cleaned = [str(x) for x in (expanded_work_ids or []) if str(x).strip()]
+        gs["expanded_work_ids"] = cleaned[: int(cap)]
+    if requested_work_ids is not None:
+        cleaned = [str(x) for x in (requested_work_ids or []) if str(x).strip()]
+        gs["requested_work_ids"] = cleaned[: int(cap)]
+
+    try:
+        updated = project_api.put_meta({"graph_settings": gs})
+    except Exception as exc:
+        st.error(f"Failed to persist graph settings: {exc}")
+        return
+    if isinstance(updated, dict):
+        st.session_state["project_meta"] = updated
+
+
+def _render_nav_surfing(*, api_url: str, seed_doc_id: str) -> None:
+    reviewer_uid = _active_reviewer_uid()
+    show_claimspans = bool(st.session_state.get("graph_nav_show_claimspans"))
+    follow_active = bool(st.session_state.get("graph_nav_follow_active"))
+
+    controls = st.columns([1, 1, 1], gap="small")
+    with controls[0]:
+        st.toggle(
+            "Show claimspans",
+            key="graph_nav_show_claimspans",
+            help="Toggle claimspan density in the graph.",
+        )
+    with controls[1]:
+        st.toggle(
+            "Follow active citation",
+            key="graph_nav_follow_active",
+            help="When enabled, Surfing focuses the currently selected citation.",
+        )
+    with controls[2]:
+        if st.button(
+            "Reset layout",
+            key="graph-nav-reset-layout",
+            use_container_width=True,
+        ):
+            st.session_state["graph_nav_layout_nonce"] = (
+                int(st.session_state.get("graph_nav_layout_nonce") or 0) + 1
+            )
+            _rerun()
+
+    focus = _as_dict(st.session_state.get("graph_nav_focus"))
+    focus_type = str(focus.get("focus_type") or "").strip() or None
+    focus_id = str(focus.get("focus_id") or "").strip() or None
+
+    if follow_active:
+        active = st.session_state.get("selected_callout_tuple")
+        if isinstance(active, dict):
+            doc_id = str(active.get("doc_id") or "").strip()
+            target_id = str(active.get("target_id") or "").strip() or None
+            sentence_id = str(active.get("sentence_id") or "").strip() or None
+            try:
+                cite_idx = int(active.get("citation_index"))
+            except Exception:
+                cite_idx = None
+            if doc_id and cite_idx is not None:
+                try:
+                    span = lookup_citation_window_span(
+                        api_url,
+                        ingest_id=doc_id,
+                        citation_index=int(cite_idx),
+                        target_id=target_id,
+                    )
+                except Exception:
+                    span = {}
+                span_id = str(span.get("span_id") or "").strip() or None
+                if span_id:
+                    next_focus = {"focus_type": "citespan", "focus_id": span_id}
+                    if next_focus != focus:
+                        st.session_state["graph_nav_focus"] = next_focus
+                        focus_type = "citespan"
+                        focus_id = span_id
+                        st.session_state["graph_nav_selection"] = {
+                            "type": "node",
+                            "id": f"citespan:{span_id}",
+                        }
+                        st.session_state["graph_nav_selected_context"] = {
+                            "citing_doc_id": doc_id,
+                            "citation_index": int(cite_idx),
+                            "reference_id": target_id,
+                            "sentence_id": sentence_id,
+                        }
+
+    if not focus_type or not focus_id:
+        seed = str(seed_doc_id or "").strip()
+        if seed:
+            focus_type = "work"
+            focus_id = seed
+            st.session_state["graph_nav_focus"] = {
+                "focus_type": str(focus_type),
+                "focus_id": str(focus_id),
+            }
+        else:
+            st.info("Select a citation (Reading/Chasing) to focus Surfing.")
+            return
+
+    try:
+        payload = nav_api.get_nav_graph(
+            api_url,
+            reviewer_uid=reviewer_uid,
+            focus_type=focus_type,
+            focus_id=focus_id,
+            show_claimspans=bool(show_claimspans),
+        )
+    except Exception as exc:
+        st.error(f"Failed to load navigation graph: {exc}")
+        return
+
+    elements = _as_list(payload.get("elements"))
+    by_id: dict[str, dict] = {}
+    for el in elements:
+        if not isinstance(el, dict):
+            continue
+        data = el.get("data")
+        if not isinstance(data, dict):
+            continue
+        el_id = str(data.get("id") or "").strip()
+        if el_id:
+            by_id[el_id] = data
+
+    selection = _as_dict(st.session_state.get("graph_nav_selection"))
+    selection = {
+        "type": str(selection.get("type") or "").strip(),
+        "id": str(selection.get("id") or "").strip(),
+    }
+    selection = {k: v for k, v in selection.items() if v}
+
+    component_key = "surf-nav::cytoscape"
+    last_by_key = _as_dict(st.session_state.get("graph_nav_last_event_seq_by_key"))
+    last_seq = int(last_by_key.get(component_key) or 0)
+
+    style = [
+        {
+            "selector": "node",
+            "style": {
+                "label": "data(label)",
+                "font-size": 10,
+                "text-wrap": "wrap",
+                "text-max-width": 180,
+                "text-valign": "bottom",
+                "text-halign": "center",
+                "color": "#111827",
+                "background-color": "#e5e7eb",
+                "border-width": 1,
+                "border-color": "#111827",
+                "width": 20,
+                "height": 20,
+            },
+        },
+        {
+            "selector": "node[selectable_type = 'work']",
+            "style": {
+                "shape": "round-rectangle",
+                "background-color": "#2780e3",
+                "color": "#0b1220",
+                "width": 36,
+                "height": 26,
+            },
+        },
+        {
+            "selector": "node[selectable_type = 'citespan']",
+            "style": {
+                "shape": "ellipse",
+                "background-color": "#0f766e",
+                "width": 22,
+                "height": 22,
+            },
+        },
+        {
+            "selector": "node[selectable_type = 'claimspan']",
+            "style": {
+                "shape": "round-rectangle",
+                "background-color": "#6b7280",
+                "width": 26,
+                "height": 14,
+                "font-size": 9,
+            },
+        },
+        {
+            "selector": "node[state = 'missing']",
+            "style": {
+                "background-color": "#f3f4f6",
+                "border-style": "dashed",
+                "border-color": "#b91c1c",
+            },
+        },
+        {
+            "selector": "node[state = 'requested']",
+            "style": {
+                "background-color": "#fff7ed",
+                "border-color": "#b45309",
+                "border-width": 3,
+            },
+        },
+        {
+            "selector": "edge",
+            "style": {
+                "width": 2,
+                "line-color": "#cbd5e1",
+                "target-arrow-shape": "none",
+                "curve-style": "bezier",
+            },
+        },
+        {
+            "selector": ":selected",
+            "style": {
+                "border-width": 4,
+                "border-color": "#111827",
+                "line-color": "#111827",
+            },
+        },
+    ]
+
+    comp_value = cytoscape_panel.render(
+        elements,
+        style=style,
+        layout={"name": "dagre", "rankDir": "LR", "fit": True, "padding": 30},
+        options={
+            "stableLayout": True,
+            "layoutNonce": int(st.session_state.get("graph_nav_layout_nonce") or 0),
+        },
+        key=component_key,
+        selection=selection or {},
+    )
+
+    try:
+        evt_seq = int((_as_dict(comp_value)).get("seq") or 0)
+    except Exception:
+        evt_seq = 0
+    if evt_seq and evt_seq > last_seq:
+        last_by_key[component_key] = int(evt_seq)
+        st.session_state["graph_nav_last_event_seq_by_key"] = last_by_key
+
+        evt_type = str(comp_value.get("type") or "").strip()
+        evt_id = str(comp_value.get("id") or "").strip()
+        if evt_type in {"node", "edge"} and evt_id:
+            prev = _as_dict(st.session_state.get("graph_nav_selection"))
+            prev_id = str(prev.get("id") or "").strip()
+            st.session_state["graph_nav_selection"] = {"type": evt_type, "id": evt_id}
+            if evt_id != prev_id:
+                st.session_state["graph_nav_selected_context"] = None
+                st.session_state["graph_nav_selection_nonce"] = (
+                    int(st.session_state.get("graph_nav_selection_nonce") or 0) + 1
+                )
+        else:
+            st.session_state["graph_nav_selection"] = {}
+            st.session_state["graph_nav_selected_context"] = None
+
+    sel = _as_dict(st.session_state.get("graph_nav_selection"))
+    sel_id = str(sel.get("id") or "").strip()
+    if not sel_id:
+        st.caption("Click a node/edge to see actions.")
+        return
+
+    data = by_id.get(sel_id) or {}
+    selectable_type = str(data.get("selectable_type") or "").strip() or str(
+        sel.get("type") or ""
+    )
+    label = str(data.get("label") or sel_id)
+    state = str(data.get("state") or "available")
+
+    st.markdown("#### Selection")
+    st.caption(f"{label} | type={selectable_type} | state={state}")
+
+    routing = {
+        "citing_doc_id": data.get("citing_doc_id"),
+        "citation_index": data.get("citation_index"),
+        "reference_id": data.get("reference_id"),
+        "sentence_id": data.get("sentence_id"),
+    }
+
+    if selectable_type == "work":
+        work_id = str(data.get("work_id") or "").strip()
+        if work_id:
+            cache = _as_dict(st.session_state.get("graph_nav_contexts_cache"))
+            cache_key = f"{reviewer_uid}::{work_id}"
+            if cache_key not in cache:
+                try:
+                    cache[cache_key] = nav_api.get_work_contexts(
+                        api_url, work_id=work_id, reviewer_uid=reviewer_uid
+                    )
+                except Exception:
+                    cache[cache_key] = {}
+                st.session_state["graph_nav_contexts_cache"] = cache
+            ctx_payload = _as_dict(cache.get(cache_key))
+            rows = _as_list(ctx_payload.get("contexts"))
+            rows = [r for r in rows if isinstance(r, dict)]
+
+            chosen = st.session_state.get("graph_nav_selected_context")
+            chosen = chosen if isinstance(chosen, dict) else None
+            if len(rows) > 1:
+                st.markdown("**Choose citing context**")
+                options = list(range(len(rows)))
+
+                def _label(idx: int) -> str:
+                    r = rows[idx] or {}
+                    did = str(r.get("citing_doc_id") or "?")
+                    ci = r.get("citation_index")
+                    ref = str(r.get("reference_id") or "")
+                    snip = str(r.get("snippet") or "").strip()
+                    left = f"{did} | cite={ci} | {ref}" if ref else f"{did} | cite={ci}"
+                    return (left + (f" | {snip}" if snip else "")).strip()
+
+                # Locked: always ask for context when ambiguous; do not remember
+                # the prior choice across different selections.
+                nonce = int(st.session_state.get("graph_nav_selection_nonce") or 0)
+                choice_key = f"graph_nav_ctx_choice::{sel_id}::{nonce}"
+                idx = st.selectbox(
+                    "Context",
+                    options,
+                    format_func=_label,
+                    key=choice_key,
+                    label_visibility="collapsed",
+                )
+                try:
+                    chosen = rows[int(idx)]
+                except Exception:
+                    chosen = None
+            elif len(rows) == 1:
+                chosen = rows[0]
+
+            if isinstance(chosen, dict):
+                st.session_state["graph_nav_selected_context"] = chosen
+                routing.update(
+                    {
+                        "citing_doc_id": chosen.get("citing_doc_id"),
+                        "citation_index": chosen.get("citation_index"),
+                        "reference_id": chosen.get("reference_id"),
+                        "sentence_id": chosen.get("sentence_id"),
+                    }
+                )
+
+    citing_doc_id = str(routing.get("citing_doc_id") or "").strip() or None
+    citation_index = routing.get("citation_index")
+    try:
+        cite_idx = int(citation_index) if citation_index is not None else None
+    except Exception:
+        cite_idx = None
+    reference_id = str(routing.get("reference_id") or "").strip() or None
+    sentence_id = str(routing.get("sentence_id") or "").strip() or None
+
+    non_available = state in {"missing", "requested", "blocked", "error", "cancelled"}
+    if non_available:
+        st.markdown("**Retrieval**")
+        if not citing_doc_id or cite_idx is None or not reference_id:
+            st.caption("Pick a citing context to view retrieval details.")
+        else:
+            try:
+                dossier = nav_api.get_reference_retrieval(
+                    api_url, doc_id=citing_doc_id, reference_id=reference_id
+                )
+            except Exception as exc:
+                dossier = {"error": str(exc)}
+            canonical = str(dossier.get("canonical_citation") or "").strip()
+            if canonical:
+                st.markdown(f"**{canonical}**")
+            doi = str(dossier.get("doi") or "").strip()
+            if doi:
+                st.caption(f"DOI: https://doi.org/{doi}")
+            primary = str(dossier.get("primary_url") or "").strip()
+            if primary:
+                try:
+                    st.link_button("Open source", primary, width="stretch")
+                except TypeError:
+                    st.link_button("Open source", primary)
+            manual = str(dossier.get("manual_instructions") or "").strip()
+            if manual:
+                st.code(manual, language="text")
+
+            sources = dossier.get("sources") or []
+            if isinstance(sources, list) and sources:
+                with st.expander("Sources", expanded=False):
+                    for src in sources[:5]:
+                        if not isinstance(src, dict):
+                            continue
+                        s_label = str(src.get("label") or "source")
+                        s_url = str(src.get("url") or "").strip()
+                        if s_url:
+                            st.markdown(f"- **{s_label}:** {s_url}")
+                        else:
+                            st.markdown(f"- **{s_label}**")
+
+    st.markdown("**Actions**")
+    can_route = bool(citing_doc_id and cite_idx is not None)
+    resolved_ingest_id = str(data.get("resolved_ingest_id") or "").strip() or None
+    open_doc_id = resolved_ingest_id or citing_doc_id
+    cols = st.columns([1, 1, 1, 1, 1], gap="small")
+    with cols[0]:
+        if st.button(
+            "Go Read", key=f"graph-nav-go-read::{sel_id}", disabled=not can_route
+        ):
+            _set_active_callout(
+                doc_id=str(citing_doc_id),
+                sentence_id=sentence_id,
+                citation_index=int(cite_idx or 0),
+                target_id=reference_id,
+            )
+            st.session_state[WORKSPACE_ACTIVE_TAB] = WORKSPACE_TAB_DOCUMENT
+            _rerun()
+    with cols[1]:
+        if st.button(
+            "Go Chase", key=f"graph-nav-go-chase::{sel_id}", disabled=not can_route
+        ):
+            _set_active_callout(
+                doc_id=str(citing_doc_id),
+                sentence_id=sentence_id,
+                citation_index=int(cite_idx or 0),
+                target_id=reference_id,
+            )
+            st.session_state["chase_intent"] = {
+                "doc_id": str(citing_doc_id),
+                "citation_index": int(cite_idx or 0),
+                "target_id": reference_id,
+            }
+            st.session_state[WORKSPACE_ACTIVE_TAB] = WORKSPACE_TAB_REVIEW
+            _rerun()
+    with cols[2]:
+        if st.button(
+            "Open PDF",
+            key=f"graph-nav-open-pdf::{sel_id}",
+            disabled=not bool(open_doc_id),
+        ):
+            _clear_active_callout()
+            st.session_state["selected_doc_id"] = str(open_doc_id)
+            st.session_state[WORKSPACE_ACTIVE_TAB] = WORKSPACE_TAB_DOCUMENT
+            _rerun()
+    with cols[3]:
+        work_id = _nav_work_id_from_node_id(sel_id)
+        if st.button(
+            "Expand", key=f"graph-nav-expand::{sel_id}", disabled=not bool(work_id)
+        ):
+            meta = {}
+            try:
+                meta = project_api.get_meta()
+            except Exception:
+                meta = {}
+            gs = _as_dict((meta or {}).get("graph_settings"))
+            expanded = [
+                str(x) for x in (gs.get("expanded_work_ids") or []) if str(x).strip()
+            ]
+            if work_id and work_id not in expanded:
+                expanded.append(work_id)
+            _persist_graph_settings(expanded_work_ids=expanded)
+            _rerun()
+    with cols[4]:
+        work_id = _nav_work_id_from_node_id(sel_id)
+        can_request = bool(
+            work_id
+            and state in {"missing", "requested", "blocked", "error", "cancelled"}
+        )
+        if can_request:
+            meta = {}
+            try:
+                meta = project_api.get_meta()
+            except Exception:
+                meta = {}
+            gs = _as_dict((meta or {}).get("graph_settings"))
+            requested = [
+                str(x) for x in (gs.get("requested_work_ids") or []) if str(x).strip()
+            ]
+            is_requested = work_id in requested
+            label_btn = "Cancel request" if is_requested else "Request"
+            if st.button(label_btn, key=f"graph-nav-request::{sel_id}"):
+                if is_requested:
+                    requested = [x for x in requested if x != work_id]
+                else:
+                    requested.append(work_id)
+                _persist_graph_settings(requested_work_ids=requested)
+                _rerun()
+        else:
+            st.empty()
+
+
 def render(*, api_url: str, seed_doc_id: str) -> None:
     _seed_state()
+
+    # Phase 10-03: primary Surfing mode is /nav-backed graph navigation.
+    _render_nav_surfing(
+        api_url=str(api_url or "").strip(), seed_doc_id=str(seed_doc_id or "").strip()
+    )
+    return
 
     reviewer_uid = _active_reviewer_uid()
 

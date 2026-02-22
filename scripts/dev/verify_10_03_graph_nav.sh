@@ -70,74 +70,89 @@ def req(method: str, path: str, **kwargs) -> dict:
 
 
 repo = Path(".").resolve()
-fixtures = [repo / "fixtures" / "text-1.pdf", repo / "fixtures" / "sample.pdf"]
+fixtures = [repo / "fixtures" / "sample.pdf", repo / "fixtures" / "text-1.pdf"]
 fixtures = [p for p in fixtures if p.exists()]
 if not fixtures:
-    raise RuntimeError("missing fixtures: fixtures/text-1.pdf and fixtures/sample.pdf")
+    raise RuntimeError("missing fixtures: fixtures/sample.pdf or fixtures/text-1.pdf")
+
+
+def find_first_citation(body: dict) -> tuple[str, str, int, str]:
+    for para in body.get("paragraphs") or []:
+        for sent in (para or {}).get("sentences") or []:
+            sentence_id = str(sent.get("sentence_id") or "").strip() or None
+            segments = sent.get("segments") or []
+            bits = []
+            found = None
+            for seg in segments:
+                if not isinstance(seg, dict):
+                    continue
+                t = str(seg.get("type") or "").strip()
+                if t == "text":
+                    bits.append(str(seg.get("text") or "").strip())
+                elif t == "citation":
+                    bits.append(str(seg.get("callout") or "").strip())
+                    try:
+                        citation_index = int(seg.get("citation_index"))
+                    except Exception:
+                        continue
+                    target_id = str(seg.get("target_id") or "").strip() or None
+                    if sentence_id and target_id is not None:
+                        found = (sentence_id, citation_index, target_id)
+            sentence_text = " ".join(bit for bit in bits if bit).strip() or None
+            if found and sentence_text:
+                sid, idx, tid = found
+                return sid, sentence_text, int(idx), str(tid)
+    raise RuntimeError(
+        "fixture did not yield any citation segments with citation_index + target_id"
+    )
+
 
 doc_id = None
+seed = None
 for pdf in fixtures:
     did = e2e_flow.upload_pdf(pdf)
     e2e_flow.trigger_extract(did)
     state, _spine = e2e_flow.poll_attempt(did, timeout_s=240)
-    if state in {"succeeded", "partial"}:
-        doc_id = did
-        break
+    if state not in {"succeeded", "partial"}:
+        continue
+    body = e2e_flow.get_body(did)
+    if len(body.get("paragraphs") or []) == 0:
+        e2e_flow.force_fallback(did)
+        _ = e2e_flow.poll_until_artifact(
+            did, artifact_type="fallback.body.txt", timeout_s=240
+        )
+        body = e2e_flow.get_body(did)
+    try:
+        sentence_id, sentence_text, citation_index, target_id = find_first_citation(body)
+    except Exception:
+        continue
+    doc_id = did
+    seed = {
+        "sentence_id": sentence_id,
+        "sentence_text": sentence_text,
+        "citation_index": int(citation_index),
+        "target_id": str(target_id),
+    }
+    break
 
-if not doc_id:
-    raise RuntimeError("no fixture produced a successful extraction attempt")
-
-ref_id = "ref-1"
-
-body = e2e_flow.get_body(doc_id)
-if len(body.get("paragraphs") or []) == 0:
-    e2e_flow.force_fallback(doc_id)
-    _ = e2e_flow.poll_until_artifact(doc_id, artifact_type="fallback.body.txt", timeout_s=240)
-    body = e2e_flow.get_body(doc_id)
-
-sentence_id = None
-sentence_text = None
-for para in body.get("paragraphs") or []:
-    for sent in (para or {}).get("sentences") or []:
-        sentence_id = str(sent.get("sentence_id") or "").strip() or None
-        segments = sent.get("segments") or []
-        bits = []
-        for seg in segments:
-            if not isinstance(seg, dict):
-                continue
-            t = str(seg.get("type") or "").strip()
-            if t == "text":
-                bits.append(str(seg.get("text") or "").strip())
-            elif t == "citation":
-                bits.append(str(seg.get("callout") or "").strip())
-        sentence_text = " ".join(bit for bit in bits if bit).strip() or None
-        if sentence_id and sentence_text:
-            break
-    if sentence_id and sentence_text:
-        break
-if not sentence_id or not sentence_text:
-    raise RuntimeError("no sentence available for claim confirmation")
-
-c = {
-    "sentence_id": sentence_id,
-    "sentence_text": sentence_text,
-    "target_id": ref_id,
-    "citation_index": 0,
-}
+if not doc_id or not seed:
+    raise RuntimeError(
+        "no fixture produced an extracted body with at least one citation segment"
+    )
 
 payload = {
     "document_id": doc_id,
-    "sentence_id": c["sentence_id"],
-    "sentence_text": c["sentence_text"],
-    "citation_index": int(c["citation_index"]),
-    "target_id": c["target_id"],
+    "sentence_id": seed["sentence_id"],
+    "sentence_text": seed["sentence_text"],
+    "citation_index": int(seed["citation_index"]),
+    "target_id": seed["target_id"],
     "segmentation_model": "e2e",
     "reviewer_uid": "default",
     "confirmed_claims": [
         {
             "claim_index": 1,
-            "parsed_text": c["sentence_text"] or "seed",
-            "original_text": c["sentence_text"] or "seed",
+            "parsed_text": seed["sentence_text"] or "seed",
+            "original_text": seed["sentence_text"] or "seed",
             "confidence": 0.5,
         }
     ],
@@ -149,8 +164,8 @@ span = req(
     "/spans/lookup-citation-window",
     params={
         "ingest_id": doc_id,
-        "citation_index": int(c["citation_index"]),
-        "target_id": c["target_id"],
+        "citation_index": int(seed["citation_index"]),
+        "target_id": seed["target_id"],
     },
 )
 span_id = str(span.get("span_id") or "").strip()
@@ -192,40 +207,52 @@ for el in elements:
     if wid and wid != doc_id:
         work_ids.append(wid)
 
-if work_ids:
-    work_id = work_ids[0]
-    contexts = req(
-        "GET",
-        f"/nav/works/{work_id}/contexts",
-        params={"reviewer_uid": "default"},
-    )
-    rows = contexts.get("contexts") or []
-    if not isinstance(rows, list) or not rows:
-        raise RuntimeError("expected >=1 /nav/works contexts")
-    row0 = rows[0] or {}
-    citing_doc_id = str(row0.get("citing_doc_id") or "").strip()
-    reference_id = str(row0.get("reference_id") or "").strip()
-    if not citing_doc_id or not reference_id:
-        raise RuntimeError("contexts row missing citing_doc_id/reference_id")
+claimspan_nodes = [
+    el
+    for el in elements
+    if isinstance(el, dict)
+    and isinstance(el.get("data"), dict)
+    and (el.get("data") or {}).get("selectable_type") == "claimspan"
+]
+if not claimspan_nodes:
+    raise RuntimeError("expected claimspan nodes when show_claimspans=true")
 
-    dossier = req(
-        "GET",
-        f"/references/{citing_doc_id}/{reference_id}/retrieval",
+if not work_ids:
+    raise RuntimeError("expected at least one cited work node")
+
+work_id = work_ids[0]
+contexts = req(
+    "GET",
+    f"/nav/works/{work_id}/contexts",
+    params={"reviewer_uid": "default"},
+)
+rows = contexts.get("contexts") or []
+if not isinstance(rows, list) or not rows:
+    raise RuntimeError("expected >=1 /nav/works contexts")
+row0 = rows[0] or {}
+citing_doc_id = str(row0.get("citing_doc_id") or "").strip()
+reference_id = str(row0.get("reference_id") or "").strip()
+if not citing_doc_id or not reference_id:
+    raise RuntimeError("contexts row missing citing_doc_id/reference_id")
+
+dossier = req(
+    "GET",
+    f"/references/{citing_doc_id}/{reference_id}/retrieval",
+)
+canonical = str(dossier.get("canonical_citation") or "").strip()
+if not canonical:
+    raise RuntimeError("retrieval dossier missing canonical_citation")
+has_any = bool(
+    str(dossier.get("manual_instructions") or "").strip()
+    or str(dossier.get("primary_url") or "").strip()
+    or (
+        isinstance(dossier.get("sources"), list)
+        and dossier.get("sources")
+        and str((dossier.get("sources")[0] or {}).get("url") or "").strip()
     )
-    canonical = str(dossier.get("canonical_citation") or "").strip()
-    if not canonical:
-        raise RuntimeError("retrieval dossier missing canonical_citation")
-    has_any = bool(
-        str(dossier.get("manual_instructions") or "").strip()
-        or str(dossier.get("primary_url") or "").strip()
-        or (
-            isinstance(dossier.get("sources"), list)
-            and dossier.get("sources")
-            and str((dossier.get("sources")[0] or {}).get("url") or "").strip()
-        )
-    )
-    if not has_any:
-        raise RuntimeError("retrieval dossier missing instructions/urls")
+)
+if not has_any:
+    raise RuntimeError("retrieval dossier missing instructions/urls")
 
 print("OK: verify_10_03_graph_nav")
 PY

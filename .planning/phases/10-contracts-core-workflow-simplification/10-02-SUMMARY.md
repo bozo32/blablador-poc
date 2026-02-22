@@ -80,7 +80,7 @@ Each task was committed atomically:
 2. **Task 2: Happy-path orchestrator + /workflow API + assessment stage write path** - `ca09e0a` (feat)
 3. **Task 3: Streamlit polling UX + tests + verifier script** - `4009077`, `eb07a86` (feat/fix)
 
-**Plan metadata:** [to be filled by docs commit]
+**Plan metadata:** `0d4c42d` (docs: complete plan)
 
 ## Files Created/Modified
 - `backend/db/migrate.py` - Adds Phase 10-02 run-status DDL (idempotent migrations).

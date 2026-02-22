@@ -1932,3 +1932,190 @@ class SpanGraphStore:
             "claim_spans": claim_spans_payload,
             "include_history": bool(include_history),
         }
+
+    # --- Nav helpers (Phase 10-03) ----------------------------------------
+
+    def list_citing_contexts_for_work(
+        self,
+        *,
+        work_id: str,
+        reviewer_uid: str,
+        limit: int = 500,
+    ) -> List[dict]:
+        """List citing contexts for a cited work.
+
+        Contexts are derived from span-graph cite rows and enriched (best-effort)
+        with confirmed_claims snippet/sentence_id for the given reviewer.
+        """
+        pid = self._project_id()
+        wid = str(work_id or "").strip()
+        reviewer = str(reviewer_uid or "").strip() or "default"
+        if not wid:
+            return []
+
+        out: List[dict] = []
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT DISTINCT ON (
+                      s.ingest_id,
+                      COALESCE(c.citation_index, 1000000),
+                      COALESCE(c.reference_id, '')
+                    )
+                      s.ingest_id AS citing_doc_id,
+                      c.citation_index,
+                      c.reference_id,
+                      cc.sentence_id,
+                      cc.claim_index,
+                      cc.parsed_text
+                    FROM span_graph_span_cites c
+                    JOIN span_graph_spans s
+                      ON s.project_id=c.project_id
+                     AND s.span_id=c.span_id
+                    LEFT JOIN confirmed_claims cc
+                      ON cc.project_id=c.project_id
+                     AND cc.document_id=s.ingest_id
+                     AND cc.citation_index=c.citation_index
+                     AND cc.target_id=c.reference_id
+                     AND cc.reviewer_uid=%s
+                    WHERE c.project_id=%s
+                      AND c.cited_work_id=%s
+                      AND s.kind='citation_window'
+                    ORDER BY
+                      s.ingest_id ASC,
+                      COALESCE(c.citation_index, 1000000) ASC,
+                      COALESCE(c.reference_id, '') ASC,
+                      COALESCE(cc.claim_index, 1000000) ASC
+                    LIMIT %s
+                    """,
+                    (reviewer, pid, wid, int(limit)),
+                )
+                rows = cur.fetchall() or []
+
+        for (
+            citing_doc_id,
+            citation_index,
+            reference_id,
+            sentence_id,
+            claim_index,
+            parsed_text,
+        ) in rows:
+            snippet = None
+            try:
+                snippet = str(parsed_text or "").strip() or None
+            except Exception:
+                snippet = None
+            if snippet and len(snippet) > 260:
+                snippet = snippet[:259].rstrip() + "..."
+            out.append(
+                {
+                    "citing_doc_id": str(citing_doc_id or "").strip() or None,
+                    "citation_index": int(citation_index)
+                    if citation_index is not None
+                    else None,
+                    "reference_id": str(reference_id or "").strip() or None,
+                    "sentence_id": str(sentence_id or "").strip() or None,
+                    "claim_id": None,
+                    "snippet": snippet,
+                }
+            )
+
+        # Stable ordering for clients.
+        out.sort(
+            key=lambda r: (
+                str(r.get("citing_doc_id") or ""),
+                int(r.get("citation_index") or 1000000),
+                str(r.get("reference_id") or ""),
+                str(r.get("sentence_id") or ""),
+            )
+        )
+        return out
+
+    def list_spans_for_ingest(
+        self,
+        *,
+        ingest_id: str,
+        kind: Optional[str] = None,
+        limit: int = 50,
+    ) -> List[dict]:
+        pid = self._project_id()
+        iid = str(ingest_id or "").strip()
+        if not iid:
+            return []
+        clauses = ["project_id=%s", "ingest_id=%s"]
+        params: list[Any] = [pid, iid]
+        if kind:
+            clauses.append("kind=%s")
+            params.append(str(kind))
+        where = " AND ".join(clauses)
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT span_id
+                    FROM span_graph_spans
+                    WHERE {where}
+                    ORDER BY updated_at DESC, span_id ASC
+                    LIMIT %s
+                    """,
+                    tuple(params + [int(limit)]),
+                )
+                rows = cur.fetchall() or []
+        out: List[dict] = []
+        for (sid,) in rows:
+            span = self.get_span(str(sid))
+            if span:
+                out.append(span)
+        return out
+
+    def get_claim_span_by_id(self, *, claim_span_id: str) -> Optional[dict]:
+        pid = self._project_id()
+        csid = str(claim_span_id or "").strip()
+        if not csid:
+            return None
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                      claim_span_id,
+                      span_id,
+                      order_index,
+                      selector_json,
+                      created_at,
+                      updated_at
+                    FROM span_graph_claim_spans
+                    WHERE project_id=%s AND claim_span_id=%s
+                    """,
+                    (pid, csid),
+                )
+                row = cur.fetchone()
+        if not row:
+            return None
+        (
+            claim_span_id2,
+            span_id,
+            order_index,
+            selector_raw,
+            created_at,
+            updated_at,
+        ) = row
+        selector = selector_raw if isinstance(selector_raw, dict) else None
+        if selector_raw is not None and not isinstance(selector_raw, dict):
+            try:
+                selector = json.loads(selector_raw)
+            except Exception:
+                selector = None
+        return {
+            "claim_span_id": str(claim_span_id2),
+            "span_id": str(span_id),
+            "order_index": int(order_index or 0),
+            "selector": selector,
+            "created_at": created_at.isoformat().replace("+00:00", "Z")
+            if created_at is not None
+            else None,
+            "updated_at": updated_at.isoformat().replace("+00:00", "Z")
+            if updated_at is not None
+            else None,
+        }

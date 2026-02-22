@@ -235,15 +235,35 @@ def build_retrieval_dossier(
 ) -> schemas.ReferenceRetrievalResponse:
     # Indirection allows tests to monkeypatch document loading.
     document = get_ingested_document(doc_id)
-    reference = _find_reference_entry(document, reference_id)
     resolution_entry = _find_resolution_entry(document, reference_id)
 
+    # Best-effort: older extractions or fallback-only bodies may omit references.
+    # For graph navigation and retrieval guidance, return a usable dossier
+    # instead of 404ing on missing reference metadata.
+    try:
+        reference = _find_reference_entry(document, reference_id)
+        reference_missing = False
+    except FileNotFoundError:
+        reference = {"id": reference_id, "raw_reference": None, "grobid": {}}
+        reference_missing = True
+
     canonical = _canonical_citation(reference, resolution_entry)
+    if reference_missing and canonical == "Citation metadata unavailable":
+        canonical = f"Reference {reference_id}"
+
     doi = _normalize_doi((resolution_entry or {}).get("doi") or reference.get("doi"))
     primary_url = _select_best_url(resolution_entry or {}, reference)
     manual_notes = None
     if not primary_url:
-        manual_notes = _fallback_instructions(reference, resolution_entry)
+        if reference_missing:
+            manual_notes = (
+                "Reference metadata is missing from extraction. "
+                "Try re-running extraction/resolution for this document, or "
+                "open the citing PDF and search the bibliography for the "
+                f"reference id: {reference_id}."
+            )
+        else:
+            manual_notes = _fallback_instructions(reference, resolution_entry)
 
     sources = _resolve_sources(resolution_entry, reference)
 

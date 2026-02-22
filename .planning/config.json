@@ -1,7 +1,7 @@
 {
   "mode": "yolo",
   "depth": "comprehensive",
-  "parallelization": true,
+  "parallelization": false,
   "commit_docs": true,
   "model_profile": "quality",
   "workflow": {

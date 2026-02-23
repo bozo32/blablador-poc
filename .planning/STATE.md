@@ -12,16 +12,16 @@ Planning index: `.planning/PRIORITIES.md`
 ## Current Position
 
 Phase: 10 of 12 (Contracts + core workflow simplification)
-Plan: 3 of 7 (10-03 Graph as navigation)
-Status: Planning
-Last activity: 2026-02-22 — Created 10-02 execution summary (re-verified); continuing 10-03 planning
+Plan: 4 of 7 (10-04 Durable decisions/events)
+Status: Complete
+Last activity: 2026-02-23 — Completed 10-03 Graph as navigation; ready for 10-04
 
-Progress: █████████░░░ 74%
+Progress: ██████████░ 80%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 58
+- Total plans completed: 59
 - Average duration: 14 min
 - Total execution time: 3.6 hours
 
@@ -45,6 +45,8 @@ Progress: █████████░░░ 74%
 
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
+
+  - Surfing graph navigation uses seq-gated Cytoscape events and focus-based drill-down; Go Read/Go Chase enabled for work nodes with resolved_ingest_id (10-03).
 
   - Workflow happy path uses mutable Postgres run status + pollable stage_state_json; Streamlit is polling-first (10-02).
 
@@ -120,6 +122,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-02-22T11:02:44Z
-Stopped at: Completed 10-02-SUMMARY.md; ready for /gsd-plan-phase 10-03
+Last session: 2026-02-23T12:00:00Z
+Stopped at: Completed 10-03-SUMMARY.md; ready for /gsd-plan-phase 10-04
 Resume file: None

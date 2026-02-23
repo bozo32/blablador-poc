@@ -698,6 +698,7 @@ def _render_nav_surfing(*, api_url: str, seed_doc_id: str) -> None:
 
         evt_type = str(comp_value.get("type") or "").strip()
         evt_id = str(comp_value.get("id") or "").strip()
+        evt_action = str(comp_value.get("action") or "click").strip()
         if evt_type in {"node", "edge"} and evt_id:
             prev = _as_dict(st.session_state.get("graph_nav_selection"))
             prev_id = str(prev.get("id") or "").strip()
@@ -707,6 +708,44 @@ def _render_nav_surfing(*, api_url: str, seed_doc_id: str) -> None:
                 st.session_state["graph_nav_selection_nonce"] = (
                     int(st.session_state.get("graph_nav_selection_nonce") or 0) + 1
                 )
+
+            # Handle double-click for local drill-down
+            if evt_action == "dblclick" and evt_type == "node":
+                evt_data = by_id.get(evt_id) or {}
+                evt_sel_type = str(evt_data.get("selectable_type") or "").strip()
+                # Work double-click: focus on work to show its citespans
+                if evt_sel_type == "work":
+                    wid = str(evt_data.get("work_id") or "").strip()
+                    if wid:
+                        st.session_state["graph_nav_focus"] = {
+                            "focus_type": "work",
+                            "focus_id": wid,
+                        }
+                        st.session_state["graph_nav_selection"] = {
+                            "type": "node",
+                            "id": evt_id,
+                        }
+                        _rerun()
+                # Citespan double-click: focus on citespan to show its claimspans
+                elif evt_sel_type == "citespan":
+                    span_id = str(evt_data.get("span_id") or "").strip()
+                    if span_id:
+                        st.session_state["graph_nav_focus"] = {
+                            "focus_type": "citespan",
+                            "focus_id": span_id,
+                        }
+                        st.session_state["graph_nav_show_claimspans"] = True
+                        st.session_state["graph_nav_selection"] = {
+                            "type": "node",
+                            "id": evt_id,
+                        }
+                        st.session_state["graph_nav_selected_context"] = {
+                            "citing_doc_id": evt_data.get("citing_doc_id"),
+                            "citation_index": evt_data.get("citation_index"),
+                            "reference_id": evt_data.get("reference_id"),
+                            "sentence_id": evt_data.get("sentence_id"),
+                        }
+                        _rerun()
         else:
             st.session_state["graph_nav_selection"] = {}
             st.session_state["graph_nav_selected_context"] = None
@@ -848,42 +887,50 @@ def _render_nav_surfing(*, api_url: str, seed_doc_id: str) -> None:
     st.markdown("**Actions**")
     can_route = bool(citing_doc_id and cite_idx is not None)
     resolved_ingest_id = str(data.get("resolved_ingest_id") or "").strip() or None
+    can_route_work = selectable_type == "work" and bool(resolved_ingest_id)
+    can_go = can_route or can_route_work
 
     open_doc_id = None
     if selectable_type == "work":
-        # Only enable when this work is actually ingested/resolved.
-        open_doc_id = resolved_ingest_id
+        open_doc_id = resolved_ingest_id or citing_doc_id
     elif selectable_type in {"citespan", "claimspan", "edge"}:
-        # For span/edge selection, open the citing document.
         open_doc_id = citing_doc_id
     cols = st.columns([1, 1, 1, 1, 1], gap="small")
     with cols[0]:
         if st.button(
-            "Go Read", key=f"graph-nav-go-read::{sel_id}", disabled=not can_route
+            "Go Read", key=f"graph-nav-go-read::{sel_id}", disabled=not can_go
         ):
-            _set_active_callout(
-                doc_id=str(citing_doc_id),
-                sentence_id=sentence_id,
-                citation_index=int(cite_idx or 0),
-                target_id=reference_id,
-            )
+            if can_route:
+                _set_active_callout(
+                    doc_id=str(citing_doc_id),
+                    sentence_id=sentence_id,
+                    citation_index=int(cite_idx or 0),
+                    target_id=reference_id,
+                )
+            else:
+                _clear_active_callout()
+                st.session_state["selected_doc_id"] = str(resolved_ingest_id)
             st.session_state[WORKSPACE_ACTIVE_TAB] = WORKSPACE_TAB_DOCUMENT
             _rerun()
     with cols[1]:
         if st.button(
-            "Go Chase", key=f"graph-nav-go-chase::{sel_id}", disabled=not can_route
+            "Go Chase", key=f"graph-nav-go-chase::{sel_id}", disabled=not can_go
         ):
-            _set_active_callout(
-                doc_id=str(citing_doc_id),
-                sentence_id=sentence_id,
-                citation_index=int(cite_idx or 0),
-                target_id=reference_id,
-            )
-            st.session_state["chase_intent"] = {
-                "doc_id": str(citing_doc_id),
-                "citation_index": int(cite_idx or 0),
-                "target_id": reference_id,
-            }
+            if can_route:
+                _set_active_callout(
+                    doc_id=str(citing_doc_id),
+                    sentence_id=sentence_id,
+                    citation_index=int(cite_idx or 0),
+                    target_id=reference_id,
+                )
+                st.session_state["chase_intent"] = {
+                    "doc_id": str(citing_doc_id),
+                    "citation_index": int(cite_idx or 0),
+                    "target_id": reference_id,
+                }
+            else:
+                _clear_active_callout()
+                st.session_state["selected_doc_id"] = str(resolved_ingest_id)
             st.session_state[WORKSPACE_ACTIVE_TAB] = WORKSPACE_TAB_REVIEW
             _rerun()
     with cols[2]:

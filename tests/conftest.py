@@ -28,6 +28,9 @@ def _truncate_spine_backed_tables() -> None:
             cur.execute(
                 """
                 TRUNCATE
+                  evidence_decision_targets,
+                  evidence_decision_events,
+                  evidence_decision_streams,
                   pipeline_run_events,
                   pipeline_target_status,
                   pipeline_run_status,

@@ -957,6 +957,78 @@ _DDL_STATEMENTS: list[str] = [
     CREATE INDEX IF NOT EXISTS pipeline_run_events_project_run_event_idx
       ON pipeline_run_events(project_id, run_id, event_id);
     """,
+    # ---------------------------------------------------------------------
+    # Phase 10-04: Evidence decision events (append-only + projection)
+    # ---------------------------------------------------------------------
+    """
+    CREATE TABLE IF NOT EXISTS evidence_decision_streams (
+      project_id text NOT NULL DEFAULT 'default',
+      claim_id text NOT NULL,
+      reviewer_uid text NOT NULL,
+      version int NOT NULL DEFAULT 0,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      created_by_user_id text NOT NULL DEFAULT 'local',
+      PRIMARY KEY(project_id, claim_id, reviewer_uid)
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS evidence_decision_events (
+      event_id bigserial PRIMARY KEY,
+      event_uid text NOT NULL,
+      project_id text NOT NULL DEFAULT 'default',
+      claim_id text NOT NULL,
+      reviewer_uid text NOT NULL,
+      created_by_user_id text NOT NULL DEFAULT 'local',
+      idempotency_key text NOT NULL,
+      action text NOT NULL,
+      target_attachment_id text NULL,
+      target_span_id text NULL,
+      target_key text NULL,
+      expected_version int NOT NULL,
+      resulting_version int NOT NULL,
+      request_fingerprint text NOT NULL,
+      payload_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS evidence_decision_events_stream_idempotency_uniq
+      ON evidence_decision_events(project_id, claim_id, reviewer_uid, idempotency_key);
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS evidence_decision_events_project_event_uid_uniq
+      ON evidence_decision_events(project_id, event_uid);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS evidence_decision_events_stream_timeline_idx
+      ON evidence_decision_events(project_id, claim_id, reviewer_uid, event_id DESC);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS evidence_decision_events_stream_target_idx
+      ON evidence_decision_events(project_id, claim_id, reviewer_uid, target_key);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS evidence_decision_targets (
+      project_id text NOT NULL DEFAULT 'default',
+      claim_id text NOT NULL,
+      reviewer_uid text NOT NULL,
+      target_key text NOT NULL,
+      attachment_id text NOT NULL,
+      span_id text NOT NULL,
+      pinned boolean NOT NULL DEFAULT false,
+      triage text NOT NULL DEFAULT 'none',
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      last_event_id bigint NULL,
+      last_event_uid text NULL,
+      PRIMARY KEY(project_id, claim_id, reviewer_uid, target_key)
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS evidence_decision_targets_stream_pinned_idx
+      ON evidence_decision_targets(project_id, claim_id, reviewer_uid)
+      WHERE pinned=true;
+    """,
 ]
 
 

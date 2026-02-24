@@ -89,6 +89,7 @@ from backend.spine.jobs import list_jobs_for_attempt
 from backend.spine.documents import (
     ensure_project_document,
     get_document_version_by_sha256,
+    get_latest_document_version,
     get_or_create_document,
     upsert_document_version,
 )
@@ -285,7 +286,42 @@ def _nav_citespan_node_id(span_id: str) -> str:
 
 
 def _nav_claimspan_node_id(claim_span_id: str) -> str:
-    return f"claimspan:{str(claim_span_id or '').strip()}"
+    csid = str(claim_span_id or "").strip()
+    if csid.startswith("claimspan:"):
+        return csid
+    return f"claimspan:{csid}"
+
+
+def _nav_doc_label(
+    *, document_id: Optional[str]
+) -> tuple[Optional[str], Optional[str]]:
+    """Return (label, hover) for an ingested document id when available."""
+    did = str(document_id or "").strip()
+    if not did:
+        return None, None
+    try:
+        ver = get_latest_document_version(document_id=did)
+    except Exception:
+        ver = None
+    if not isinstance(ver, dict):
+        return None, None
+    fname = str(ver.get("filename") or "").strip() or None
+    if not fname:
+        return None, None
+    stem = Path(fname).name
+    label = Path(stem).stem or stem
+    hover = f"{stem}\n{did}".strip()
+    return label, hover
+
+
+def _nav_short_work_label(work_id: str) -> str:
+    wid = str(work_id or "").strip()
+    if not wid:
+        return "work"
+    # Keep UUID-ish ids readable in the graph.
+    if len(wid) >= 8:
+        return wid[:8]
+    return wid
 
 
 def _nav_edge_id(*, src: str, tgt: str, kind: str) -> str:
@@ -522,10 +558,11 @@ def nav_graph(
 
         # Nodes
         if citing_doc_id:
+            cite_label, cite_hover = _nav_doc_label(document_id=citing_doc_id)
             add_node(
                 work_node(
                     work_id=str(citing_doc_id),
-                    label="Citing",
+                    label=cite_label or "Citing",
                     state="available",
                     routing=routing,
                     resolved_ingest_id=str(citing_doc_id),
@@ -616,11 +653,18 @@ def nav_graph(
                 requested_ids=requested_set,
                 resolved=bool(resolved_ingest_id),
             )
+            cited_label = None
+            if resolved_ingest_id:
+                cited_label, _cited_hover = _nav_doc_label(
+                    document_id=resolved_ingest_id
+                )
+            if not cited_label:
+                cited_label = _nav_short_work_label(cited_work_id)
             w_node_id = _nav_work_node_id(cited_work_id)
             add_node(
                 work_node(
                     work_id=cited_work_id,
-                    label=str(c.get("cited_work_id") or "Cited"),
+                    label=cited_label,
                     state=state,
                     routing=routing,
                     resolved_ingest_id=str(resolved_ingest_id)
@@ -638,10 +682,11 @@ def nav_graph(
     if f_type == "work" and f_id:
         ingest_id = str(f_id)
         w_id = _nav_work_node_id(ingest_id)
+        seed_label, _seed_hover = _nav_doc_label(document_id=ingest_id)
         add_node(
             work_node(
                 work_id=ingest_id,
-                label="Work",
+                label=seed_label or "Work",
                 state="available" if ingest_id not in requested_set else "requested",
                 routing=None,
                 resolved_ingest_id=ingest_id,
@@ -807,11 +852,18 @@ def nav_graph(
                     requested_ids=requested_set,
                     resolved=bool(resolved_ingest_id),
                 )
+                cited_label = None
+                if resolved_ingest_id:
+                    cited_label, _cited_hover = _nav_doc_label(
+                        document_id=resolved_ingest_id
+                    )
+                if not cited_label:
+                    cited_label = _nav_short_work_label(cited_work_id)
                 w_node_id = _nav_work_node_id(cited_work_id)
                 add_node(
                     work_node(
                         work_id=cited_work_id,
-                        label=str(cited_work_id or "Cited"),
+                        label=cited_label,
                         state=state,
                         routing=routing2,
                         resolved_ingest_id=str(resolved_ingest_id)
@@ -891,10 +943,11 @@ def nav_graph(
             }
 
             # Citing work node + its citespan.
+            cite_label, cite_hover = _nav_doc_label(document_id=citing_doc_id)
             add_node(
                 work_node(
                     work_id=str(citing_doc_id),
-                    label="Citing",
+                    label=cite_label or "Citing",
                     state="available",
                     routing=routing,
                     resolved_ingest_id=str(citing_doc_id),
@@ -942,10 +995,17 @@ def nav_graph(
                 requested_ids=requested_set,
                 resolved=bool(resolved_ingest_id),
             )
+            work_label = None
+            if resolved_ingest_id:
+                work_label, _work_hover = _nav_doc_label(document_id=resolved_ingest_id)
+            if not work_label:
+                work_label, _work_hover2 = _nav_doc_label(document_id=wid)
+            if not work_label:
+                work_label = _nav_short_work_label(wid)
             add_node(
                 work_node(
                     work_id=str(wid),
-                    label=str(wid),
+                    label=work_label,
                     state=work_state,
                     routing=routing,
                     resolved_ingest_id=str(resolved_ingest_id)
@@ -1898,6 +1958,10 @@ def dev_wipe(payload: DevWipeRequest):
     # Keep this list aligned with `tests/conftest.py` truncation so local dev
     # and tests have consistent "wipe everything" behavior.
     tables = [
+        # 10-04: durable evidence decision events
+        "evidence_decision_targets",
+        "evidence_decision_events",
+        "evidence_decision_streams",
         # 10-01: pipeline stage contracts
         # 10-02: mutable workflow run status
         "pipeline_run_events",

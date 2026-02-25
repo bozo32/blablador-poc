@@ -426,15 +426,107 @@ class EvidenceCandidatePayload(BaseModel):
     token_saliencies: Optional[List[float]] = None
     delta: Optional[Dict[str, Any]] = None
 
+    # Phase 10-04: durable reviewer decision overlays (additive)
+    decision_target: Dict[str, str] = Field(default_factory=dict)
+    decision_state: Dict[str, Any] = Field(default_factory=dict)
+
 
 class EvidenceListResponse(BaseModel):
     claim_id: str
+    pinned: List[EvidenceCandidatePayload] = Field(default_factory=list)
     candidates: List[EvidenceCandidatePayload]
     total: int
     offset: int
     limit: int
     lock_state: Dict[str, Any]
     run: Optional[Dict[str, Any]] = None
+
+    # Phase 10-04: decision stream metadata (reviewer_uid + version)
+    decisions: Dict[str, Any] = Field(default_factory=dict)
+
+
+# --- Durable evidence decisions (Phase 10-04) ------------------------------
+
+DecisionTriage = Literal["none", "accepted", "rejected"]
+EvidenceDecisionAction = Literal["pin", "unpin", "accept", "reject", "clear"]
+
+
+class EvidenceDecisionTargetInput(BaseModel):
+    attachment_id: str
+    span_id: str
+
+
+class EvidenceDecisionTarget(BaseModel):
+    attachment_id: str
+    span_id: str
+    target_key: str
+
+
+class EvidenceDecisionState(BaseModel):
+    pinned: bool = False
+    triage: DecisionTriage = "none"
+    updated_at: Optional[str] = None
+
+
+class EvidenceDecisionAppendRequest(BaseModel):
+    idempotency_key: str
+    expected_version: int = Field(..., ge=0)
+    action: EvidenceDecisionAction
+    target: Optional[EvidenceDecisionTargetInput] = None
+    set: Optional[bool] = None
+    payload: Optional[Dict[str, Any]] = None
+
+    @field_validator("idempotency_key")
+    def normalize_idempotency_key(cls, value: Any) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("idempotency_key is required")
+        return text
+
+    @field_validator("action", mode="before")
+    def normalize_action(cls, value: Any) -> str:
+        return str(value or "").strip().lower() or "clear"
+
+    @model_validator(mode="after")
+    def validate_rules(self) -> "EvidenceDecisionAppendRequest":
+        if self.action in {"pin", "unpin", "accept", "reject"}:
+            if self.target is None:
+                raise ValueError("target is required for this action")
+        if self.action == "clear":
+            if self.target is not None:
+                raise ValueError("target must be omitted for clear")
+        if self.action in {"accept", "reject"} and self.set is None:
+            self.set = True
+        return self
+
+
+class EvidenceDecisionAppendResponse(BaseModel):
+    ok: bool = True
+    event_id: Optional[int] = None
+    event_uid: Optional[str] = None
+    version: int = 0
+    no_op: bool = False
+    state: EvidenceDecisionState = Field(default_factory=EvidenceDecisionState)
+    created_at: Optional[str] = None
+
+
+class EvidenceDecisionEventPayload(BaseModel):
+    event_id: int
+    event_uid: str
+    action: EvidenceDecisionAction
+    target: Optional[EvidenceDecisionTarget] = None
+    set: Optional[bool] = None
+    created_at: str
+    payload: Dict[str, Any] = Field(default_factory=dict)
+
+
+class EvidenceDecisionReadResponse(BaseModel):
+    claim_id: str
+    reviewer_uid: str
+    version: int = 0
+    targets: Dict[str, EvidenceDecisionState] = Field(default_factory=dict)
+    pinned_targets: List[EvidenceDecisionTarget] = Field(default_factory=list)
+    events: List[EvidenceDecisionEventPayload] = Field(default_factory=list)
 
 
 class EvidenceHistoryEntry(BaseModel):

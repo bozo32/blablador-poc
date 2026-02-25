@@ -988,9 +988,14 @@ _DDL_STATEMENTS: list[str] = [
       expected_version int NOT NULL,
       resulting_version int NOT NULL,
       request_fingerprint text NOT NULL,
+      set_value boolean NULL,
       payload_json jsonb NOT NULL DEFAULT '{}'::jsonb,
       created_at timestamptz NOT NULL DEFAULT now()
     );
+    """,
+    """
+    ALTER TABLE evidence_decision_events
+      ADD COLUMN IF NOT EXISTS set_value boolean NULL;
     """,
     """
     CREATE UNIQUE INDEX IF NOT EXISTS evidence_decision_events_stream_idempotency_uniq

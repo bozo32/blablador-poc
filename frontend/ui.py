@@ -2511,6 +2511,7 @@ def render_evidence_panel() -> None:
     if selected_claim != active_claim:
         claim_queue.set_active_claim(selected_claim)
         store = evidence_store.EvidenceStore()
+    store.set_active_claim(selected_claim)
     claim_record = claim_queue.get_claim_record(selected_claim) or {}
     claim_text_override = (claim_record.get("claim") or "").strip()
     initial_claim_text = claim_text_override or None
@@ -2519,9 +2520,11 @@ def render_evidence_panel() -> None:
     polling = existing_status in {"queued", "running"} or bool(
         existing_lock.get("locked")
     )
+    reviewer_uid = str(_active_reviewer_uid() or "default").strip() or "default"
     state = store.sync_for_claim(
         selected_claim,
         claim_text=initial_claim_text,
+        reviewer_uid=reviewer_uid,
         force=bool(polling),
     )
     metadata_claim_text = (state.get("metadata") or {}).get("claim_text") or ""
@@ -2539,7 +2542,7 @@ def render_evidence_panel() -> None:
             "Selection is disabled until complete."
         )
 
-    active_reviewer_uid = _active_reviewer_uid()
+    active_reviewer_uid = reviewer_uid
     j_store = judgment_store.JudgmentStore()
     if active_reviewer_uid:
         j_claim_state = j_store.sync_judgment(
@@ -3131,9 +3134,13 @@ def render_evidence_panel() -> None:
                     store.sync_for_claim(
                         selected_claim,
                         claim_text=active_claim_text_payload,
+                        reviewer_uid=reviewer_uid,
                         force=True,
                     )
                     _rerun()
+
+            if state.get("decision_banner"):
+                st.warning(str(state.get("decision_banner")), icon="⚠️")
             lock_state = state.get("lock_state") or {}
             lock_status = (lock_state.get("status") or "").strip().lower()
             if lock_status in {"queued", "running"}:
@@ -3208,9 +3215,24 @@ def render_evidence_panel() -> None:
                     store.apply_filter(
                         selected_claim,
                         claim_text=active_claim_text_payload,
+                        reviewer_uid=reviewer_uid,
                         **chip["payload"],
                     )
                     _rerun()
+
+            clear_cols = st.columns([1, 3], gap="small")
+            with clear_cols[0]:
+                if st.button(
+                    "Clear decisions",
+                    key=f"clear-decisions-{selected_claim}",
+                    disabled=bool(state.get("decision_actions_disabled")),
+                ):
+                    store.clear_decisions(selected_claim, reviewer_uid=reviewer_uid)
+                    _rerun()
+            with clear_cols[1]:
+                st.caption(
+                    "Clears pins + triage for this claim/reviewer (append-only event)."
+                )
 
         def _render_rerun_controls() -> None:
             meta = (state.get("last_payload") or {}).get("meta") or {}
@@ -3257,6 +3279,7 @@ def render_evidence_panel() -> None:
                     store.load_more(
                         selected_claim,
                         claim_text=active_claim_text_payload,
+                        reviewer_uid=reviewer_uid,
                     )
                     _rerun()
             with btn_cols[2]:
@@ -3268,6 +3291,7 @@ def render_evidence_panel() -> None:
                     store.sync_for_claim(
                         selected_claim,
                         claim_text=active_claim_text_payload,
+                        reviewer_uid=reviewer_uid,
                         force=True,
                     )
                     _rerun()
@@ -3343,8 +3367,9 @@ def render_evidence_panel() -> None:
             )
 
         def _render_evidence_lists() -> None:
+            pinned = state.get("pinned") or []
             candidates = state.get("candidates") or []
-            if not candidates:
+            if not pinned and not candidates:
                 st.info(
                     "Evidence will appear once attachments finish matching this claim."
                 )
@@ -3459,10 +3484,12 @@ def render_evidence_panel() -> None:
                         )
                     )
 
-            pinned_ids = state.get("pinned_ids") or []
-            pinned_set = set(pinned_ids)
-            pinned_candidates = [c for c in candidates if c.get("id") in pinned_set]
-            remaining = [c for c in candidates if c.get("id") not in pinned_set]
+            pinned_candidates = list(pinned)
+            remaining = [
+                c
+                for c in candidates
+                if not bool((c.get("decision_state") or {}).get("pinned"))
+            ]
 
             entail_candidates = [
                 c for c in remaining if _bucket(c.get("label")) == "entail"
@@ -3500,6 +3527,67 @@ def render_evidence_panel() -> None:
                         review_labels.pop(candidate_id, None)
                         return
                     review_labels[candidate_id] = label_value
+
+                meta = candidate.get("metadata") or {}
+                not_in_current_run = bool(
+                    isinstance(meta, dict) and meta.get("not_in_current_run")
+                )
+                decision_state = candidate.get("decision_state") or {}
+                pinned_flag = bool(decision_state.get("pinned"))
+                triage_flag = str(decision_state.get("triage") or "none")
+                actions_disabled = bool(state.get("decision_actions_disabled"))
+
+                decision_cols = st.columns([1, 1, 1, 3], gap="small")
+                with decision_cols[0]:
+                    pin_label = "Unpin" if pinned_flag else "Pin"
+                    if st.button(
+                        pin_label,
+                        key=f"decision-pin-{selected_claim}-{candidate_id}",
+                        disabled=actions_disabled,
+                        use_container_width=True,
+                    ):
+                        store.toggle_pin_target(
+                            selected_claim,
+                            candidate,
+                            reviewer_uid=reviewer_uid,
+                        )
+                        _rerun()
+                with decision_cols[1]:
+                    accept_label = "Unaccept" if triage_flag == "accepted" else "Accept"
+                    if st.button(
+                        accept_label,
+                        key=f"decision-accept-{selected_claim}-{candidate_id}",
+                        disabled=actions_disabled,
+                        use_container_width=True,
+                    ):
+                        store.accept_candidate_target(
+                            selected_claim,
+                            candidate,
+                            reviewer_uid=reviewer_uid,
+                        )
+                        _rerun()
+                with decision_cols[2]:
+                    reject_label = "Unreject" if triage_flag == "rejected" else "Reject"
+                    if st.button(
+                        reject_label,
+                        key=f"decision-reject-{selected_claim}-{candidate_id}",
+                        disabled=actions_disabled,
+                        use_container_width=True,
+                    ):
+                        store.reject_candidate_target(
+                            selected_claim,
+                            candidate,
+                            reviewer_uid=reviewer_uid,
+                        )
+                        _rerun()
+                with decision_cols[3]:
+                    suffix = " (not in current run)" if not_in_current_run else ""
+                    if pinned_flag or triage_flag != "none" or suffix:
+                        decision_line = (
+                            f"Decision: pinned={pinned_flag}, triage={triage_flag}"
+                            f"{suffix}"
+                        )
+                        st.caption(decision_line)
 
                 conf = _confidence(candidate)
                 conf_text = f"{conf:.2f}" if conf is not None else "—"
@@ -3635,6 +3723,28 @@ def render_evidence_panel() -> None:
                 st.markdown("#### Pinned")
                 for cand in pinned_candidates:
                     _render_candidate_row(cand, label=_bucket(cand.get("label")))
+
+            decisions = state.get("decisions")
+            if isinstance(decisions, dict):
+                with st.expander("Decision timeline", expanded=False):
+                    events = decisions.get("events") or []
+                    if not events:
+                        st.caption("No decision events yet.")
+                    for ev in events[:20]:
+                        if not isinstance(ev, dict):
+                            continue
+                        action = str(ev.get("action") or "").strip()
+                        created_at = str(ev.get("created_at") or "").strip()
+                        payload = (
+                            ev.get("payload")
+                            if isinstance(ev.get("payload"), dict)
+                            else {}
+                        )
+                        snippet = str(payload.get("snippet") or "").strip()
+                        line = f"{created_at} — {action}".strip(" -")
+                        if snippet:
+                            line = f"{line}: {snippet}".strip()
+                        st.markdown(f"- {line}")
 
             if not pinned_candidates and not top_entail and not top_contradict:
                 st.markdown("#### Top scored")
@@ -4802,23 +4912,22 @@ def draw_ingestion_panel(*, center, right) -> None:
     extraction_stage = (
         (document.get("extraction") or {}) if isinstance(document, dict) else {}
     )
-    if (extraction_stage.get("status") or "").strip().lower() != "complete":
-        with center:
-            st.info("Run extraction to populate the document text.")
-        return
-
-    try:
-        body_payload = get_document_body(api_url, doc_id)
-    except RuntimeError as exc:
-        with center:
-            st.info("Run extraction to populate the document text.")
-            st.caption(str(exc))
-        return
-    paragraphs = body_payload.get("paragraphs") or []
-    if not paragraphs:
-        with center:
-            st.info("Run extraction to populate the document text.")
-        return
+    extraction_complete = (
+        extraction_stage.get("status") or ""
+    ).strip().lower() == "complete"
+    body_payload: dict = {}
+    body_error: str | None = None
+    paragraphs: list[dict] = []
+    if extraction_complete:
+        try:
+            body_payload = get_document_body(api_url, doc_id)
+        except RuntimeError as exc:
+            body_error = str(exc)
+            extraction_complete = False
+        else:
+            paragraphs = body_payload.get("paragraphs") or []
+            if not paragraphs:
+                extraction_complete = False
 
     def select_citation(index: int, target_id: str | None) -> None:
         normalized_target = normalize_target_id(target_id)
@@ -5457,7 +5566,12 @@ def draw_ingestion_panel(*, center, right) -> None:
         st.markdown("</div>", unsafe_allow_html=True)
 
         if workspace_tab == WORKSPACE_TAB_DOCUMENT:
-            st.caption("Click an in-text citation chip to inspect context.")
+            if not extraction_complete:
+                st.info("Run extraction to populate the document text.")
+                if body_error:
+                    st.caption(body_error)
+            else:
+                st.caption("Click an in-text citation chip to inspect context.")
 
             active_reviewer_uid = _active_reviewer_uid()
             j_store = judgment_store.JudgmentStore()
@@ -5470,7 +5584,7 @@ def draw_ingestion_panel(*, center, right) -> None:
             else:
                 j_doc_state = {}
 
-            for para in paragraphs:
+            for para in paragraphs or []:
                 para_sentences = para.get("sentences") or []
                 if not para_sentences:
                     # Backward compatibility: older backend may return flat segments.
@@ -5600,7 +5714,6 @@ def draw_ingestion_panel(*, center, right) -> None:
                 api_url=get_api_url(),
                 seed_doc_id=str(st.session_state.get("selected_doc_id") or ""),
             )
-            return
 
         # Document details at bottom.
         with st.expander("Document details", expanded=False):

@@ -1,10 +1,16 @@
-"""Session-backed evidence store coordinating UI state and API calls."""
+"""Session-backed evidence store coordinating UI state and API calls.
+
+Phase 10-04 moves evidence decisions (pin/triage) to durable, server-backed
+append-only events. Streamlit session state is no longer the source of truth for
+pins/accept/reject.
+"""
 
 from __future__ import annotations
 
 import json
 
 from dataclasses import dataclass
+from uuid import uuid4
 from typing import Any, Dict, List, Optional
 
 import streamlit as st
@@ -92,6 +98,7 @@ class EvidenceStore:
         claim_id: str,
         *,
         claim_text: Optional[str] = None,
+        reviewer_uid: str = "default",
         force: bool = False,
     ) -> Dict[str, Any]:
         claim_state = self.ensure_claim_state(claim_id)
@@ -118,12 +125,19 @@ class EvidenceStore:
                 include_neutral=claim_state["filters"].get("include_neutral", True),
                 pinned_only=claim_state["filters"].get("pinned_only", False),
                 claim_text=resolved_claim_text,
+                reviewer_uid=reviewer_uid,
             )
             self.update_from_payload(claim_id, payload)
             claim_state["stale"] = False
             history = self.api.fetch_history(claim_id, limit=5)
             claim_state["history"] = history.get("runs", [])
             claim_state["last_error"] = None
+
+            # Best-effort: hydrate timeline/projection when claim is active.
+            if self.active_claim_id() == claim_id and claim_state.get(
+                "decisions_stale", True
+            ):
+                self.sync_decisions(claim_id, reviewer_uid=reviewer_uid)
         except evidence_api.EvidenceApiError as exc:
             claim_state["last_error"] = str(exc)
         finally:
@@ -133,6 +147,40 @@ class EvidenceStore:
             )
         return claim_state
 
+    def sync_decisions(
+        self,
+        claim_id: str,
+        *,
+        reviewer_uid: str = "default",
+        force: bool = False,
+        events_limit: int = 20,
+    ) -> Optional[Dict[str, Any]]:
+        claim_state = self.ensure_claim_state(claim_id)
+        if (
+            not force
+            and claim_state.get("decisions") is not None
+            and not claim_state.get("decisions_stale", True)
+        ):
+            return claim_state.get("decisions")
+
+        claim_state["decisions_error"] = None
+        try:
+            decisions = self.api.get_evidence_decisions(
+                claim_id,
+                reviewer_uid=str(reviewer_uid or "default").strip() or "default",
+                events_limit=int(events_limit),
+            )
+        except evidence_api.EvidenceApiError as exc:
+            claim_state["decisions_error"] = str(exc)
+            return None
+        claim_state["decisions"] = decisions
+        claim_state["decisions_stale"] = False
+        meta = claim_state.setdefault("decisions_meta", {})
+        if isinstance(decisions, dict) and decisions.get("version") is not None:
+            meta["version"] = decisions.get("version")
+        meta["reviewer_uid"] = str(reviewer_uid or "default").strip() or "default"
+        return decisions
+
     def apply_filter(
         self,
         claim_id: str,
@@ -141,6 +189,7 @@ class EvidenceStore:
         include_neutral: Optional[bool] = None,
         pinned_only: Optional[bool] = None,
         claim_text: Optional[str] = None,
+        reviewer_uid: str = "default",
     ) -> Dict[str, Any]:
         claim_state = self.ensure_claim_state(claim_id)
         filters = claim_state.setdefault("filters", {})
@@ -152,10 +201,19 @@ class EvidenceStore:
             filters["pinned_only"] = pinned_only
         claim_state["load_more_pages"] = 0
         claim_state["stale"] = True
-        return self.sync_for_claim(claim_id, claim_text=claim_text, force=True)
+        return self.sync_for_claim(
+            claim_id,
+            claim_text=claim_text,
+            reviewer_uid=reviewer_uid,
+            force=True,
+        )
 
     def load_more(
-        self, claim_id: str, *, claim_text: Optional[str] = None
+        self,
+        claim_id: str,
+        *,
+        claim_text: Optional[str] = None,
+        reviewer_uid: str = "default",
     ) -> Dict[str, Any]:
         claim_state = self.ensure_claim_state(claim_id)
         if claim_state.get("load_more_pages", 0) >= self.max_extra_pages:
@@ -163,7 +221,12 @@ class EvidenceStore:
             return claim_state
         claim_state["load_more_pages"] = claim_state.get("load_more_pages", 0) + 1
         claim_state["stale"] = True
-        return self.sync_for_claim(claim_id, claim_text=claim_text, force=True)
+        return self.sync_for_claim(
+            claim_id,
+            claim_text=claim_text,
+            reviewer_uid=reviewer_uid,
+            force=True,
+        )
 
     def queue_rerun(
         self,
@@ -355,24 +418,190 @@ class EvidenceStore:
         return None
 
     def accept_candidate(self, claim_id: str, candidate_id: str) -> Dict[str, Any]:
-        return self._mark_review_state(claim_id, candidate_id, "accepted")
+        claim_state = self.ensure_claim_state(claim_id)
+        candidate = self._find_candidate(claim_state, candidate_id)
+        if not candidate:
+            _toast(self.ui, "Unable to accept; candidate missing.", icon="⚠️")
+            return claim_state
+        return self.accept_candidate_target(claim_id, candidate)
 
     def reject_candidate(self, claim_id: str, candidate_id: str) -> Dict[str, Any]:
-        return self._mark_review_state(claim_id, candidate_id, "rejected")
+        claim_state = self.ensure_claim_state(claim_id)
+        candidate = self._find_candidate(claim_state, candidate_id)
+        if not candidate:
+            _toast(self.ui, "Unable to reject; candidate missing.", icon="⚠️")
+            return claim_state
+        return self.reject_candidate_target(claim_id, candidate)
 
     def toggle_pin(self, claim_id: str, candidate_id: str) -> Dict[str, Any]:
         claim_state = self.ensure_claim_state(claim_id)
-        pins = claim_state.setdefault("pinned_ids", [])
-        if candidate_id in pins:
-            pins.remove(candidate_id)
-            message = "Removed pin from evidence card."
-        else:
-            pins.append(candidate_id)
-            message = "Pinned evidence card near the top."
-        pinned_lookup = set(pins)
-        for candidate in claim_state.get("candidates", []):
-            candidate["is_pinned"] = candidate.get("id") in pinned_lookup
-        _toast(self.ui, message, icon="📌")
+        candidate = self._find_candidate(claim_state, candidate_id)
+        if not candidate:
+            _toast(self.ui, "Unable to pin; candidate missing.", icon="⚠️")
+            return claim_state
+        return self.toggle_pin_target(claim_id, candidate)
+
+    def clear_decisions(
+        self, claim_id: str, *, reviewer_uid: str = "default"
+    ) -> Dict[str, Any]:
+        return self._append_decision_event_with_retry(
+            claim_id,
+            reviewer_uid=reviewer_uid,
+            action="clear",
+            target=None,
+            set_value=None,
+            payload={"ui_source": "clear_button"},
+        )
+
+    def toggle_pin_target(
+        self, claim_id: str, candidate: Dict[str, Any], *, reviewer_uid: str = "default"
+    ) -> Dict[str, Any]:
+        claim_state = self.ensure_claim_state(claim_id)
+        target = self._decision_target(candidate)
+        if not target:
+            _toast(self.ui, "Pinned target metadata missing.", icon="⚠️")
+            return claim_state
+        pinned = bool((candidate.get("decision_state") or {}).get("pinned"))
+        action = "unpin" if pinned else "pin"
+        return self._append_decision_event_with_retry(
+            claim_id,
+            reviewer_uid=reviewer_uid,
+            action=action,
+            target=target,
+            set_value=None,
+            payload={"ui_source": "evidence_list"},
+        )
+
+    def accept_candidate_target(
+        self, claim_id: str, candidate: Dict[str, Any], *, reviewer_uid: str = "default"
+    ) -> Dict[str, Any]:
+        claim_state = self.ensure_claim_state(claim_id)
+        target = self._decision_target(candidate)
+        if not target:
+            _toast(self.ui, "Decision target metadata missing.", icon="⚠️")
+            return claim_state
+        triage = str((candidate.get("decision_state") or {}).get("triage") or "none")
+        set_value = False if triage == "accepted" else True
+        return self._append_decision_event_with_retry(
+            claim_id,
+            reviewer_uid=reviewer_uid,
+            action="accept",
+            target=target,
+            set_value=set_value,
+            payload={"ui_source": "evidence_list"},
+        )
+
+    def reject_candidate_target(
+        self, claim_id: str, candidate: Dict[str, Any], *, reviewer_uid: str = "default"
+    ) -> Dict[str, Any]:
+        claim_state = self.ensure_claim_state(claim_id)
+        target = self._decision_target(candidate)
+        if not target:
+            _toast(self.ui, "Decision target metadata missing.", icon="⚠️")
+            return claim_state
+        triage = str((candidate.get("decision_state") or {}).get("triage") or "none")
+        set_value = False if triage == "rejected" else True
+        return self._append_decision_event_with_retry(
+            claim_id,
+            reviewer_uid=reviewer_uid,
+            action="reject",
+            target=target,
+            set_value=set_value,
+            payload={"ui_source": "evidence_list"},
+        )
+
+    def _decision_target(self, candidate: Dict[str, Any]) -> Optional[Dict[str, str]]:
+        dt = (candidate or {}).get("decision_target")
+        if isinstance(dt, dict):
+            attachment_id = str(dt.get("attachment_id") or "").strip()
+            span_id = str(dt.get("span_id") or "").strip()
+            if attachment_id and span_id:
+                return {"attachment_id": attachment_id, "span_id": span_id}
+        meta = (candidate or {}).get("metadata") or {}
+        attachment_id = str((candidate or {}).get("attachment_id") or "").strip()
+        span_id = None
+        if isinstance(meta, dict):
+            span_id = (
+                str(meta.get("span_id") or meta.get("anchor_id") or "").strip() or None
+            )
+        if attachment_id and span_id:
+            return {"attachment_id": attachment_id, "span_id": span_id}
+        return None
+
+    def _append_decision_event_with_retry(
+        self,
+        claim_id: str,
+        *,
+        reviewer_uid: str,
+        action: str,
+        target: Optional[Dict[str, str]],
+        set_value: Optional[bool],
+        payload: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        claim_state = self.ensure_claim_state(claim_id)
+        reviewer = str(reviewer_uid or "default").strip() or "default"
+
+        if claim_state.get("decision_actions_disabled"):
+            banner = str(claim_state.get("decision_banner") or "Decisions are locked.")
+            _toast(self.ui, banner, icon="⚠️")
+            return claim_state
+
+        meta = claim_state.get("decisions_meta") or {}
+        expected_version = int(meta.get("version") or 0)
+        idempotency_key = uuid4().hex
+
+        def _refresh_and_get_version() -> int:
+            decisions = self.sync_decisions(claim_id, reviewer_uid=reviewer, force=True)
+            if isinstance(decisions, dict) and decisions.get("version") is not None:
+                return int(decisions.get("version") or 0)
+            return int((claim_state.get("decisions_meta") or {}).get("version") or 0)
+
+        try:
+            resp = self.api.append_evidence_decision_event(
+                claim_id,
+                reviewer_uid=reviewer,
+                idempotency_key=idempotency_key,
+                expected_version=expected_version,
+                action=action,
+                target=target,
+                set_value=set_value,
+                payload=payload,
+            )
+        except evidence_api.EvidenceDecisionConflict:
+            # Refresh and retry exactly once.
+            new_version = _refresh_and_get_version()
+            try:
+                resp = self.api.append_evidence_decision_event(
+                    claim_id,
+                    reviewer_uid=reviewer,
+                    idempotency_key=idempotency_key,
+                    expected_version=new_version,
+                    action=action,
+                    target=target,
+                    set_value=set_value,
+                    payload=payload,
+                )
+            except evidence_api.EvidenceDecisionConflict:
+                claim_state["decision_actions_disabled"] = True
+                claim_state[
+                    "decision_banner"
+                ] = "Decision stream changed in another tab. Refresh to continue."
+                _toast(self.ui, claim_state["decision_banner"], icon="⚠️")
+                return claim_state
+            except evidence_api.EvidenceApiError as exc:
+                _toast(self.ui, f"Decision write failed: {exc}", icon="⚠️")
+                return claim_state
+        except evidence_api.EvidenceApiError as exc:
+            _toast(self.ui, f"Decision write failed: {exc}", icon="⚠️")
+            return claim_state
+
+        if isinstance(resp, dict) and resp.get("version") is not None:
+            claim_state.setdefault("decisions_meta", {})["version"] = resp.get(
+                "version"
+            )
+        claim_state["decisions_stale"] = True
+        claim_state["stale"] = True
+        _toast(self.ui, "Decision saved.", icon="✅", quiet=bool(resp.get("no_op")))
         return claim_state
 
     def prepare_share_link(
@@ -451,6 +680,8 @@ class EvidenceStore:
         claim_state["offset"] = payload.get("offset", claim_state.get("offset", 0))
         claim_state["run"] = payload.get("run")
         claim_state["lock_state"] = payload.get("lock_state")
+        claim_state["pinned"] = payload.get("pinned") or []
+        claim_state["decisions_meta"] = payload.get("decisions") or {}
 
         # Keep UI rerun banner aligned with backend lock state.
         rerun = claim_state.setdefault("rerun", self._default_rerun_state())
@@ -465,9 +696,6 @@ class EvidenceStore:
         claim_state["focus_order"] = [
             cand.get("id") for cand in claim_state["candidates"] if cand.get("id")
         ]
-        pinned_lookup = set(claim_state.get("pinned_ids", []))
-        for candidate in claim_state.get("candidates", []):
-            candidate["is_pinned"] = candidate.get("id") in pinned_lookup
         return claim_state
 
     def _candidate_span(self, candidate: Dict[str, Any]) -> Optional[Dict[str, str]]:
@@ -502,7 +730,7 @@ class EvidenceStore:
     def _default_claim_state(self, claim_id: str) -> Dict[str, Any]:
         return {
             "claim_id": claim_id,
-            "pinned_ids": [],
+            "pinned": [],
             "filters": {
                 "label": None,
                 "include_neutral": False,
@@ -528,6 +756,12 @@ class EvidenceStore:
             "selection_stale": True,
             "selection_error": None,
             "excerpt_cache": {},
+            "decisions_meta": {"reviewer_uid": "default", "version": 0},
+            "decisions": None,
+            "decisions_stale": True,
+            "decisions_error": None,
+            "decision_actions_disabled": False,
+            "decision_banner": None,
         }
 
     @staticmethod

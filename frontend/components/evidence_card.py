@@ -255,6 +255,19 @@ class EvidenceCardRenderer:
         )
         reviewer = candidate.get("reviewer_initials")
         reviewer_badge = _format_badge(reviewer, tone="reviewer") if reviewer else ""
+
+        decision_badges: list[str] = []
+        raw_badges = candidate.get("badges") or []
+        if isinstance(raw_badges, (list, tuple, set)):
+            badges_set = {str(b) for b in raw_badges if b}
+        else:
+            badges_set = set()
+        if "decision:pinned" in badges_set:
+            decision_badges.append(_format_badge("Pinned", tone="rank"))
+        if "decision:accepted" in badges_set:
+            decision_badges.append(_format_badge("Accepted", tone="info"))
+        if "decision:rejected" in badges_set:
+            decision_badges.append(_format_badge("Rejected", tone="contrad"))
         delta = candidate.get("rank_delta")
         delta_badge = ""
         if delta:
@@ -268,6 +281,7 @@ class EvidenceCardRenderer:
                     rank_badge,
                     provenance_badge,
                     reviewer_badge,
+                    *decision_badges,
                     delta_badge,
                 ],
             )

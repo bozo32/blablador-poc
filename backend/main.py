@@ -120,6 +120,7 @@ from backend.pipeline_contracts import service as pipeline_contracts_service
 from backend.spine.pipeline_artifacts import StageArtifactAlreadyExists
 from backend.spine import pipeline_run_scopes as run_scopes_spine
 from backend.spine import pipeline_run_status as run_status_spine
+from backend.spine import evidence_decisions as evidence_decisions_spine
 from backend.workflow_happy_path import orchestrator as happy_path_orchestrator
 from backend.spine.project_meta import (
     export_project_meta_json,
@@ -1503,6 +1504,13 @@ def export_project():
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("project.json", export_project_meta_json(project_id=project_id))
+        try:
+            zf.writestr(
+                "evidence_decision_events.ndjson",
+                evidence_decisions_spine.export_events_ndjson(project_id=project_id),
+            )
+        except Exception:
+            logger.exception("Decision export failed")
     headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
     return Response(
         content=buf.getvalue(),
@@ -1514,16 +1522,30 @@ def export_project():
 @app.post("/project/import", response_model=schemas.ProjectImportResponse)
 async def import_project(file: UploadFile = File(...), overwrite: bool = False):
     blob = await file.read()
-    _ = overwrite
     project_id = str(app_settings.DEFAULT_PROJECT_ID)
     user_id = str(app_settings.DEFAULT_USER_ID)
     try:
         with zipfile.ZipFile(io.BytesIO(blob), "r") as zf:
             meta_raw = json.loads(zf.read("project.json").decode("utf-8"))
+            decision_blob = None
+            try:
+                decision_blob = zf.read("evidence_decision_events.ndjson")
+            except Exception:
+                decision_blob = None
     except Exception as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     import_project_meta_json(project_id=project_id, user_id=user_id, meta=meta_raw)
+    if decision_blob:
+        try:
+            evidence_decisions_spine.import_events_ndjson(
+                project_id=project_id,
+                user_id=user_id,
+                blob=decision_blob,
+                overwrite=bool(overwrite),
+            )
+        except Exception:
+            logger.exception("Decision import failed")
     project = get_or_create_project_meta(project_id=project_id, user_id=user_id)
     return {"ok": True, "backup_zip": "", "project": project}
 
@@ -4103,13 +4125,18 @@ def confirm_claims(payload: schemas.ClaimConfirmationRequest):
 )
 def list_claim_evidence(
     claim_id: str,
+    reviewer_uid: str = Query("default"),
     label: Optional[str] = None,
     offset: int = 0,
     limit: int = 10,
     include_neutral: bool = True,
     pinned_only: bool = False,
     claim_text: Optional[str] = None,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
 ):
+    reviewer = str(reviewer_uid or "").strip() or "default"
+    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
+
     # Register claim_text without triggering a compute-heavy rerun.
     if claim_text:
         try:
@@ -4127,17 +4154,258 @@ def list_claim_evidence(
         offset=offset,
         limit=limit,
     )
+
+    # Phase 10-04: annotate evidence candidates with durable decision overlays.
+    decisions = evidence_decisions_spine.get_projection(
+        claim_id,
+        reviewer,
+        project_id=project_id,
+    )
+    targets_by_key = decisions.get("targets_by_key") or {}
+
+    def _span_id_for_candidate(candidate: dict) -> Optional[str]:
+        meta = candidate.get("metadata") or {}
+        if isinstance(meta, dict):
+            for key in ("span_id", "anchor_id"):
+                value = str(meta.get(key) or "").strip()
+                if value:
+                    return value
+        spans = candidate.get("spans") or []
+        if isinstance(spans, list) and spans:
+            first = spans[0]
+            if isinstance(first, dict):
+                for key in ("span_id", "id", "sentence_id"):
+                    value = str(first.get(key) or "").strip()
+                    if value:
+                        return value
+        return None
+
+    annotated: list[dict] = []
+    by_target: dict[str, dict] = {}
+    for cand in payload.get("candidates") or []:
+        if not isinstance(cand, dict):
+            continue
+        entry = dict(cand)
+        attachment_id = str(entry.get("attachment_id") or "").strip()
+        span_id = _span_id_for_candidate(entry)
+        if attachment_id and span_id:
+            tkey = f"{attachment_id}:{span_id}"
+            state = targets_by_key.get(tkey) or {}
+            pinned = bool(state.get("pinned"))
+            triage = str(state.get("triage") or "none")
+            entry["decision_target"] = {
+                "attachment_id": attachment_id,
+                "span_id": span_id,
+                "target_key": tkey,
+            }
+            entry["decision_state"] = {
+                "pinned": pinned,
+                "triage": triage,
+                "updated_at": state.get("updated_at"),
+            }
+            badges = list(entry.get("badges") or [])
+            if pinned and "decision:pinned" not in badges:
+                badges.append("decision:pinned")
+            if triage == "accepted" and "decision:accepted" not in badges:
+                badges.append("decision:accepted")
+            if triage == "rejected" and "decision:rejected" not in badges:
+                badges.append("decision:rejected")
+            entry["badges"] = badges
+            by_target[tkey] = entry
+        annotated.append(entry)
+
+    pinned_payloads: list[dict] = []
+    for target in decisions.get("pinned_targets") or []:
+        if not isinstance(target, dict):
+            continue
+        tkey = str(target.get("target_key") or "").strip()
+        attachment_id = str(target.get("attachment_id") or "").strip()
+        span_id = str(target.get("span_id") or "").strip()
+        if not tkey or not attachment_id or not span_id:
+            continue
+        if tkey in by_target:
+            pinned_payloads.append(by_target[tkey])
+            continue
+
+        state = targets_by_key.get(tkey) or {}
+        snippet = str(state.get("snippet") or "").strip()
+        text = snippet or "Pinned target not in current run."
+        pinned_payloads.append(
+            {
+                "id": f"pinned:{attachment_id}:{span_id}",
+                "claim_id": str(claim_id),
+                "attachment_id": attachment_id,
+                "label": "neutral",
+                "text": text,
+                "scores": {},
+                "badges": ["decision:pinned"],
+                "metadata": {
+                    "not_in_current_run": True,
+                    "span_id": span_id,
+                },
+                "spans": [],
+                "highlights": [],
+                "decision_target": {
+                    "attachment_id": attachment_id,
+                    "span_id": span_id,
+                    "target_key": tkey,
+                },
+                "decision_state": {
+                    "pinned": True,
+                    "triage": str((state.get("triage") or "none")),
+                    "updated_at": state.get("updated_at"),
+                },
+            }
+        )
+
+    if pinned_only:
+        annotated = [
+            cand
+            for cand in annotated
+            if bool((cand.get("decision_state") or {}).get("pinned"))
+        ]
+
     return schemas.EvidenceListResponse(
         claim_id=claim_id,
-        candidates=[
-            schemas.EvidenceCandidatePayload(**cand) for cand in payload["candidates"]
-        ],
+        pinned=[schemas.EvidenceCandidatePayload(**cand) for cand in pinned_payloads],
+        candidates=[schemas.EvidenceCandidatePayload(**cand) for cand in annotated],
         total=payload["total"],
         offset=payload["offset"],
         limit=payload["limit"],
         lock_state=payload["lock_state"],
         run=payload.get("run"),
+        decisions={
+            "reviewer_uid": reviewer,
+            "version": int(decisions.get("version") or 0),
+        },
     )
+
+
+@app.get(
+    "/claims/{claim_id}/evidence/decisions",
+    response_model=schemas.EvidenceDecisionReadResponse,
+)
+def get_evidence_decisions(
+    claim_id: str,
+    reviewer_uid: str = Query("default"),
+    events_limit: int = Query(20, ge=0, le=200),
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
+    reviewer = str(reviewer_uid or "").strip() or "default"
+    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
+
+    projection = evidence_decisions_spine.get_projection(
+        claim_id,
+        reviewer,
+        project_id=project_id,
+    )
+    events = evidence_decisions_spine.list_recent_events(
+        claim_id,
+        reviewer,
+        project_id=project_id,
+        limit=int(events_limit),
+    )
+
+    targets: dict[str, Any] = {}
+    for key, entry in (projection.get("targets_by_key") or {}).items():
+        if not isinstance(entry, dict):
+            continue
+        targets[str(key)] = {
+            "pinned": bool(entry.get("pinned")),
+            "triage": str(entry.get("triage") or "none"),
+            "updated_at": entry.get("updated_at"),
+        }
+
+    pinned_targets: list[dict[str, str]] = []
+    for tgt in projection.get("pinned_targets") or []:
+        if not isinstance(tgt, dict):
+            continue
+        attachment_id = str(tgt.get("attachment_id") or "").strip()
+        span_id = str(tgt.get("span_id") or "").strip()
+        tkey = str(tgt.get("target_key") or "").strip()
+        if attachment_id and span_id and tkey:
+            pinned_targets.append(
+                {"attachment_id": attachment_id, "span_id": span_id, "target_key": tkey}
+            )
+
+    events_out: list[dict[str, Any]] = []
+    for ev in events:
+        action = str(ev.get("action") or "").strip().lower()
+        attachment_id = str(ev.get("target_attachment_id") or "").strip() or None
+        span_id = str(ev.get("target_span_id") or "").strip() or None
+        target = None
+        if action != "clear" and attachment_id and span_id:
+            target = {
+                "attachment_id": attachment_id,
+                "span_id": span_id,
+                "target_key": str(ev.get("target_key") or f"{attachment_id}:{span_id}"),
+            }
+        payload = (
+            ev.get("payload_json") if isinstance(ev.get("payload_json"), dict) else {}
+        )
+        events_out.append(
+            {
+                "event_id": int(ev.get("event_id") or 0),
+                "event_uid": str(ev.get("event_uid") or ""),
+                "action": action,
+                "target": target,
+                "set": ev.get("set_value"),
+                "created_at": str(ev.get("created_at") or ""),
+                "payload": dict(payload or {}),
+            }
+        )
+
+    return {
+        "claim_id": str(claim_id),
+        "reviewer_uid": reviewer,
+        "version": int(projection.get("version") or 0),
+        "targets": targets,
+        "pinned_targets": pinned_targets,
+        "events": events_out,
+    }
+
+
+@app.post(
+    "/claims/{claim_id}/evidence/decisions/events",
+    response_model=schemas.EvidenceDecisionAppendResponse,
+)
+def post_evidence_decision_event(
+    claim_id: str,
+    payload: schemas.EvidenceDecisionAppendRequest,
+    reviewer_uid: str = Query("default"),
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
+    reviewer = str(reviewer_uid or "").strip() or "default"
+    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
+    user_id = str(app_settings.DEFAULT_USER_ID)
+
+    target = payload.target
+    try:
+        result = evidence_decisions_spine.append_event(
+            claim_id,
+            reviewer,
+            expected_version=int(payload.expected_version),
+            idempotency_key=str(payload.idempotency_key),
+            action=str(payload.action),
+            target_attachment_id=str(getattr(target, "attachment_id", None))
+            if target is not None
+            else None,
+            target_span_id=str(getattr(target, "span_id", None))
+            if target is not None
+            else None,
+            set_value=payload.set,
+            payload=dict(payload.payload or {}),
+            project_id=project_id,
+            user_id=user_id,
+        )
+    except evidence_decisions_spine.EvidenceDecisionConflict as exc:
+        body: dict[str, Any] = {"detail": str(exc.detail)}
+        if exc.current_version is not None:
+            body["current_version"] = int(exc.current_version)
+        return JSONResponse(status_code=409, content=body)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return result
 
 
 @app.post(

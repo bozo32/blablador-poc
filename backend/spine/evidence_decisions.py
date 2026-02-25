@@ -209,6 +209,7 @@ def list_recent_events(
         "target_key",
         "expected_version",
         "resulting_version",
+        "set_value",
         "payload_json",
         "created_at",
     )
@@ -220,6 +221,7 @@ def list_recent_events(
                        created_by_user_id, idempotency_key, action,
                        target_attachment_id, target_span_id, target_key,
                        expected_version, resulting_version,
+                       set_value,
                        payload_json, created_at
                   FROM evidence_decision_events
                  WHERE project_id=%s AND claim_id=%s AND reviewer_uid=%s
@@ -403,6 +405,10 @@ def append_event(
     if act not in DECISION_ACTIONS:
         raise ValueError(f"invalid action: {act}")
 
+    set_effective: Optional[bool] = set_value
+    if act in {"accept", "reject"}:
+        set_effective = True if set_value is None else bool(set_value)
+
     pid = _project_id(project_id)
     uid = _user_id(user_id)
 
@@ -418,7 +424,12 @@ def append_event(
         tkey = _target_key(attachment_id_clean, span_id_clean)
         target = {"attachment_id": attachment_id_clean, "span_id": span_id_clean}
 
-    fp = _fingerprint(action=act, target=target, set_value=set_value, payload=payload)
+    fp = _fingerprint(
+        action=act,
+        target=target,
+        set_value=set_effective,
+        payload=payload,
+    )
     now = _utc_now().isoformat().replace("+00:00", "Z")
 
     with connect() as conn:
@@ -538,7 +549,7 @@ def append_event(
                         "state": {"pinned": False, "triage": triage},
                     }
                 if act == "accept":
-                    if set_value is False:
+                    if set_effective is False:
                         if triage != "accepted":
                             return {
                                 "ok": True,
@@ -561,7 +572,7 @@ def append_event(
                                 "state": {"pinned": pinned, "triage": "accepted"},
                             }
                 if act == "reject":
-                    if set_value is False:
+                    if set_effective is False:
                         if triage != "rejected":
                             return {
                                 "ok": True,
@@ -623,6 +634,7 @@ def append_event(
                   expected_version,
                   resulting_version,
                   request_fingerprint,
+                  set_value,
                   payload_json
                 )
                 VALUES (
@@ -633,6 +645,7 @@ def append_event(
                   %s,
                   %s, %s, %s,
                   %s, %s,
+                  %s,
                   %s,
                   %s::jsonb
                 )
@@ -652,6 +665,7 @@ def append_event(
                     exp,
                     new_version,
                     fp,
+                    set_effective,
                     payload_blob,
                 ),
             )
@@ -682,12 +696,12 @@ def append_event(
                 elif act == "unpin":
                     next_pinned = False
                 elif act == "accept":
-                    if set_value is False:
+                    if set_effective is False:
                         next_triage = "none" if triage == "accepted" else triage
                     else:
                         next_triage = "accepted"
                 elif act == "reject":
-                    if set_value is False:
+                    if set_effective is False:
                         next_triage = "none" if triage == "rejected" else triage
                     else:
                         next_triage = "rejected"
@@ -744,6 +758,431 @@ def append_event(
     }
 
 
+def export_events_ndjson(*, project_id: Optional[str] = None) -> bytes:
+    pid = _project_id(project_id)
+    cols = (
+        "event_uid",
+        "project_id",
+        "claim_id",
+        "reviewer_uid",
+        "created_by_user_id",
+        "idempotency_key",
+        "action",
+        "target_attachment_id",
+        "target_span_id",
+        "expected_version",
+        "resulting_version",
+        "set_value",
+        "payload_json",
+        "created_at",
+        "event_id",
+    )
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT event_uid,
+                       project_id,
+                       claim_id,
+                       reviewer_uid,
+                       created_by_user_id,
+                       idempotency_key,
+                       action,
+                       target_attachment_id,
+                       target_span_id,
+                       expected_version,
+                       resulting_version,
+                       set_value,
+                       payload_json,
+                       created_at,
+                       event_id
+                  FROM evidence_decision_events
+                 WHERE project_id=%s
+                 ORDER BY claim_id ASC, reviewer_uid ASC, event_id ASC
+                """,
+                (pid,),
+            )
+            rows = cur.fetchall() or []
+
+    lines: list[str] = []
+    for row in rows:
+        d = {str(k): _to_iso(v) for k, v in zip(cols, row)}
+        payload = _json_loads(d.get("payload_json")) or {}
+        if not isinstance(payload, dict):
+            payload = {}
+        action = str(d.get("action") or "").strip()
+        attachment_id = str(d.get("target_attachment_id") or "").strip() or None
+        span_id = str(d.get("target_span_id") or "").strip() or None
+        target = (
+            {"attachment_id": attachment_id, "span_id": span_id}
+            if action != "clear" and attachment_id and span_id
+            else None
+        )
+        line_obj: dict[str, Any] = {
+            "event_uid": str(d.get("event_uid") or "").strip(),
+            "project_id": str(d.get("project_id") or pid),
+            "claim_id": str(d.get("claim_id") or "").strip(),
+            "reviewer_uid": str(d.get("reviewer_uid") or "default").strip()
+            or "default",
+            "created_by_user_id": str(d.get("created_by_user_id") or "local"),
+            "idempotency_key": str(d.get("idempotency_key") or "").strip(),
+            "action": action,
+            "target": target,
+            "expected_version": int(d.get("expected_version") or 0),
+            "resulting_version": int(d.get("resulting_version") or 0),
+            "set": d.get("set_value"),
+            "payload": payload,
+            "created_at": d.get("created_at"),
+        }
+        lines.append(_json_dumps(line_obj))
+    blob = "\n".join(lines) + ("\n" if lines else "")
+    return blob.encode("utf-8")
+
+
+def wipe_project(*, project_id: Optional[str] = None) -> None:
+    pid = _project_id(project_id)
+    with connect(autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM evidence_decision_targets WHERE project_id=%s",
+                (pid,),
+            )
+            cur.execute(
+                "DELETE FROM evidence_decision_events WHERE project_id=%s",
+                (pid,),
+            )
+            cur.execute(
+                "DELETE FROM evidence_decision_streams WHERE project_id=%s",
+                (pid,),
+            )
+
+
+def rebuild_project_projections(
+    *,
+    project_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+) -> Dict[str, int]:
+    pid = _project_id(project_id)
+    uid = _user_id(user_id)
+
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT DISTINCT claim_id, reviewer_uid
+                  FROM evidence_decision_events
+                 WHERE project_id=%s
+                 ORDER BY claim_id ASC, reviewer_uid ASC
+                """,
+                (pid,),
+            )
+            streams = cur.fetchall() or []
+
+            rebuilt_targets = 0
+            for claim_id, reviewer_uid in streams:
+                cid = str(claim_id or "").strip()
+                ruid = str(reviewer_uid or "").strip() or "default"
+                if not cid:
+                    continue
+
+                cur.execute(
+                    """
+                    DELETE FROM evidence_decision_targets
+                     WHERE project_id=%s AND claim_id=%s AND reviewer_uid=%s
+                    """,
+                    (pid, cid, ruid),
+                )
+
+                cur.execute(
+                    """
+                    SELECT event_id,
+                           event_uid,
+                           action,
+                           target_attachment_id,
+                           target_span_id,
+                           set_value,
+                           payload_json,
+                           created_at,
+                           resulting_version
+                      FROM evidence_decision_events
+                     WHERE project_id=%s AND claim_id=%s AND reviewer_uid=%s
+                     ORDER BY resulting_version ASC, event_id ASC
+                    """,
+                    (pid, cid, ruid),
+                )
+                rows = cur.fetchall() or []
+
+                # Replay into in-memory state then write the projection.
+                by_key: dict[str, dict[str, Any]] = {}
+                max_version = 0
+                for (
+                    event_id,
+                    event_uid,
+                    action,
+                    att,
+                    span,
+                    set_value,
+                    payload_json,
+                    created_at,
+                    resulting_version,
+                ) in rows:
+                    act = str(action or "").strip().lower()
+                    max_version = max(max_version, int(resulting_version or 0))
+                    if act == "clear":
+                        by_key.clear()
+                        continue
+
+                    attachment_id = str(att or "").strip()
+                    span_id = str(span or "").strip()
+                    if not attachment_id or not span_id:
+                        continue
+                    key = _target_key(attachment_id, span_id)
+                    entry = by_key.get(key) or {
+                        "attachment_id": attachment_id,
+                        "span_id": span_id,
+                        "pinned": False,
+                        "triage": "none",
+                        "updated_at": None,
+                        "last_event_id": None,
+                        "last_event_uid": None,
+                    }
+
+                    pinned = bool(entry.get("pinned"))
+                    triage = str(entry.get("triage") or "none")
+                    if act == "pin":
+                        pinned = True
+                    elif act == "unpin":
+                        pinned = False
+                    elif act == "accept":
+                        set_eff = True if set_value is None else bool(set_value)
+                        if set_eff is False:
+                            if triage == "accepted":
+                                triage = "none"
+                        else:
+                            triage = "accepted"
+                    elif act == "reject":
+                        set_eff = True if set_value is None else bool(set_value)
+                        if set_eff is False:
+                            if triage == "rejected":
+                                triage = "none"
+                        else:
+                            triage = "rejected"
+
+                    entry["pinned"] = bool(pinned)
+                    entry["triage"] = triage if triage in TRIAGE_VALUES else "none"
+                    entry["updated_at"] = _to_iso(created_at)
+                    entry["last_event_id"] = int(event_id)
+                    entry["last_event_uid"] = str(event_uid)
+                    by_key[key] = entry
+
+                cur.execute(
+                    """
+                    INSERT INTO evidence_decision_streams(
+                      project_id,
+                      claim_id,
+                      reviewer_uid,
+                      version,
+                      created_by_user_id,
+                      updated_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, now())
+                    ON CONFLICT(project_id, claim_id, reviewer_uid)
+                    DO UPDATE SET
+                      version=EXCLUDED.version,
+                      updated_at=now(),
+                      created_by_user_id=EXCLUDED.created_by_user_id
+                    """,
+                    (pid, cid, ruid, int(max_version), uid),
+                )
+
+                for key, entry in by_key.items():
+                    updated_at = entry.get("updated_at")
+                    cur.execute(
+                        """
+                        INSERT INTO evidence_decision_targets(
+                          project_id,
+                          claim_id,
+                          reviewer_uid,
+                          target_key,
+                          attachment_id,
+                          span_id,
+                          pinned,
+                          triage,
+                          updated_at,
+                          last_event_id,
+                          last_event_uid
+                        )
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s::timestamptz,%s,%s)
+                        ON CONFLICT(project_id, claim_id, reviewer_uid, target_key)
+                        DO UPDATE SET
+                          pinned=EXCLUDED.pinned,
+                          triage=EXCLUDED.triage,
+                          updated_at=EXCLUDED.updated_at,
+                          last_event_id=EXCLUDED.last_event_id,
+                          last_event_uid=EXCLUDED.last_event_uid
+                        """,
+                        (
+                            pid,
+                            cid,
+                            ruid,
+                            str(key),
+                            str(entry.get("attachment_id") or ""),
+                            str(entry.get("span_id") or ""),
+                            bool(entry.get("pinned")),
+                            str(entry.get("triage") or "none"),
+                            str(updated_at or _utc_now().isoformat()),
+                            entry.get("last_event_id"),
+                            entry.get("last_event_uid"),
+                        ),
+                    )
+                    rebuilt_targets += 1
+
+        conn.commit()
+
+    return {"streams": int(len(streams)), "targets": int(rebuilt_targets)}
+
+
+def import_events_ndjson(
+    *,
+    project_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    blob: bytes,
+    overwrite: bool = False,
+) -> Dict[str, int]:
+    pid = _project_id(project_id)
+    uid = _user_id(user_id)
+    if overwrite:
+        wipe_project(project_id=pid)
+
+    try:
+        text = blob.decode("utf-8", errors="ignore")
+    except Exception:
+        text = ""
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    parsed: list[dict[str, Any]] = []
+    for ln in lines:
+        try:
+            obj = json.loads(ln)
+        except Exception:
+            continue
+        if isinstance(obj, dict):
+            parsed.append(obj)
+
+    inserted = 0
+    with connect() as conn:
+        with conn.cursor() as cur:
+            for obj in parsed:
+                claim_id = str(obj.get("claim_id") or "").strip()
+                reviewer_uid = str(obj.get("reviewer_uid") or "default").strip()
+                if not claim_id:
+                    continue
+                action = str(obj.get("action") or "").strip().lower()
+                if action not in DECISION_ACTIONS:
+                    continue
+                target = obj.get("target")
+                attachment_id = None
+                span_id = None
+                if action != "clear" and isinstance(target, dict):
+                    attachment_id = (
+                        str(target.get("attachment_id") or "").strip() or None
+                    )
+                    span_id = str(target.get("span_id") or "").strip() or None
+                target_key = (
+                    _target_key(str(attachment_id), str(span_id))
+                    if attachment_id and span_id
+                    else None
+                )
+
+                set_val = obj.get("set")
+                set_value = None
+                if action in {"accept", "reject"}:
+                    set_value = True if set_val is None else bool(set_val)
+
+                payload = obj.get("payload")
+                if not isinstance(payload, dict):
+                    payload = {}
+                fp = _fingerprint(
+                    action=action,
+                    target={"attachment_id": attachment_id, "span_id": span_id}
+                    if attachment_id and span_id
+                    else None,
+                    set_value=set_value,
+                    payload=payload,
+                )
+
+                created_at = obj.get("created_at") or _utc_now().isoformat().replace(
+                    "+00:00", "Z"
+                )
+                created_by = str(obj.get("created_by_user_id") or uid)
+                event_uid = str(obj.get("event_uid") or "").strip() or str(uuid4())
+                idempotency_key = (
+                    str(obj.get("idempotency_key") or "").strip() or uuid4().hex
+                )
+                expected_version = int(obj.get("expected_version") or 0)
+                resulting_version = int(obj.get("resulting_version") or 0)
+
+                cur.execute(
+                    """
+                    INSERT INTO evidence_decision_events(
+                      event_uid,
+                      project_id,
+                      claim_id,
+                      reviewer_uid,
+                      created_by_user_id,
+                      idempotency_key,
+                      action,
+                      target_attachment_id,
+                      target_span_id,
+                      target_key,
+                      expected_version,
+                      resulting_version,
+                      request_fingerprint,
+                      set_value,
+                      payload_json,
+                      created_at
+                    )
+                    VALUES (
+                      %s,
+                      %s,%s,%s,
+                      %s,
+                      %s,
+                      %s,
+                      %s,%s,%s,
+                      %s,%s,
+                      %s,
+                      %s,
+                      %s::jsonb,
+                      %s::timestamptz
+                    )
+                    ON CONFLICT DO NOTHING
+                    """,
+                    (
+                        event_uid,
+                        pid,
+                        claim_id,
+                        reviewer_uid,
+                        created_by,
+                        idempotency_key,
+                        action,
+                        attachment_id,
+                        span_id,
+                        target_key,
+                        expected_version,
+                        resulting_version,
+                        fp,
+                        set_value,
+                        _json_dumps(payload),
+                        str(created_at),
+                    ),
+                )
+                inserted += int(cur.rowcount or 0)
+
+        conn.commit()
+
+    rebuilt = rebuild_project_projections(project_id=pid, user_id=uid)
+    return {"inserted": int(inserted), **rebuilt}
+
+
 __all__ = [
     "DECISION_ACTIONS",
     "EvidenceDecisionConflict",
@@ -751,4 +1190,8 @@ __all__ = [
     "get_projection",
     "list_recent_events",
     "append_event",
+    "export_events_ndjson",
+    "import_events_ndjson",
+    "rebuild_project_projections",
+    "wipe_project",
 ]

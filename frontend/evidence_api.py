@@ -18,6 +18,20 @@ class EvidenceApiError(RuntimeError):
     """Raised when evidence API helpers encounter an unrecoverable error."""
 
 
+class EvidenceDecisionConflict(EvidenceApiError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        current_version: Optional[int] = None,
+        status_code: int = 409,
+    ) -> None:
+        """Create a conflict error with optional current_version."""
+        super().__init__(message)
+        self.current_version = current_version
+        self.status_code = int(status_code)
+
+
 def show_api_error(message: str, *, icon: str = "⚠️") -> None:
     """Show API errors via toast when possible, otherwise fall back to st.error."""
     toast = getattr(st, "toast", None)
@@ -128,6 +142,7 @@ def list_evidence(
     include_neutral: bool = True,
     pinned_only: bool = False,
     claim_text: Optional[str] = None,
+    reviewer_uid: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Fetch ranked evidence for a claim with concurrency + metadata helpers."""
     limit = max(1, min(limit, MAX_TOTAL_CANDIDATES))
@@ -140,6 +155,8 @@ def list_evidence(
             "include_neutral": include_neutral,
             "pinned_only": pinned_only,
         }
+        if reviewer_uid:
+            params["reviewer_uid"] = str(reviewer_uid)
         if label:
             params["label"] = label
         if claim_text:
@@ -162,6 +179,107 @@ def list_evidence(
     meta["remaining_candidates"] = remaining_candidates
     meta["next_offset"] = current_offset + returned
     return payload
+
+
+def get_evidence_decisions(
+    claim_id: str,
+    *,
+    reviewer_uid: str,
+    events_limit: int = 20,
+) -> Dict[str, Any]:
+    params = {
+        "reviewer_uid": str(reviewer_uid or "default").strip() or "default",
+        "events_limit": max(0, min(int(events_limit), 200)),
+    }
+    return _request("get", f"/claims/{claim_id}/evidence/decisions", params=params)
+
+
+def append_evidence_decision_event(
+    claim_id: str,
+    *,
+    reviewer_uid: str,
+    idempotency_key: str,
+    expected_version: int,
+    action: str,
+    target: Optional[Dict[str, str]] = None,
+    set_value: Optional[bool] = None,
+    payload: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    url = f"{_api_root()}/claims/{claim_id}/evidence/decisions/events"
+    params = {"reviewer_uid": str(reviewer_uid or "default").strip() or "default"}
+    body: Dict[str, Any] = {
+        "idempotency_key": str(idempotency_key or "").strip(),
+        "expected_version": int(expected_version),
+        "action": str(action or "").strip().lower(),
+    }
+    if target is not None:
+        body["target"] = {
+            "attachment_id": str((target or {}).get("attachment_id") or "").strip(),
+            "span_id": str((target or {}).get("span_id") or "").strip(),
+        }
+    if set_value is not None:
+        body["set"] = bool(set_value)
+    if payload is not None:
+        body["payload"] = dict(payload)
+
+    headers = {**_auth_headers(), "Content-Type": "application/json"}
+    try:
+        response = requests.request(
+            "post",
+            url,
+            params=params,
+            json=body,
+            headers=headers,
+            timeout=DEFAULT_TIMEOUT,
+        )
+    except requests.RequestException as exc:  # pragma: no cover
+        message = str(exc)
+        detail = _extract_response_detail(getattr(exc, "response", None))
+        if detail:
+            message = f"{message} ({detail})"
+        show_api_error(f"Evidence decision error: {message}")
+        raise EvidenceApiError(message) from exc
+
+    if response.status_code == 409:
+        try:
+            payload_obj = response.json()
+        except ValueError:
+            payload_obj = {}
+        current_version = None
+        if (
+            isinstance(payload_obj, dict)
+            and payload_obj.get("current_version") is not None
+        ):
+            try:
+                current_version = int(payload_obj.get("current_version"))
+            except Exception:
+                current_version = None
+        detail = None
+        if isinstance(payload_obj, dict):
+            detail = payload_obj.get("detail")
+        msg = str(detail or "version conflict")
+        raise EvidenceDecisionConflict(
+            msg,
+            current_version=current_version,
+            status_code=int(response.status_code),
+        )
+
+    try:
+        response.raise_for_status()
+    except requests.RequestException as exc:  # pragma: no cover
+        message = str(exc)
+        detail = _extract_response_detail(getattr(exc, "response", None))
+        if detail:
+            message = f"{message} ({detail})"
+        show_api_error(f"Evidence decision error: {message}")
+        raise EvidenceApiError(message) from exc
+
+    if not response.text:
+        return {}
+    try:
+        return response.json()
+    except ValueError:  # pragma: no cover
+        return {"content": response.text}
 
 
 def request_rerun(
@@ -227,6 +345,7 @@ def put_evidence_selection(claim_id: str, payload: Dict[str, Any]) -> Dict[str, 
 
 __all__ = [
     "EvidenceApiError",
+    "EvidenceDecisionConflict",
     "INFLIGHT_KEY",
     "MAX_LIST_REQUESTS",
     "list_evidence",
@@ -238,5 +357,7 @@ __all__ = [
     "jump_to_pdf_span",
     "get_evidence_selection",
     "put_evidence_selection",
+    "get_evidence_decisions",
+    "append_evidence_decision_event",
     "show_api_error",
 ]

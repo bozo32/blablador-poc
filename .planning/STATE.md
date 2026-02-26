@@ -12,11 +12,11 @@ Planning index: `.planning/PRIORITIES.md`
 ## Current Position
 
 Phase: 10 of 12 (Contracts + core workflow simplification)
-Plan: 5 of 7 (10-05 Demo + trace replay)
-Status: In progress (10-04 complete; 10-04.5 source upload unblocked; next 10-05)
-Last activity: 2026-02-26 — Completed 10-04.5-01-01 bytes-only source upload endpoint (+ dedupe + pipeline fixes)
+Plan: 2 of 6 (10-04.5-01 Intake hardening)
+Status: In progress (10-04.5 source inbox/project safety; next 10-04.5-01-02)
+Last activity: 2026-02-26 — Completed 10-04.5-01-03 attachments project scoping + non-mutating clone
 
-Progress: ███████░░░ 72%
+Progress: ███████░░░ 71%
 
 ## Performance Metrics
 
@@ -124,6 +124,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-02-26T17:14:37Z
-Stopped at: Completed 10-04.5-01-01-PLAN.md
+Last session: 2026-02-26T17:27:59Z
+Stopped at: Completed 10-04.5-01-03-PLAN.md
 Resume file: None

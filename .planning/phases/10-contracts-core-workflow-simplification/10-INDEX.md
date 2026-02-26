@@ -13,6 +13,7 @@ Plans:
 - `10-04.5-PLAN.md` — Cleanup: spine-only minimal corpus protocol
 - `10-04.5-01-PLAN.md` — Intake: unified PDF drop (ingest + attach)
 - `10-04.5-01-01-PLAN.md` — Backend: source upload via bytes + dedupe
+- `10-04.5-01-03-PLAN.md` — Backend: project scoping + clone invariants
 - `10-04.5-01-02-PLAN.md` — Frontend: unified intake inbox + verifier
 - `10-05-PLAN.md` — Demo + trace replay (reproducible E2E)
 - `10-06-PLAN.md` — Optional add-ons (hosted inference, tri-level assessment)

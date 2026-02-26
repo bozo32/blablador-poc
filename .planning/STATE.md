@@ -12,18 +12,18 @@ Planning index: `.planning/PRIORITIES.md`
 ## Current Position
 
 Phase: 10 of 12 (Contracts + core workflow simplification)
-Plan: 2 of 6 (10-04.5-01 Intake hardening)
+Plan: 3 of 6 (10-04.5-01 Intake hardening)
 Status: In progress (10-04.5 source inbox/project safety; next 10-04.5-01-02)
-Last activity: 2026-02-26 — Completed 10-04.5-01-03 attachments project scoping + non-mutating clone
+Last activity: 2026-02-26 — Completed 10-04.5-01-04 ingest scoping + bytes-only hardening
 
 Progress: ███████░░░ 71%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 59
+- Total plans completed: 60
 - Average duration: 14 min
-- Total execution time: 3.6 hours
+- Total execution time: 3.9 hours
 
 **By Phase:**
 
@@ -36,7 +36,7 @@ Progress: ███████░░░ 71%
 | 5 | 4 | 4 | 20 min |
 
 **Recent Trend:**
-- Last 5 plans: 05-04 (23 min), 05-03 (15 min), 05-02 (22 min), 05-01 (20 min), 04-03 (20 min)
+- Last 5 plans: 10-04.5-01-04 (20 min), 10-04.5-01-03 (9 min), 05-04 (23 min), 05-03 (15 min), 05-02 (22 min)
 - Trend: Building
 
 ## Accumulated Context
@@ -45,6 +45,10 @@ Progress: ███████░░░ 71%
 
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
+
+  - `/ingest` list/read/upload require `X-Project-Id` by default (400 if missing; dev fallback flag) (10-04.5-01-04).
+
+  - Legacy `local_path` attachment create routes are disabled by default (dev-only escape hatch) (10-04.5-01-04).
 
   - Surfing graph navigation uses seq-gated Cytoscape events and focus-based drill-down; Go Read/Go Chase enabled for work nodes with resolved_ingest_id (10-03).
 
@@ -124,6 +128,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-02-26T17:27:59Z
-Stopped at: Completed 10-04.5-01-03-PLAN.md
+Last session: 2026-02-26T17:53:18Z
+Stopped at: Completed 10-04.5-01-04-PLAN.md
 Resume file: None

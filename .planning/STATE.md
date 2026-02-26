@@ -12,9 +12,9 @@ Planning index: `.planning/PRIORITIES.md`
 ## Current Position
 
 Phase: 10 of 12 (Contracts + core workflow simplification)
-Plan: 4 of 7 (10-04 Durable decisions/events)
-Status: Complete
-Last activity: 2026-02-23 — Completed 10-03 Graph as navigation; ready for 10-04
+Plan: 5 of 7 (10-05 Demo + trace replay)
+Status: In progress (10-04 complete; next 10-05)
+Last activity: 2026-02-26 — Completed 10-04 Durable decisions/events; began workflow hardening and backend attachment reuse
 
 Progress: ██████████░ 80%
 
@@ -47,6 +47,8 @@ Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
   - Surfing graph navigation uses seq-gated Cytoscape events and focus-based drill-down; Go Read/Go Chase enabled for work nodes with resolved_ingest_id (10-03).
+
+  - Reuse cited PDFs across many citing claims via attachment cloning; persist doc-level reference->ingest link for auto-place and graph availability (workflow hardening).
 
   - Workflow happy path uses mutable Postgres run status + pollable stage_state_json; Streamlit is polling-first (10-02).
 
@@ -122,6 +124,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-02-23T12:00:00Z
-Stopped at: Completed 10-03-SUMMARY.md; ready for /gsd-plan-phase 10-04
+Last session: 2026-02-26T12:00:00Z
+Stopped at: Planning docs cleanup + backend workflow hardening; next: plan/execute 10-05 demo + trace replay
 Resume file: None

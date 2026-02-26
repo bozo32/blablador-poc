@@ -1,6 +1,6 @@
 ---
 title: Planning Index / Priority Order
-updated: 2026-02-20
+updated: 2026-02-26
 ---
 
 # Planning Index / Priority Order
@@ -13,9 +13,9 @@ material.
 
 ## Priority Order (POC-first)
 
-0) Finish the spine cutover (close 09.3)
-- Goal: no required durable local `data/**`; everything important is Postgres/S3.
-- Source: `.planning/phases/09.3-spine-everywhere-legacy-removal/*`
+0) Phase 10: Demo + trace replay (10-05)
+- Goal: reproducible E2E workflow (seed corpus + trace replay).
+- Source: `.planning/phases/10-contracts-core-workflow-simplification/10-05-OUTLINE.md`
 
 1) Contracts arc (make stage boundaries explicit + swappable)
 - Goal: define stable, versioned artifacts/contracts between stages so add-ons
@@ -56,8 +56,8 @@ material.
 
 ## Phase Mapping
 
-- Priority 0: Phase 9.3 (close out + verify)
-- Priorities 1-7: Phase 10 plans (see `.planning/phases/10-contracts-core-workflow-simplification/`)
+- Priority 0: Phase 10 (continue execution)
+- Phase 09.3 is complete; reference lives under `.planning/phases/done/09.3-spine-everywhere-legacy-removal/`
 
 ## How To Use This With GSD
 

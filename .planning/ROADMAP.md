@@ -253,27 +253,27 @@ Plans:
 **Plans**: 6 plans
 
 Plans:
-- [ ] 09.3-01-PLAN.md — Attachments persisted in spine (records in Postgres, blobs/artifacts in object store)
-- [ ] 09.3-02-PLAN.md — Judgments + exports persisted in spine (no data/judgments dependence)
-- [ ] 09.3-03-PLAN.md — Evidence runs + selections persisted in spine (history + artifacts)
-- [ ] 09.3-04-PLAN.md — Project metadata persisted in spine (reviewers/settings; no data/project.json)
-- [ ] 09.3-05-PLAN.md — Graph stores strategy (Postgres or rebuildable caches; no required local .db)
-- [ ] 09.3-06-PLAN.md — Delete legacy stores + remove compat flags; spine is the only runtime
+- [x] 09.3-01-PLAN.md — Attachments persisted in spine (records in Postgres, blobs/artifacts in object store)
+- [x] 09.3-02-PLAN.md — Judgments + exports persisted in spine (no data/judgments dependence)
+- [x] 09.3-03-PLAN.md — Evidence runs + selections persisted in spine (history + artifacts)
+- [x] 09.3-04-PLAN.md — Project metadata persisted in spine (reviewers/settings; no data/project.json)
+- [x] 09.3-05-PLAN.md — Graph stores strategy (Postgres or rebuildable caches; no required local .db)
+- [x] 09.3-06-PLAN.md — Delete legacy stores + remove compat flags; spine is the only runtime
 
 **Details:**
 
 - Verification script: `scripts/dev/verify_09_3_spine_cutover.sh`
-- Verification doc: `.planning/phases/09.3-spine-everywhere-legacy-removal/09.3-VERIFICATION.md`
+- Verification doc: `.planning/phases/done/09.3-spine-everywhere-legacy-removal/09.3-VERIFICATION.md`
 
 ### Phase 10: Contracts + Core Workflow Simplification (INSERTED)
 **Goal**: Make stage boundaries explicit (contracts) and simplify the core workflow so components can swap (e.g. rerankers) without rewiring callers.
 **Depends on**: Phase 9.3
 
 Plans:
-- [x] 10-01-PLAN.md — Contracts arc (stage boundaries + artifact contracts)
-- [ ] 10-02-PLAN.md — Core workflow simplification (happy-path + minimal orchestrator)
-- [ ] 10-03-PLAN.md — Graph as navigation (Cytoscape routing + recursive retrieval)
-- [ ] 10-04-PLAN.md — Durable decisions/events (evidence decisions as events)
+- [x] `.planning/phases/10-contracts-core-workflow-simplification/done/10-01-PLAN.md` — Contracts arc (stage boundaries + artifact contracts)
+- [x] `.planning/phases/10-contracts-core-workflow-simplification/done/10-02-PLAN.md` — Core workflow simplification (happy-path + minimal orchestrator)
+- [x] `.planning/phases/10-contracts-core-workflow-simplification/done/10-03-PLAN.md` — Graph as navigation (Cytoscape routing + recursive retrieval)
+- [x] `.planning/phases/10-contracts-core-workflow-simplification/done/10-04-PLAN.md` — Durable decisions/events (evidence decisions as events)
 - [ ] 10-05-PLAN.md — Demo + trace replay (reproducible E2E)
 - [ ] 10-06-PLAN.md — Optional add-ons (hosted inference, tri-level assessment)
 - [ ] 10-07-PLAN.md — Deprioritized ops/cloud direction (doc-only backlog)
@@ -311,4 +311,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 9.1. Ingestion replumbing + solid spine | 15/15 | Complete | 2026-02-16 |
 | 9.2. Ingestion automation robustness + fallback extraction | 7/7 | Complete | 2026-02-17 |
 | 9.3. Spine Everywhere + Legacy Removal | 6/6 | Complete | 2026-02-20 |
-| 10. Contracts + Core Workflow Simplification | 1/7 | In progress | - |
+| 10. Contracts + Core Workflow Simplification | 4/7 | In progress | - |

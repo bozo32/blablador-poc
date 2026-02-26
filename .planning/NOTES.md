@@ -71,7 +71,7 @@ Update it at the start/end of a session so context loss is cheap.
 
 - New plans added:
   - `.planning/phases/09.2-ingestion-automation-robustness-fallback-extraction/*`
-  - `.planning/phases/09.3-spine-everywhere-legacy-removal/*`
+  - `.planning/phases/done/09.3-spine-everywhere-legacy-removal/*`
 - 09.2 locked decisions:
   - OCR engine: tesseract (worker container)
   - OCR languages: default English, settings-backed/togglable

@@ -1146,7 +1146,7 @@ async def ingest_document(
 
     file_bytes = await file.read()
 
-    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
+    project_id = _require_project_id_for_upload(x_project_id)
     user_id = str(app_settings.DEFAULT_USER_ID)
     filename = str(file.filename or "").strip() or "document.pdf"
 
@@ -1239,7 +1239,7 @@ async def ingest_document(
 def list_ingest_documents(
     x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
 ):
-    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
+    project_id = _require_project_id_for_upload(x_project_id)
 
     try:
         out = list_ingests_from_spine(project_id=project_id, limit=200)
@@ -1257,7 +1257,7 @@ def get_ingest_document(
     doc_id: str,
     x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
 ):
-    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
+    project_id = _require_project_id_for_upload(x_project_id)
     try:
         doc = build_ingested_document_from_spine(
             work_id=str(doc_id),

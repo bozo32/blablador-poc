@@ -23,6 +23,22 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _decode_json_cell(value: Any) -> Any:
+    """Handle psycopg json/jsonb decoding differences.
+
+    Depending on driver + cursor settings, Postgres JSONB columns may come back
+    already decoded (dict/list) or as JSON strings.
+    """
+    if value is None:
+        return None
+    if isinstance(value, (dict, list)):
+        return value
+    if isinstance(value, (str, bytes, bytearray)):
+        raw = value.decode() if isinstance(value, (bytes, bytearray)) else value
+        return json.loads(raw or "null")
+    return value
+
+
 class JudgmentStore:
     def __init__(self, *, settings: AppSettings = app_settings) -> None:
         """Create a judgment store backed by Postgres."""
@@ -75,12 +91,8 @@ class JudgmentStore:
             else _now(),
             "status": row[2],
             "verdict": row[3],
-            "notes": row[4]
-            if isinstance(row[4], dict)
-            else json.loads(row[4] or "null"),
-            "validation": row[5]
-            if isinstance(row[5], dict)
-            else json.loads(row[5] or "null"),
+            "notes": _decode_json_cell(row[4]),
+            "validation": _decode_json_cell(row[5]),
             "doc_id": row[6],
             "citation_index": row[7],
             "target_id": row[8],
@@ -92,12 +104,8 @@ class JudgmentStore:
             "year": str(row[14]) if row[14] is not None else None,
             "claim_text": row[15],
             "cited_work_id": row[16],
-            "citation_anchor": row[17]
-            if isinstance(row[17], dict)
-            else json.loads(row[17] or "null"),
-            "span_selectors": row[18]
-            if isinstance(row[18], dict)
-            else json.loads(row[18] or "null"),
+            "citation_anchor": _decode_json_cell(row[17]),
+            "span_selectors": _decode_json_cell(row[18]),
         }
         return JudgmentPayload.model_validate(payload)
 

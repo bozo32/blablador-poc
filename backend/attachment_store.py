@@ -15,6 +15,10 @@ from uuid import uuid4
 from backend.db.pg import connect
 from backend.object_store import s3 as object_store_s3
 
+from lxml import etree
+
+from backend import extraction
+
 
 STATUS_PENDING = "pending"
 STATUS_CONVERTING = "converting"
@@ -29,6 +33,9 @@ DEFAULT_MAX_ATTEMPTS = 2
 
 
 _SENTENCE_CACHE: dict[str, Tuple[str, List[dict]]] = {}
+
+
+TEI_NS = extraction.NS
 
 
 class AttachmentNotFound(RuntimeError):
@@ -450,6 +457,129 @@ def set_placement(
     return get_attachment(aid) or rec
 
 
+def clone_attachment(
+    source_attachment_id: str,
+    *,
+    claim_id: Optional[str] = None,
+    doc_id: Optional[str] = None,
+    citation_index: Optional[int] = None,
+    target_id: Optional[str] = None,
+    reference_hint: Optional[dict] = None,
+    claim_text: Optional[str] = None,
+) -> dict:
+    """Clone an existing attachment row.
+
+    The clone reuses the same stored PDF object and artifacts. If the source is
+    already matched, the clone is created as matched immediately.
+    """
+    src = get_attachment(str(source_attachment_id))
+    if src is None:
+        raise AttachmentNotFound(f"Attachment {source_attachment_id} not found")
+
+    new_id = str(uuid4())
+    now = _now()
+    status = _normalize_status(src.get("status"))
+    artifacts = src.get("artifacts") or {}
+    ref_hint = reference_hint or (src.get("reference_hint") or {})
+    parsed_at = src.get("parsed_at")
+
+    with connect(autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO attachments(
+                  attachment_id,
+                  project_id,
+                  created_by_user_id,
+                  claim_id,
+                  doc_id,
+                  citation_index,
+                  target_id,
+                  source_ingest_id,
+                  filename,
+                  size_bytes,
+                  status,
+                  error,
+                  parsed_at,
+                  archived,
+                  archived_at,
+                  attempts,
+                  max_attempts,
+                  reference_hint,
+                  claim_text,
+                  pdf_object_key,
+                  artifacts_json,
+                  created_at,
+                  updated_at
+                )
+                VALUES (
+                  %s,%s,%s,%s,%s,%s,%s,%s,
+                  %s,%s,%s,%s,%s,
+                  false,NULL,
+                  0,%s,
+                  %s::jsonb,%s,
+                  %s,
+                  %s::jsonb,
+                  now(),now()
+                )
+                """,
+                (
+                    new_id,
+                    str(src.get("project_id") or "default"),
+                    str(src.get("created_by_user_id") or "local"),
+                    claim_id,
+                    doc_id,
+                    citation_index,
+                    target_id,
+                    src.get("source_ingest_id"),
+                    src.get("filename"),
+                    int(src.get("size") or 0),
+                    STATUS_MATCHED if status == STATUS_MATCHED else STATUS_PENDING,
+                    None,
+                    parsed_at,
+                    int(src.get("max_attempts") or DEFAULT_MAX_ATTEMPTS),
+                    json.dumps(ref_hint, ensure_ascii=True),
+                    claim_text,
+                    str(src.get("pdf_object_key") or ""),
+                    json.dumps(artifacts, ensure_ascii=True),
+                ),
+            )
+
+    _log_event(
+        attachment_id=new_id,
+        project_id=str(src.get("project_id") or "default"),
+        user_id=str(src.get("created_by_user_id") or "local"),
+        event="cloned",
+        detail=f"from:{source_attachment_id}",
+    )
+    return get_attachment(new_id) or {
+        "id": new_id,
+        "attachment_id": new_id,
+        "project_id": src.get("project_id"),
+        "created_by_user_id": src.get("created_by_user_id"),
+        "created_at": now,
+        "updated_at": now,
+        "claim_id": claim_id,
+        "doc_id": doc_id,
+        "citation_index": citation_index,
+        "target_id": target_id,
+        "source_ingest_id": src.get("source_ingest_id"),
+        "filename": src.get("filename"),
+        "size": int(src.get("size") or 0),
+        "status": STATUS_MATCHED if status == STATUS_MATCHED else STATUS_PENDING,
+        "error": None,
+        "parsed_at": parsed_at,
+        "archived": False,
+        "attempts": 0,
+        "max_attempts": int(src.get("max_attempts") or DEFAULT_MAX_ATTEMPTS),
+        "reference_hint": ref_hint,
+        "claim_text": claim_text,
+        "pdf_object_key": src.get("pdf_object_key"),
+        "artifacts": artifacts,
+        "timeline": [],
+    }
+
+
 def update_attachment(
     attachment_id: str,
     *,
@@ -726,7 +856,15 @@ def load_sentences_for_attachment(
     artifacts = rec.get("artifacts") or {}
     key = str(artifacts.get("sentences") or "").strip()
     if not key:
-        raise FileNotFoundError(f"Attachment {attachment_id} is missing sentences")
+        # Best-effort fallback: synthesize sentence rows from TEI XML.
+        tei_key = str(artifacts.get("tei_xml") or "").strip()
+        if not tei_key:
+            raise FileNotFoundError(f"Attachment {attachment_id} is missing sentences")
+        raw = object_store_s3.get_bytes(tei_key)
+        rows = _synthesize_sentences_from_tei(raw)
+        if not rows:
+            raise FileNotFoundError(f"Attachment {attachment_id} is missing sentences")
+        return rows
 
     if use_cache:
         cached = _SENTENCE_CACHE.get(str(attachment_id))
@@ -745,6 +883,108 @@ def load_sentences_for_attachment(
             continue
     _SENTENCE_CACHE[str(attachment_id)] = (key, rows)
     return [dict(x) for x in rows]
+
+
+def _collapse_ws(text: str) -> str:
+    return " ".join(str(text or "").split())
+
+
+def _text_content(elem: etree._Element) -> str:
+    return _collapse_ws("".join(elem.itertext()))
+
+
+def _xml_id(elem: etree._Element) -> Optional[str]:
+    return elem.get(f"{{{extraction.XML_NS}}}id") or elem.get("xml:id")
+
+
+def _page_label(elem: etree._Element) -> str:
+    nodes = elem.xpath("ancestor::tei:pb[1]/@n", namespaces=TEI_NS)
+    if nodes:
+        return str(nodes[0])
+    nodes = elem.xpath("preceding::tei:pb[1]/@n", namespaces=TEI_NS)
+    if nodes:
+        return str(nodes[0])
+    return "Unknown"
+
+
+def _section_path(elem: etree._Element) -> str:
+    divs: List[etree._Element] = list(
+        elem.xpath("ancestor::tei:div", namespaces=TEI_NS)
+    )
+    labels: List[str] = []
+    for div in divs:
+        heads = div.xpath("./tei:head[1]", namespaces=TEI_NS)
+        if not heads:
+            continue
+        label = _text_content(heads[0]).strip()
+        if label:
+            labels.append(label)
+    return " > ".join(labels) if labels else "Body"
+
+
+def _synthesize_sentences_from_tei(tei_xml: str | bytes) -> List[dict]:
+    """Synthesize attachment sentence rows from TEI.
+
+    The evidence pipeline prefers persisted `sentences.ndjson`, but some seed
+    datasets (and older artifacts) may have only `tei_xml`. This fallback keeps
+    evidence review usable.
+    """
+    if isinstance(tei_xml, bytes):
+        tei_xml = tei_xml.decode("utf-8", errors="ignore")
+    parser = etree.XMLParser(recover=True)
+    root = etree.fromstring(str(tei_xml).encode("utf-8"), parser=parser)
+
+    paragraph_xpath = (
+        "//tei:text//tei:body//*" "[self::tei:p or self::tei:item or self::tei:cell]"
+    )
+    para_nodes: List[etree._Element] = list(
+        root.xpath(paragraph_xpath, namespaces=TEI_NS)
+    )
+
+    rows: List[dict] = []
+    global_sentence_idx = 0
+    for para_idx, para in enumerate(para_nodes):
+        sent_nodes: List[etree._Element] = list(
+            para.xpath(".//tei:s", namespaces=TEI_NS)
+        )
+        if sent_nodes:
+            for sent_idx, sent in enumerate(sent_nodes):
+                text = _text_content(sent).strip()
+                if not text:
+                    continue
+                sentence_id = _xml_id(sent) or f"auto-sent-{global_sentence_idx}"
+                rows.append(
+                    {
+                        "sentence_id": sentence_id,
+                        "text": text,
+                        "page": _page_label(sent),
+                        "section": _section_path(sent),
+                        "tei_ids": [sentence_id],
+                        "position": global_sentence_idx,
+                        "sentence_index": sent_idx,
+                        "paragraph_id": _xml_id(para) or f"auto-par-{para_idx}",
+                    }
+                )
+                global_sentence_idx += 1
+        else:
+            text = _text_content(para).strip()
+            if not text:
+                continue
+            sentence_id = f"auto-sent-{global_sentence_idx}"
+            rows.append(
+                {
+                    "sentence_id": sentence_id,
+                    "text": text,
+                    "page": _page_label(para),
+                    "section": _section_path(para),
+                    "tei_ids": [sentence_id],
+                    "position": global_sentence_idx,
+                    "sentence_index": 0,
+                    "paragraph_id": _xml_id(para) or f"auto-par-{para_idx}",
+                }
+            )
+            global_sentence_idx += 1
+    return rows
 
 
 def clear_sentence_cache(attachment_id: Optional[str] = None) -> None:

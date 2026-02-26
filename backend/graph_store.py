@@ -282,6 +282,46 @@ class GraphStore:
                     (pid, str(alias), str(node_id), str(kind)),
                 )
 
+    def _propagate_ingest_id_to_doc_key(self, *, doc_key: str, ingest_id: str) -> None:
+        """Fill missing ingest_ids for existing doc_key nodes.
+
+        Reference nodes created during extraction use doc_key values like
+        `doi:...` or `bib:...` but often do not have an ingested PDF yet.
+        When a cited PDF is later ingested, we want auto-place to resolve that
+        reference without requiring a re-run of resolution on the citing work.
+
+        This is best-effort and only fills when ingest_ids is missing/empty.
+        """
+        pid = self._project_id()
+        key = str(doc_key or "").strip()
+        ing = str(ingest_id or "").strip()
+        if not key or not ing:
+            return
+        with connect(autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE graph_nodes
+                       SET properties_json = jsonb_set(
+                             COALESCE(properties_json, '{}'::jsonb),
+                             '{ingest_ids}',
+                             to_jsonb(ARRAY[%s]::text[]),
+                             true
+                           ),
+                           updated_at = now()
+                     WHERE project_id=%s
+                       AND kind='document'
+                       AND (COALESCE(properties_json, '{}'::jsonb)->>'doc_key') = %s
+                       AND (
+                         (COALESCE(properties_json, '{}'::jsonb)->'ingest_ids') IS NULL
+                         OR jsonb_array_length(
+                              COALESCE(properties_json, '{}'::jsonb)->'ingest_ids'
+                            ) = 0
+                       )
+                    """,
+                    (ing, pid, key),
+                )
+
     def resolve_alias(self, alias: str) -> Optional[str]:
         pid = self._project_id()
         a = str(alias or "").strip()
@@ -477,6 +517,24 @@ class GraphStore:
         if bib_meta:
             self._set_alias(alias=str(bib_meta), node_id=node_id, kind="bib")
 
+        # If this work corresponds to an existing reference node (doi/bib),
+        # backfill that node with this ingest_id so auto-place can resolve
+        # without requiring re-resolution of citing works.
+        try:
+            if ingest_id:
+                if doi_meta:
+                    self._propagate_ingest_id_to_doc_key(
+                        doc_key=f"doi:{doi_meta}",
+                        ingest_id=str(ingest_id),
+                    )
+                if bib_meta:
+                    self._propagate_ingest_id_to_doc_key(
+                        doc_key=str(bib_meta),
+                        ingest_id=str(ingest_id),
+                    )
+        except Exception:
+            pass
+
         for ref in (extraction_data or {}).get("references") or []:
             if not isinstance(ref, dict):
                 continue
@@ -655,6 +713,32 @@ class GraphStore:
             kind="document",
             label=None,
             merge_properties={"workflow_assigned": True},
+        )
+
+    def link_reference_to_ingest(
+        self, *, citing_doc_id: str, reference_id: str, cited_ingest_id: str
+    ) -> None:
+        """Attach an uploaded cited work to a reference node.
+
+        Auto-place requires `ref:{citing_doc_id}:{reference_id}` to resolve to a
+        document node with `properties.ingest_ids[0] == cited_ingest_id`.
+
+        This method is invoked when a reviewer assigns a Source Bin PDF to a
+        specific reference target (via attachment placement).
+        """
+        citing = str(citing_doc_id or "").strip()
+        ref = str(reference_id or "").strip()
+        cited = str(cited_ingest_id or "").strip()
+        if not citing or not ref or not cited:
+            return
+        ref_node = self.resolve_alias(f"ref:{citing}:{ref}")
+        if not ref_node:
+            return
+        self._upsert_node(
+            node_id=str(ref_node),
+            kind="document",
+            label=None,
+            merge_properties={"ingest_ids": [cited]},
         )
 
     def ledger_rows(self) -> List[dict]:

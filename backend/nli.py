@@ -268,6 +268,16 @@ def assess(
     """
     effective_settings = settings or app_settings
 
+    # Dev ergonomics: allow disabling NLI entirely to avoid large model downloads
+    # during local workflows and toy dataset iteration.
+    if str(os.environ.get("NLI_DISABLE") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        return []
+
     if _hf_remote_requested(
         settings=effective_settings, advanced_settings=advanced_settings
     ):

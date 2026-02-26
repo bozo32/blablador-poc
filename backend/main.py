@@ -3251,6 +3251,10 @@ def get_claim_status(
 def extract_ingested_document(
     doc_id: str,
     x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+    force: bool = Query(
+        False,
+        description="Force a new extraction job even if extraction is already complete",
+    ),
 ):
     project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
     user_id = str(app_settings.DEFAULT_USER_ID)
@@ -3280,9 +3284,9 @@ def extract_ingested_document(
         if isinstance(extraction_stage, dict)
         else ""
     )
-    if extraction_status == "running" and not extraction_data:
+    if (not bool(force)) and extraction_status == "running" and not extraction_data:
         return {"document_id": doc_id, "extraction": document.get("extraction")}
-    if extraction_status == "complete" and extraction_data:
+    if (not bool(force)) and extraction_status == "complete" and extraction_data:
         return {"document_id": doc_id, "extraction": document.get("extraction")}
 
     try:
@@ -3801,9 +3805,14 @@ def list_global_attachments(archived: bool = False):
     # Default: return only non-archived. If archived=true: include archived.
     store_archived: Optional[bool] = None if archived else False
     records = attachment_store.list_attachments(archived=store_archived, public=True)
-    return {
-        "attachments": [schemas.AttachmentStatus(**rec) for rec in records],
-    }
+    attachments: list[schemas.AttachmentStatus] = []
+    for rec in records:
+        try:
+            attachments.append(_serialize_attachment(rec))
+        except Exception:
+            logger.exception("Failed to serialize attachment")
+            continue
+    return {"attachments": attachments}
 
 
 @app.patch("/attachments/{attachment_id}", response_model=schemas.AttachmentResponse)
@@ -3858,7 +3867,93 @@ def patch_attachment_status(
             except Exception:
                 logger.exception("Graph index failed for attachment placement")
 
+            # If the attachment has been promoted to an ingested Work already,
+            # link this reference target to the cited ingest id so future
+            # auto-place calls can resolve it.
+            try:
+                cited_ingest_id = str(record.get("source_ingest_id") or "").strip()
+                if next_doc_id and next_target_id and cited_ingest_id:
+                    graph_store.link_reference_to_ingest(
+                        citing_doc_id=str(next_doc_id),
+                        reference_id=str(next_target_id),
+                        cited_ingest_id=str(cited_ingest_id),
+                    )
+            except Exception:
+                logger.exception("Graph link failed for attachment reference")
+
+            # Auto-sweep evidence once a cited source is assigned.
+            try:
+                latest = attachment_store.get_attachment(attachment_id) or record
+                claim_id = (
+                    latest.get("claim_id") if isinstance(latest, dict) else None
+                ) or next_claim_id
+                claim_text = (
+                    latest.get("claim_text") if isinstance(latest, dict) else None
+                )
+                if (
+                    claim_id
+                    and str(claim_id).strip()
+                    and not background_state.get_state().get("paused")
+                ):
+                    evidence_service.trigger_auto_rerun(
+                        str(claim_id),
+                        claim_text=str(claim_text) if claim_text else None,
+                    )
+            except Exception:
+                logger.exception("Auto rerun enqueue failed after attachment placement")
+
     public_record = attachment_store.public_status(attachment_id)
+    return {"attachment": _serialize_attachment(public_record)}
+
+
+@app.post(
+    "/attachments/{attachment_id}/clone",
+    response_model=schemas.AttachmentResponse,
+)
+def clone_global_attachment(
+    attachment_id: str,
+    payload: schemas.AttachmentCloneRequest,
+):
+    try:
+        record = attachment_store.clone_attachment(
+            attachment_id,
+            claim_id=payload.claim_id,
+            doc_id=payload.doc_id,
+            citation_index=payload.citation_index,
+            target_id=payload.target_id,
+            reference_hint=payload.reference_hint,
+            claim_text=payload.claim_text,
+        )
+    except attachment_store.AttachmentNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    # Persist a doc-level reference -> ingest mapping when possible so auto-place
+    # works for other claimspans referencing the same bibliography entry.
+    try:
+        cited_ingest_id = str(record.get("source_ingest_id") or "").strip()
+        citing_doc_id = str(payload.doc_id or "").strip()
+        reference_id = str(payload.target_id or "").strip()
+        if cited_ingest_id and citing_doc_id and reference_id:
+            graph_store.link_reference_to_ingest(
+                citing_doc_id=citing_doc_id,
+                reference_id=reference_id,
+                cited_ingest_id=cited_ingest_id,
+            )
+    except Exception:
+        logger.exception("Graph link failed for cloned attachment reference")
+
+    # If the clone is already placed on a claim, trigger an evidence rerun.
+    try:
+        claim_id = str(payload.claim_id or "").strip()
+        if claim_id and not background_state.get_state().get("paused"):
+            evidence_service.trigger_auto_rerun(
+                claim_id,
+                claim_text=str(payload.claim_text) if payload.claim_text else None,
+            )
+    except Exception:
+        logger.exception("Auto rerun enqueue failed after attachment clone")
+
+    public_record = attachment_store.public_status(record["id"])
     return {"attachment": _serialize_attachment(public_record)}
 
 

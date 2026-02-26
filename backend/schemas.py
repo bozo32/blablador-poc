@@ -404,6 +404,21 @@ class AttachmentUpdateRequest(BaseModel):
     archived: Optional[bool] = None
 
 
+class AttachmentCloneRequest(BaseModel):
+    """Create a new attachment by cloning an existing one.
+
+    This supports reusing one cited PDF across many citing claims without
+    re-uploading or mutating the original attachment.
+    """
+
+    claim_id: Optional[str] = None
+    doc_id: Optional[str] = None
+    citation_index: Optional[int] = None
+    target_id: Optional[str] = None
+    reference_hint: Optional[dict] = None
+    claim_text: Optional[str] = None
+
+
 class AttachmentResponse(BaseModel):
     attachment: AttachmentStatus
 

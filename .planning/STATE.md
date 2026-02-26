@@ -13,10 +13,10 @@ Planning index: `.planning/PRIORITIES.md`
 
 Phase: 10 of 12 (Contracts + core workflow simplification)
 Plan: 5 of 7 (10-05 Demo + trace replay)
-Status: In progress (10-04 complete; next 10-05)
-Last activity: 2026-02-26 — Completed 10-04 Durable decisions/events; began workflow hardening and backend attachment reuse
+Status: In progress (10-04 complete; 10-04.5 source upload unblocked; next 10-05)
+Last activity: 2026-02-26 — Completed 10-04.5-01-01 bytes-only source upload endpoint (+ dedupe + pipeline fixes)
 
-Progress: ██████████░ 80%
+Progress: ███████░░░ 72%
 
 ## Performance Metrics
 
@@ -124,6 +124,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-02-26T12:00:00Z
-Stopped at: Planning docs cleanup + backend workflow hardening; next: plan/execute 10-05 demo + trace replay
+Last session: 2026-02-26T17:14:37Z
+Stopped at: Completed 10-04.5-01-01-PLAN.md
 Resume file: None

@@ -15,6 +15,7 @@ Plans:
 - `10-04.5-01-01-PLAN.md` — Backend: source upload via bytes + dedupe
 - `10-04.5-01-03-PLAN.md` — Backend: project scoping + clone invariants
 - `10-04.5-01-02-PLAN.md` — Frontend: unified intake inbox + verifier
+- `10-04.5-01-04-PLAN.md` — Backend: ingest project scoping + bytes-only confirmation
 - `10-04.5-01-05-PLAN.md` — Frontend: Source Inbox + assignment + verifier
 - `10-04.5-01-06-PLAN.md` — Verification: intake script + human gate
 - `10-05-PLAN.md` — Demo + trace replay (reproducible E2E)

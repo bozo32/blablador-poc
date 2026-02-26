@@ -338,13 +338,23 @@ _DDL_STATEMENTS: list[str] = [
       reference_hint jsonb NOT NULL DEFAULT '{}'::jsonb,
       claim_text text NULL,
 
+      content_sha256 text NULL,
+
       pdf_object_key text NOT NULL,
       artifacts_json jsonb NOT NULL DEFAULT '{}'::jsonb
     );
     """,
     """
+    ALTER TABLE attachments
+      ADD COLUMN IF NOT EXISTS content_sha256 text;
+    """,
+    """
     CREATE INDEX IF NOT EXISTS attachments_project_id_idx
       ON attachments(project_id);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS attachments_project_content_sha256_idx
+      ON attachments(project_id, content_sha256);
     """,
     """
     CREATE INDEX IF NOT EXISTS attachments_claim_id_idx

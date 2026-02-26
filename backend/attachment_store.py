@@ -202,6 +202,7 @@ def create_attachment(
         "max_attempts": DEFAULT_MAX_ATTEMPTS,
         "reference_hint": reference_hint or {},
         "claim_text": claim_text,
+        "content_sha256": digest,
         "pdf_object_key": pdf_object_key,
         "artifacts": {},
     }
@@ -228,23 +229,25 @@ def create_attachment(
                   archived_at,
                   attempts,
                   max_attempts,
-                  reference_hint,
-                  claim_text,
-                  pdf_object_key,
-                  artifacts_json,
-                  created_at,
-                  updated_at
-                )
-                VALUES (
+                   reference_hint,
+                   claim_text,
+                   content_sha256,
+                   pdf_object_key,
+                   artifacts_json,
+                   created_at,
+                   updated_at
+                 )
+                 VALUES (
                   %s, %s, %s, %s, %s, %s, %s, %s,
                   %s, %s, %s, %s, NULL,
                   false, NULL,
-                  0, %s,
-                  %s::jsonb, %s,
-                  %s,
-                  %s::jsonb,
-                  now(), now()
-                )
+                   0, %s,
+                   %s::jsonb, %s,
+                   %s,
+                   %s,
+                   %s::jsonb,
+                   now(), now()
+                 )
                 """,
                 (
                     attachment_id,
@@ -262,6 +265,7 @@ def create_attachment(
                     int(rec["max_attempts"]),
                     json.dumps(rec["reference_hint"], ensure_ascii=True),
                     claim_text,
+                    digest,
                     pdf_object_key,
                     json.dumps({}, ensure_ascii=True),
                 ),
@@ -307,6 +311,7 @@ def get_attachment(attachment_id: str, public: bool = False) -> Optional[dict]:
                   max_attempts,
                   reference_hint,
                   claim_text,
+                  content_sha256,
                   pdf_object_key,
                   artifacts_json
                 FROM attachments
@@ -318,7 +323,7 @@ def get_attachment(attachment_id: str, public: bool = False) -> Optional[dict]:
             if not row:
                 return None
 
-    artifacts = row[22] if isinstance(row[22], dict) else json.loads(row[22] or "{}")
+    artifacts = row[23] if isinstance(row[23], dict) else json.loads(row[23] or "{}")
     ref_hint = row[19] if isinstance(row[19], dict) else json.loads(row[19] or "{}")
     timeline = _fetch_events(attachment_id=aid)
 
@@ -345,7 +350,8 @@ def get_attachment(attachment_id: str, public: bool = False) -> Optional[dict]:
         "max_attempts": int(row[18] or DEFAULT_MAX_ATTEMPTS),
         "reference_hint": ref_hint,
         "claim_text": row[20],
-        "pdf_object_key": row[21],
+        "content_sha256": row[21],
+        "pdf_object_key": row[22],
         "artifacts": artifacts,
         "timeline": timeline,
     }
@@ -505,23 +511,25 @@ def clone_attachment(
                   archived_at,
                   attempts,
                   max_attempts,
-                  reference_hint,
-                  claim_text,
-                  pdf_object_key,
-                  artifacts_json,
-                  created_at,
-                  updated_at
-                )
-                VALUES (
+                   reference_hint,
+                   claim_text,
+                   content_sha256,
+                   pdf_object_key,
+                   artifacts_json,
+                   created_at,
+                   updated_at
+                 )
+                 VALUES (
                   %s,%s,%s,%s,%s,%s,%s,%s,
                   %s,%s,%s,%s,%s,
                   false,NULL,
-                  0,%s,
-                  %s::jsonb,%s,
-                  %s,
-                  %s::jsonb,
-                  now(),now()
-                )
+                   0,%s,
+                   %s::jsonb,%s,
+                   %s,
+                   %s,
+                   %s::jsonb,
+                   now(),now()
+                 )
                 """,
                 (
                     new_id,
@@ -540,6 +548,7 @@ def clone_attachment(
                     int(src.get("max_attempts") or DEFAULT_MAX_ATTEMPTS),
                     json.dumps(ref_hint, ensure_ascii=True),
                     claim_text,
+                    src.get("content_sha256"),
                     str(src.get("pdf_object_key") or ""),
                     json.dumps(artifacts, ensure_ascii=True),
                 ),
@@ -574,6 +583,7 @@ def clone_attachment(
         "max_attempts": int(src.get("max_attempts") or DEFAULT_MAX_ATTEMPTS),
         "reference_hint": ref_hint,
         "claim_text": claim_text,
+        "content_sha256": src.get("content_sha256"),
         "pdf_object_key": src.get("pdf_object_key"),
         "artifacts": artifacts,
         "timeline": [],

@@ -32,6 +32,9 @@ MAX_EVENTS_STORED = 25
 DEFAULT_MAX_ATTEMPTS = 2
 
 
+_UNSET = object()
+
+
 _SENTENCE_CACHE: dict[str, Tuple[str, List[dict]]] = {}
 
 
@@ -753,7 +756,7 @@ def update_attachment(
     attachment_id: str,
     *,
     status: Optional[str] = None,
-    error: Optional[str] = None,
+    error: object = _UNSET,
     parsed_at: Optional[str] = None,
     timeline_event: Optional[str] = None,
     timeline_detail: Optional[str] = None,
@@ -768,7 +771,7 @@ def update_attachment(
     updates: dict[str, object] = {}
     if status is not None:
         updates["status"] = str(status)
-    if error is not None:
+    if error is not _UNSET:
         updates["error"] = error
     if parsed_at is not None:
         updates["parsed_at"] = parsed_at
@@ -999,6 +1002,7 @@ def reset_for_retry(attachment_id: str) -> dict:
         attachment_id,
         status=STATUS_PENDING,
         error=None,
+        attempts=0,
         timeline_event="retry",
         timeline_detail="Manual retry scheduled",
     )

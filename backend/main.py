@@ -3827,16 +3827,36 @@ async def upload_source_attachment(
     if isinstance(existing, dict):
         aid = str(existing.get("id") or existing.get("attachment_id") or "").strip()
         public_record = attachment_store.public_status(aid) if aid else None
+        if public_record and not background_state.get_state().get("paused"):
+            status = str(public_record.get("status") or "").strip().lower()
+            try:
+                attempts = int(public_record.get("attempts") or 0)
+            except Exception:
+                attempts = 0
+            try:
+                max_attempts = int(
+                    public_record.get("max_attempts")
+                    or attachment_store.DEFAULT_MAX_ATTEMPTS
+                )
+            except Exception:
+                max_attempts = attachment_store.DEFAULT_MAX_ATTEMPTS
+
+            if status == "error" or (
+                status in {"pending", "converting", "parsing"}
+                and attempts >= max_attempts
+            ):
+                try:
+                    attachment_store.reset_for_retry(aid)
+                    public_record = attachment_store.public_status(aid) or public_record
+                except Exception:
+                    logger.exception("Unable to reset attachment for retry")
         if (
             public_record
             and not background_state.get_state().get("paused")
             and str(public_record.get("status") or "").strip().lower()
             in {"pending", "converting", "parsing"}
         ):
-            if background_tasks is not None:
-                background_tasks.add_task(attachment_pipeline.process_attachment, aid)
-            else:
-                attachment_pipeline.enqueue_processing(aid)
+            attachment_pipeline.enqueue_processing(aid)
         return {"attachment": _serialize_attachment(public_record or existing)}
 
     record = attachment_store.create_attachment_from_bytes(
@@ -3855,12 +3875,7 @@ async def upload_source_attachment(
 
     public_record = attachment_store.public_status(record["id"])
     if not background_state.get_state().get("paused"):
-        if background_tasks is not None:
-            background_tasks.add_task(
-                attachment_pipeline.process_attachment, record["id"]
-            )
-        else:
-            attachment_pipeline.enqueue_processing(record["id"])
+        attachment_pipeline.enqueue_processing(record["id"])
     return {"attachment": _serialize_attachment(public_record)}
 
 

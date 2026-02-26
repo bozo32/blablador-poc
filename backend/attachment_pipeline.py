@@ -389,6 +389,7 @@ def process_attachment(
             tmp_pdf_path = None
             try:
                 tmp_pdf_path = Path(f"/tmp/attach-{attachment_id}.pdf")
+                tmp_pdf_path.parent.mkdir(parents=True, exist_ok=True)
                 tmp_pdf_path.write_bytes(object_store_s3.get_bytes(pdf_object_key))
                 tei_xml = grobid_client.extract_tei(tmp_pdf_path)
             finally:

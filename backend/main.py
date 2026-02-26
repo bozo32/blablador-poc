@@ -28,6 +28,7 @@ from fastapi import (
     BackgroundTasks,
     FastAPI,
     File,
+    Form,
     Header,
     HTTPException,
     Query,
@@ -1119,6 +1120,18 @@ def _serialize_attachment(record: Optional[dict]) -> schemas.AttachmentStatus:
         data["size"] = data.get("size_bytes")
 
     return schemas.AttachmentStatus(**data)
+
+
+def _require_project_id_for_upload(x_project_id: Optional[str]) -> str:
+    pid = str(x_project_id or "").strip()
+    if pid:
+        return pid
+    allow_default = str(
+        os.environ.get("ALLOW_DEFAULT_PROJECT_ID_FOR_DEV", "") or ""
+    ).strip().lower() in {"1", "true", "yes"}
+    if allow_default:
+        return str(app_settings.DEFAULT_PROJECT_ID)
+    raise HTTPException(status_code=400, detail="X-Project-Id header is required")
 
 
 @app.post("/ingest", response_model=schemas.IngestUploadResponse)
@@ -3766,6 +3779,88 @@ def create_claim_attachment(
         background_tasks.add_task(attachment_pipeline.process_attachment, record["id"])
     else:
         attachment_pipeline.enqueue_processing(record["id"])
+    return {"attachment": _serialize_attachment(public_record)}
+
+
+@app.post("/attachments/upload", response_model=schemas.AttachmentResponse)
+async def upload_source_attachment(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    claim_text: Optional[str] = Form(None),
+    reference_hint: Optional[str] = Form(None),
+    doc_id: Optional[str] = Form(None),
+    citation_index: Optional[int] = Form(None),
+    target_id: Optional[str] = Form(None),
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
+    if not _is_pdf_upload(file):
+        raise HTTPException(status_code=400, detail="Only PDF uploads are supported")
+
+    project_id = _require_project_id_for_upload(x_project_id)
+    user_id = str(app_settings.DEFAULT_USER_ID)
+
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=422, detail="Empty upload")
+
+    sha256 = hashlib.sha256(file_bytes).hexdigest().lower()
+
+    ref_hint: dict = {}
+    if reference_hint is not None and str(reference_hint).strip():
+        try:
+            parsed = json.loads(str(reference_hint))
+        except Exception as exc:
+            raise HTTPException(
+                status_code=422, detail="reference_hint must be valid JSON"
+            ) from exc
+        if not isinstance(parsed, dict):
+            raise HTTPException(
+                status_code=422, detail="reference_hint must be an object"
+            )
+        ref_hint = parsed
+
+    existing = attachment_store.find_attachment_by_content_sha256(
+        project_id=project_id,
+        content_sha256=sha256,
+        archived=False,
+    )
+    if isinstance(existing, dict):
+        aid = str(existing.get("id") or existing.get("attachment_id") or "").strip()
+        public_record = attachment_store.public_status(aid) if aid else None
+        if (
+            public_record
+            and not background_state.get_state().get("paused")
+            and str(public_record.get("status") or "").strip().lower()
+            in {"pending", "converting", "parsing"}
+        ):
+            if background_tasks is not None:
+                background_tasks.add_task(attachment_pipeline.process_attachment, aid)
+            else:
+                attachment_pipeline.enqueue_processing(aid)
+        return {"attachment": _serialize_attachment(public_record or existing)}
+
+    record = attachment_store.create_attachment_from_bytes(
+        claim_id=None,
+        doc_id=str(doc_id).strip() if doc_id else None,
+        file_bytes=file_bytes,
+        filename=str(file.filename or "attachment.pdf").strip() or "attachment.pdf",
+        size_bytes=int(len(file_bytes)),
+        reference_hint=ref_hint,
+        claim_text=str(claim_text).strip() if claim_text else None,
+        citation_index=int(citation_index) if citation_index is not None else None,
+        target_id=str(target_id).strip() if target_id else None,
+        project_id=project_id,
+        user_id=user_id,
+    )
+
+    public_record = attachment_store.public_status(record["id"])
+    if not background_state.get_state().get("paused"):
+        if background_tasks is not None:
+            background_tasks.add_task(
+                attachment_pipeline.process_attachment, record["id"]
+            )
+        else:
+            attachment_pipeline.enqueue_processing(record["id"])
     return {"attachment": _serialize_attachment(public_record)}
 
 

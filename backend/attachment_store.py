@@ -51,6 +51,165 @@ def _sanitize_filename(filename: str) -> str:
     return name.replace("/", "_").replace("\\", "_")
 
 
+def find_attachment_by_content_sha256(
+    *, project_id: str, content_sha256: str, archived: bool = False
+) -> Optional[dict]:
+    pid = str(project_id or "default").strip() or "default"
+    digest = str(content_sha256 or "").strip().lower()
+    if not digest:
+        return None
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT attachment_id
+                  FROM attachments
+                 WHERE project_id=%s
+                   AND content_sha256=%s
+                   AND archived=%s
+                 ORDER BY (claim_id IS NULL) DESC, created_at ASC
+                 LIMIT 1
+                """,
+                (pid, digest, bool(archived)),
+            )
+            row = cur.fetchone()
+    if not row:
+        return None
+    return get_attachment(str(row[0]))
+
+
+def create_attachment_from_bytes(
+    *,
+    claim_id: Optional[str],
+    doc_id: Optional[str],
+    file_bytes: bytes,
+    filename: str,
+    size_bytes: Optional[int] = None,
+    reference_hint: Optional[dict] = None,
+    claim_text: Optional[str] = None,
+    citation_index: Optional[int] = None,
+    target_id: Optional[str] = None,
+    source_ingest_id: Optional[str] = None,
+    project_id: str = "default",
+    user_id: str = "local",
+) -> dict:
+    safe_name = _sanitize_filename(filename)
+    data = bytes(file_bytes or b"")
+    digest = hashlib.sha256(data).hexdigest().lower()
+
+    attachment_id = str(uuid4())
+    pdf_object_key = f"attachments/{attachment_id}/{digest}/{safe_name}"
+    object_store_s3.put_bytes(
+        pdf_object_key,
+        data,
+        content_type="application/pdf",
+    )
+
+    size = int(size_bytes if size_bytes is not None else len(data))
+    now = _now()
+    rec = {
+        "id": attachment_id,
+        "attachment_id": attachment_id,
+        "project_id": str(project_id or "default"),
+        "created_by_user_id": str(user_id or "local"),
+        "created_at": now,
+        "updated_at": now,
+        "claim_id": claim_id,
+        "doc_id": doc_id,
+        "citation_index": citation_index,
+        "target_id": target_id,
+        "source_ingest_id": source_ingest_id,
+        "filename": safe_name,
+        "size": size,
+        "size_bytes": size,
+        "status": STATUS_PENDING,
+        "error": None,
+        "parsed_at": None,
+        "archived": False,
+        "archived_at": None,
+        "attempts": 0,
+        "max_attempts": DEFAULT_MAX_ATTEMPTS,
+        "reference_hint": reference_hint or {},
+        "claim_text": claim_text,
+        "content_sha256": digest,
+        "pdf_object_key": pdf_object_key,
+        "artifacts": {},
+    }
+
+    with connect(autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO attachments(
+                  attachment_id,
+                  project_id,
+                  created_by_user_id,
+                  claim_id,
+                  doc_id,
+                  citation_index,
+                  target_id,
+                  source_ingest_id,
+                  filename,
+                  size_bytes,
+                  status,
+                  error,
+                  parsed_at,
+                  archived,
+                  archived_at,
+                  attempts,
+                  max_attempts,
+                  reference_hint,
+                  claim_text,
+                  content_sha256,
+                  pdf_object_key,
+                  artifacts_json,
+                  created_at,
+                  updated_at
+                )
+                VALUES (
+                  %s, %s, %s, %s, %s, %s, %s, %s,
+                  %s, %s, %s, %s, NULL,
+                  false, NULL,
+                  0, %s,
+                  %s::jsonb, %s,
+                  %s,
+                  %s,
+                  %s::jsonb,
+                  now(), now()
+                )
+                """,
+                (
+                    attachment_id,
+                    rec["project_id"],
+                    rec["created_by_user_id"],
+                    claim_id,
+                    doc_id,
+                    citation_index,
+                    target_id,
+                    source_ingest_id,
+                    safe_name,
+                    size,
+                    STATUS_PENDING,
+                    None,
+                    int(rec["max_attempts"]),
+                    json.dumps(rec["reference_hint"], ensure_ascii=True),
+                    claim_text,
+                    digest,
+                    pdf_object_key,
+                    json.dumps({}, ensure_ascii=True),
+                ),
+            )
+
+    _log_event(
+        attachment_id=attachment_id,
+        project_id=rec["project_id"],
+        user_id=rec["created_by_user_id"],
+        event="queued",
+        detail="Attachment received",
+    )
+    return rec
+
+
 def _normalize_status(value: Optional[str]) -> str:
     if value == "ready":
         return STATUS_MATCHED
@@ -1012,7 +1171,9 @@ __all__ = [
     "STATUS_MATCHED",
     "STATUS_READY",
     "STATUS_ERROR",
+    "create_attachment_from_bytes",
     "create_attachment",
+    "find_attachment_by_content_sha256",
     "get_attachment",
     "list_attachments",
     "set_archived",

@@ -350,6 +350,7 @@ class AttachmentStatus(BaseModel):
     source_ingest_id: Optional[str] = None
     filename: str
     size: Optional[int] = None
+    content_sha256: Optional[str] = None
     status: str
     error: Optional[str] = None
     uploaded_at: str

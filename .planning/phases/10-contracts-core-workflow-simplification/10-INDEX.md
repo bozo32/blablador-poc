@@ -11,6 +11,7 @@ Plans:
 - `10-03-PLAN.md` — Graph as navigation (Cytoscape routing + recursive retrieval)
 - `10-04-PLAN.md` — Durable decisions/events (evidence decisions as events)
 - `10-04.5-PLAN.md` — Cleanup: spine-only minimal corpus protocol
+- `10-04.5-01-PLAN.md` — Intake: unified PDF drop (ingest + attach)
 - `10-05-PLAN.md` — Demo + trace replay (reproducible E2E)
 - `10-06-PLAN.md` — Optional add-ons (hosted inference, tri-level assessment)
 - `10-07-PLAN.md` — Deprioritized ops/cloud direction (doc-only backlog)

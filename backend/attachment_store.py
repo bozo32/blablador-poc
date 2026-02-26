@@ -444,47 +444,11 @@ def create_attachment(
 
 
 def get_attachment(attachment_id: str, public: bool = False) -> Optional[dict]:
-    aid = str(attachment_id or "").strip()
-    if not aid:
+    row = _fetch_attachment_row(attachment_id=attachment_id)
+    if not row:
         return None
-    with connect() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT
-                  attachment_id,
-                  project_id,
-                  created_by_user_id,
-                  created_at,
-                  updated_at,
-                  claim_id,
-                  doc_id,
-                  citation_index,
-                  target_id,
-                  source_ingest_id,
-                  filename,
-                  size_bytes,
-                  status,
-                  error,
-                  parsed_at,
-                  archived,
-                  archived_at,
-                  attempts,
-                  max_attempts,
-                  reference_hint,
-                  claim_text,
-                  content_sha256,
-                  pdf_object_key,
-                  artifacts_json
-                FROM attachments
-                WHERE attachment_id=%s
-                """,
-                (aid,),
-            )
-            row = cur.fetchone()
-            if not row:
-                return None
 
+    aid = str(row[0] or "").strip()
     artifacts = row[23] if isinstance(row[23], dict) else json.loads(row[23] or "{}")
     ref_hint = row[19] if isinstance(row[19], dict) else json.loads(row[19] or "{}")
     timeline = _fetch_events(attachment_id=aid)
@@ -520,14 +484,107 @@ def get_attachment(attachment_id: str, public: bool = False) -> Optional[dict]:
     return _public_view(rec) if public else rec
 
 
+def _fetch_attachment_row(
+    *, attachment_id: str, project_id: Optional[str] = None
+) -> Optional[tuple]:
+    aid = str(attachment_id or "").strip()
+    if not aid:
+        return None
+    pid = str(project_id or "").strip() or None
+
+    extra = " AND project_id=%s" if pid else ""
+    params = (aid, pid) if pid else (aid,)
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT
+                  attachment_id,
+                  project_id,
+                  created_by_user_id,
+                  created_at,
+                  updated_at,
+                  claim_id,
+                  doc_id,
+                  citation_index,
+                  target_id,
+                  source_ingest_id,
+                  filename,
+                  size_bytes,
+                  status,
+                  error,
+                  parsed_at,
+                  archived,
+                  archived_at,
+                  attempts,
+                  max_attempts,
+                  reference_hint,
+                  claim_text,
+                  content_sha256,
+                  pdf_object_key,
+                  artifacts_json
+                FROM attachments
+                WHERE attachment_id=%s{extra}
+                """,
+                params,
+            )
+            return cur.fetchone()
+
+
+def get_attachment_for_project(
+    attachment_id: str, *, project_id: str, public: bool = False
+) -> Optional[dict]:
+    row = _fetch_attachment_row(attachment_id=attachment_id, project_id=project_id)
+    if not row:
+        return None
+
+    artifacts = row[23] if isinstance(row[23], dict) else json.loads(row[23] or "{}")
+    ref_hint = row[19] if isinstance(row[19], dict) else json.loads(row[19] or "{}")
+    timeline = _fetch_events(attachment_id=str(row[0]))
+
+    rec = {
+        "id": row[0],
+        "attachment_id": row[0],
+        "project_id": row[1],
+        "created_by_user_id": row[2],
+        "created_at": row[3].isoformat().replace("+00:00", "Z") if row[3] else None,
+        "updated_at": row[4].isoformat().replace("+00:00", "Z") if row[4] else None,
+        "claim_id": row[5],
+        "doc_id": row[6],
+        "citation_index": row[7],
+        "target_id": row[8],
+        "source_ingest_id": row[9],
+        "filename": row[10],
+        "size": int(row[11] or 0),
+        "status": row[12],
+        "error": row[13],
+        "parsed_at": row[14].isoformat().replace("+00:00", "Z") if row[14] else None,
+        "archived": bool(row[15]),
+        "archived_at": row[16].isoformat().replace("+00:00", "Z") if row[16] else None,
+        "attempts": int(row[17] or 0),
+        "max_attempts": int(row[18] or DEFAULT_MAX_ATTEMPTS),
+        "reference_hint": ref_hint,
+        "claim_text": row[20],
+        "content_sha256": row[21],
+        "pdf_object_key": row[22],
+        "artifacts": artifacts,
+        "timeline": timeline,
+    }
+    return _public_view(rec) if public else rec
+
+
 def list_attachments(
     claim_id: Optional[str] = None,
     *,
+    project_id: Optional[str] = None,
     archived: Optional[bool] = False,
     public: bool = False,
 ) -> List[dict]:
     where = []
     params: list = []
+    if project_id:
+        where.append("project_id=%s")
+        params.append(str(project_id))
     if claim_id:
         where.append("claim_id=%s")
         params.append(str(claim_id))
@@ -583,6 +640,37 @@ def set_archived(attachment_id: str, *, archived: bool) -> dict:
     return get_attachment(aid) or rec
 
 
+def set_archived_for_project(
+    attachment_id: str, *, project_id: str, archived: bool
+) -> dict:
+    rec = get_attachment_for_project(attachment_id, project_id=project_id)
+    if rec is None:
+        raise AttachmentNotFound(f"Attachment {attachment_id} not found")
+    aid = str(attachment_id)
+    pid = str(project_id)
+    with connect(autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE attachments
+                   SET archived=%s,
+                       archived_at=CASE WHEN %s THEN now() ELSE NULL END,
+                       updated_at=now()
+                 WHERE attachment_id=%s AND project_id=%s
+                """,
+                (bool(archived), bool(archived), aid, pid),
+            )
+
+    _log_event(
+        attachment_id=aid,
+        project_id=str(rec.get("project_id") or "default"),
+        user_id=str(rec.get("created_by_user_id") or "local"),
+        event="archive" if archived else "unarchive",
+        detail=None,
+    )
+    return get_attachment_for_project(aid, project_id=pid) or rec
+
+
 def set_placement(
     attachment_id: str,
     *,
@@ -625,9 +713,55 @@ def set_placement(
     return get_attachment(aid) or rec
 
 
+def set_placement_for_project(
+    attachment_id: str,
+    *,
+    project_id: str,
+    claim_id: Optional[str],
+    doc_id: Optional[str],
+    citation_index: Optional[int],
+    target_id: Optional[str],
+) -> dict:
+    rec = get_attachment_for_project(attachment_id, project_id=project_id)
+    if rec is None:
+        raise AttachmentNotFound(f"Attachment {attachment_id} not found")
+
+    aid = str(attachment_id)
+    pid = str(project_id)
+    with connect(autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE attachments
+                   SET claim_id=%s,
+                       doc_id=%s,
+                       citation_index=%s,
+                       target_id=%s,
+                       updated_at=now()
+                 WHERE attachment_id=%s AND project_id=%s
+                """,
+                (claim_id, doc_id, citation_index, target_id, aid, pid),
+            )
+
+    detail = (
+        f"claim_id={claim_id or 'null'} doc_id={doc_id or 'null'} "
+        f"citation_index={citation_index if citation_index is not None else 'null'} "
+        f"target_id={target_id or 'null'}"
+    )
+    _log_event(
+        attachment_id=aid,
+        project_id=str(rec.get("project_id") or "default"),
+        user_id=str(rec.get("created_by_user_id") or "local"),
+        event="placement",
+        detail=detail,
+    )
+    return get_attachment_for_project(aid, project_id=pid) or rec
+
+
 def clone_attachment(
     source_attachment_id: str,
     *,
+    project_id: Optional[str] = None,
     claim_id: Optional[str] = None,
     doc_id: Optional[str] = None,
     citation_index: Optional[int] = None,
@@ -640,7 +774,12 @@ def clone_attachment(
     The clone reuses the same stored PDF object and artifacts. If the source is
     already matched, the clone is created as matched immediately.
     """
-    src = get_attachment(str(source_attachment_id))
+    if project_id:
+        src = get_attachment_for_project(
+            str(source_attachment_id), project_id=str(project_id)
+        )
+    else:
+        src = get_attachment(str(source_attachment_id))
     if src is None:
         raise AttachmentNotFound(f"Attachment {source_attachment_id} not found")
 
@@ -755,6 +894,7 @@ def clone_attachment(
 def update_attachment(
     attachment_id: str,
     *,
+    project_id: Optional[str] = None,
     status: Optional[str] = None,
     error: object = _UNSET,
     parsed_at: Optional[str] = None,
@@ -763,7 +903,10 @@ def update_attachment(
     artifacts: Optional[dict] = None,
     **extra_fields,
 ) -> dict:
-    rec = get_attachment(attachment_id)
+    if project_id:
+        rec = get_attachment_for_project(attachment_id, project_id=str(project_id))
+    else:
+        rec = get_attachment(attachment_id)
     if rec is None:
         raise AttachmentNotFound(f"Attachment {attachment_id} not found")
 
@@ -806,10 +949,14 @@ def update_attachment(
                 params.append(v)
         cols.append("updated_at=now()")
         params.append(aid)
+        where = "attachment_id=%s"
+        if project_id:
+            where = where + " AND project_id=%s"
+            params.append(str(project_id))
         with connect(autocommit=True) as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    f"UPDATE attachments SET {', '.join(cols)} WHERE attachment_id=%s",
+                    f"UPDATE attachments SET {', '.join(cols)} WHERE {where}",
                     tuple(params),
                 )
 
@@ -822,6 +969,8 @@ def update_attachment(
             detail=timeline_detail,
         )
     clear_sentence_cache(aid)
+    if project_id:
+        return get_attachment_for_project(aid, project_id=str(project_id)) or rec
     return get_attachment(aid) or rec
 
 
@@ -1008,8 +1157,27 @@ def reset_for_retry(attachment_id: str) -> dict:
     )
 
 
+def reset_for_retry_for_project(attachment_id: str, *, project_id: str) -> dict:
+    rec = get_attachment_for_project(attachment_id, project_id=project_id)
+    if rec is None:
+        raise AttachmentNotFound(f"Attachment {attachment_id} not found")
+    return update_attachment(
+        attachment_id,
+        project_id=str(project_id),
+        status=STATUS_PENDING,
+        error=None,
+        attempts=0,
+        timeline_event="retry",
+        timeline_detail="Manual retry scheduled",
+    )
+
+
 def public_status(attachment_id: str) -> Optional[dict]:
     return get_attachment(attachment_id, public=True)
+
+
+def public_status_for_project(attachment_id: str, *, project_id: str) -> Optional[dict]:
+    return get_attachment_for_project(attachment_id, project_id=project_id, public=True)
 
 
 def public_claim_status(claim_id: str) -> List[dict]:
@@ -1179,9 +1347,12 @@ __all__ = [
     "create_attachment",
     "find_attachment_by_content_sha256",
     "get_attachment",
+    "get_attachment_for_project",
     "list_attachments",
     "set_archived",
+    "set_archived_for_project",
     "set_placement",
+    "set_placement_for_project",
     "update_attachment",
     "save_artifacts",
     "list_resumable",
@@ -1191,7 +1362,9 @@ __all__ = [
     "mark_ready",
     "mark_error",
     "reset_for_retry",
+    "reset_for_retry_for_project",
     "public_status",
+    "public_status_for_project",
     "public_claim_status",
     "load_sentences_for_attachment",
     "clear_sentence_cache",

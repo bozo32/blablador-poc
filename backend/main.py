@@ -3911,10 +3911,18 @@ def create_global_attachment(
 
 
 @app.get("/attachments", response_model=schemas.AttachmentListResponse)
-def list_global_attachments(archived: bool = False):
+def list_global_attachments(
+    archived: bool = False,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
+    project_id = _require_project_id_for_upload(x_project_id)
     # Default: return only non-archived. If archived=true: include archived.
     store_archived: Optional[bool] = None if archived else False
-    records = attachment_store.list_attachments(archived=store_archived, public=True)
+    records = attachment_store.list_attachments(
+        project_id=project_id,
+        archived=store_archived,
+        public=True,
+    )
     attachments: list[schemas.AttachmentStatus] = []
     for rec in records:
         try:
@@ -3927,9 +3935,15 @@ def list_global_attachments(archived: bool = False):
 
 @app.patch("/attachments/{attachment_id}", response_model=schemas.AttachmentResponse)
 def patch_attachment_status(
-    attachment_id: str, payload: schemas.AttachmentUpdateRequest
+    attachment_id: str,
+    payload: schemas.AttachmentUpdateRequest,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
 ):
-    record = attachment_store.get_attachment(attachment_id)
+    project_id = _require_project_id_for_upload(x_project_id)
+    record = attachment_store.get_attachment_for_project(
+        attachment_id,
+        project_id=project_id,
+    )
     if record is None:
         raise HTTPException(status_code=404, detail="Attachment not found")
 
@@ -3938,8 +3952,17 @@ def patch_attachment_status(
     if "archived" in fields:
         if payload.archived is None:
             raise HTTPException(status_code=422, detail="archived must be a boolean")
-        attachment_store.set_archived(attachment_id, archived=payload.archived)
-        record = attachment_store.get_attachment(attachment_id) or record
+        attachment_store.set_archived_for_project(
+            attachment_id,
+            project_id=project_id,
+            archived=payload.archived,
+        )
+        record = (
+            attachment_store.get_attachment_for_project(
+                attachment_id, project_id=project_id
+            )
+            or record
+        )
 
     placement_fields = {"claim_id", "doc_id", "citation_index", "target_id"}
     if fields & placement_fields:
@@ -3962,8 +3985,9 @@ def patch_attachment_status(
             or next_citation_index != record.get("citation_index")
             or next_target_id != record.get("target_id")
         ):
-            attachment_store.set_placement(
+            attachment_store.set_placement_for_project(
                 attachment_id,
+                project_id=project_id,
                 claim_id=next_claim_id,
                 doc_id=next_doc_id,
                 citation_index=next_citation_index,
@@ -3993,7 +4017,13 @@ def patch_attachment_status(
 
             # Auto-sweep evidence once a cited source is assigned.
             try:
-                latest = attachment_store.get_attachment(attachment_id) or record
+                latest = (
+                    attachment_store.get_attachment_for_project(
+                        attachment_id,
+                        project_id=project_id,
+                    )
+                    or record
+                )
                 claim_id = (
                     latest.get("claim_id") if isinstance(latest, dict) else None
                 ) or next_claim_id
@@ -4012,7 +4042,10 @@ def patch_attachment_status(
             except Exception:
                 logger.exception("Auto rerun enqueue failed after attachment placement")
 
-    public_record = attachment_store.public_status(attachment_id)
+    public_record = attachment_store.public_status_for_project(
+        attachment_id,
+        project_id=project_id,
+    )
     return {"attachment": _serialize_attachment(public_record)}
 
 
@@ -4023,10 +4056,13 @@ def patch_attachment_status(
 def clone_global_attachment(
     attachment_id: str,
     payload: schemas.AttachmentCloneRequest,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
 ):
+    project_id = _require_project_id_for_upload(x_project_id)
     try:
         record = attachment_store.clone_attachment(
             attachment_id,
+            project_id=project_id,
             claim_id=payload.claim_id,
             doc_id=payload.doc_id,
             citation_index=payload.citation_index,
@@ -4071,8 +4107,19 @@ def clone_global_attachment(
     "/attachments/{attachment_id}/promote-ingest",
     response_model=schemas.AttachmentResponse,
 )
-def promote_attachment_ingest(attachment_id: str):
+def promote_attachment_ingest(
+    attachment_id: str,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
     """Promote an attachment PDF into an ingested Work."""
+    project_id = _require_project_id_for_upload(x_project_id)
+    scoped = attachment_store.get_attachment_for_project(
+        attachment_id,
+        project_id=project_id,
+        public=False,
+    )
+    if scoped is None:
+        raise HTTPException(status_code=404, detail="Attachment not found")
     try:
         public_record = attachment_pipeline.promote_attachment_to_ingest(attachment_id)
     except attachment_store.AttachmentNotFound as exc:
@@ -4092,8 +4139,15 @@ def claim_attachment_status(claim_id: str):
 
 
 @app.get("/attachments/{attachment_id}", response_model=schemas.AttachmentResponse)
-def get_attachment_status(attachment_id: str):
-    public_record = attachment_store.public_status(attachment_id)
+def get_attachment_status(
+    attachment_id: str,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
+    project_id = _require_project_id_for_upload(x_project_id)
+    public_record = attachment_store.public_status_for_project(
+        attachment_id,
+        project_id=project_id,
+    )
     return {"attachment": _serialize_attachment(public_record)}
 
 
@@ -4101,7 +4155,19 @@ def get_attachment_status(attachment_id: str):
     "/attachments/{attachment_id}/spans/{span_id}/jump",
     response_model=schemas.AttachmentSpanJumpResponse,
 )
-def get_attachment_span_jump(attachment_id: str, span_id: str):
+def get_attachment_span_jump(
+    attachment_id: str,
+    span_id: str,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
+    project_id = _require_project_id_for_upload(x_project_id)
+    scoped = attachment_store.get_attachment_for_project(
+        attachment_id,
+        project_id=project_id,
+        public=False,
+    )
+    if scoped is None:
+        raise HTTPException(status_code=404, detail="Attachment not found")
     try:
         index = attachment_spans.AttachmentSpanIndex.for_attachment(attachment_id)
     except attachment_store.AttachmentNotFound as exc:
@@ -4127,9 +4193,19 @@ def get_attachment_span_excerpt(
     span_id: str,
     before: int = 2,
     after: int = 1,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
 ):
     if before < 0 or after < 0:
         raise HTTPException(status_code=422, detail="before/after must be >= 0")
+
+    project_id = _require_project_id_for_upload(x_project_id)
+    scoped = attachment_store.get_attachment_for_project(
+        attachment_id,
+        project_id=project_id,
+        public=False,
+    )
+    if scoped is None:
+        raise HTTPException(status_code=404, detail="Attachment not found")
 
     try:
         index = attachment_spans.AttachmentSpanIndex.for_attachment(attachment_id)
@@ -4157,12 +4233,20 @@ def get_attachment_span_excerpt(
 def retry_attachment(
     attachment_id: str,
     background_tasks: BackgroundTasks,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
 ):
+    project_id = _require_project_id_for_upload(x_project_id)
     try:
-        attachment_store.reset_for_retry(attachment_id)
+        attachment_store.reset_for_retry_for_project(
+            attachment_id,
+            project_id=project_id,
+        )
     except attachment_store.AttachmentNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    public_record = attachment_store.public_status(attachment_id)
+    public_record = attachment_store.public_status_for_project(
+        attachment_id,
+        project_id=project_id,
+    )
     if background_tasks is not None:
         background_tasks.add_task(attachment_pipeline.process_attachment, attachment_id)
     else:

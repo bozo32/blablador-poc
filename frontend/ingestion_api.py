@@ -7,6 +7,13 @@ import urllib.parse
 DEFAULT_TIMEOUT = 180
 
 
+def _ingest_headers(project_id: Optional[str]) -> Dict[str, str]:
+    pid = str(project_id or "").strip()
+    if not pid:
+        return {}
+    return {"X-Project-Id": pid}
+
+
 def _parse_response(response: requests.Response) -> Optional[dict]:
     try:
         response.raise_for_status()
@@ -17,63 +24,107 @@ def _parse_response(response: requests.Response) -> Optional[dict]:
     return response.json()
 
 
-def upload_pdf(api_url: str, file) -> dict:
+def upload_pdf(
+    api_url: str,
+    file,
+    *,
+    project_id: Optional[str] = None,
+    auto_process: bool = True,
+) -> dict:
     url = f"{api_url.rstrip('/')}/ingest"
     content_type = getattr(file, "type", None) or "application/pdf"
     files = {"file": (file.name, file.getbuffer(), content_type)}
     try:
-        response = requests.post(url, files=files, timeout=DEFAULT_TIMEOUT)
+        response = requests.post(
+            url,
+            params={"auto_process": "true" if bool(auto_process) else "false"},
+            headers=_ingest_headers(project_id),
+            files=files,
+            timeout=DEFAULT_TIMEOUT,
+        )
     except requests.RequestException as exc:
         raise RuntimeError(_request_error_message(url, exc)) from exc
     payload = _parse_response(response) or {}
     return payload.get("document") or {}
 
 
-def list_documents(api_url: str) -> list[dict]:
+def list_documents(api_url: str, *, project_id: Optional[str] = None) -> list[dict]:
     url = f"{api_url.rstrip('/')}/ingest"
     try:
-        response = requests.get(url, timeout=DEFAULT_TIMEOUT)
+        response = requests.get(
+            url,
+            headers=_ingest_headers(project_id),
+            timeout=DEFAULT_TIMEOUT,
+        )
     except requests.RequestException as exc:
         raise RuntimeError(_request_error_message(url, exc)) from exc
     payload = _parse_response(response) or {}
     return payload.get("documents") or []
 
 
-def get_document(api_url: str, doc_id: str) -> dict:
+def get_document(
+    api_url: str, doc_id: str, *, project_id: Optional[str] = None
+) -> dict:
     url = f"{api_url.rstrip('/')}/ingest/{doc_id}"
     try:
-        response = requests.get(url, timeout=DEFAULT_TIMEOUT)
+        response = requests.get(
+            url,
+            headers=_ingest_headers(project_id),
+            timeout=DEFAULT_TIMEOUT,
+        )
     except requests.RequestException as exc:
         raise RuntimeError(_request_error_message(url, exc)) from exc
     payload = _parse_response(response) or {}
     return payload
 
 
-def trigger_extraction(api_url: str, doc_id: str) -> dict:
+def trigger_extraction(
+    api_url: str, doc_id: str, *, project_id: Optional[str] = None
+) -> dict:
     url = f"{api_url.rstrip('/')}/ingest/{doc_id}/extract"
     try:
-        response = requests.post(url, timeout=DEFAULT_TIMEOUT)
+        response = requests.post(
+            url,
+            headers=_ingest_headers(project_id),
+            timeout=DEFAULT_TIMEOUT,
+        )
     except requests.RequestException as exc:
         raise RuntimeError(_request_error_message(url, exc)) from exc
     return _parse_response(response) or {}
 
 
-def trigger_resolution(api_url: str, doc_id: str) -> dict:
+def trigger_resolution(
+    api_url: str, doc_id: str, *, project_id: Optional[str] = None
+) -> dict:
     url = f"{api_url.rstrip('/')}/ingest/{doc_id}/resolve"
     try:
-        response = requests.post(url, timeout=DEFAULT_TIMEOUT)
+        response = requests.post(
+            url,
+            headers=_ingest_headers(project_id),
+            timeout=DEFAULT_TIMEOUT,
+        )
     except requests.RequestException as exc:
         raise RuntimeError(_request_error_message(url, exc)) from exc
     return _parse_response(response) or {}
 
 
 def submit_resolution_choice(
-    api_url: str, doc_id: str, reference_id: str, selected_source: str
+    api_url: str,
+    doc_id: str,
+    reference_id: str,
+    selected_source: str,
+    *,
+    project_id: Optional[str] = None,
 ) -> dict:
     url = f"{api_url.rstrip('/')}/ingest/{doc_id}/resolution/{reference_id}/select"
     payload = {"selected_source": selected_source}
     try:
-        response = requests.post(url, json=payload, timeout=DEFAULT_TIMEOUT)
+        response = requests.post(
+            url,
+            headers=_ingest_headers(project_id),
+            json=payload,
+            timeout=DEFAULT_TIMEOUT,
+        )
     except requests.RequestException as exc:
         raise RuntimeError(_request_error_message(url, exc)) from exc
     return _parse_response(response) or {}
@@ -84,6 +135,8 @@ def get_citation_context(
     doc_id: str,
     citation_index: int,
     target_id: Optional[str] = None,
+    *,
+    project_id: Optional[str] = None,
 ) -> dict:
     """Fetch citation context (sentence + neighbors) for a callout."""
     url = f"{api_url.rstrip('/')}/ingest/{doc_id}/citation-context"
@@ -91,7 +144,12 @@ def get_citation_context(
     if target_id:
         params["target_id"] = target_id
     try:
-        response = requests.get(url, params=params, timeout=DEFAULT_TIMEOUT)
+        response = requests.get(
+            url,
+            headers=_ingest_headers(project_id),
+            params=params,
+            timeout=DEFAULT_TIMEOUT,
+        )
     except requests.RequestException as exc:
         raise RuntimeError(_request_error_message(url, exc)) from exc
     return _parse_response(response) or {}
@@ -104,6 +162,8 @@ def get_citation_graph(
     depth: int,
     max_nodes: int,
     doi: Optional[str] = None,
+    *,
+    project_id: Optional[str] = None,
 ) -> dict:
     """Fetch citation graph data for the selected cited work."""
     url = f"{api_url.rstrip('/')}/ingest/{doc_id}/citation-graph"
@@ -116,7 +176,12 @@ def get_citation_graph(
     if doi:
         params["doi"] = doi
     try:
-        response = requests.get(url, params=params, timeout=DEFAULT_TIMEOUT)
+        response = requests.get(
+            url,
+            headers=_ingest_headers(project_id),
+            params=params,
+            timeout=DEFAULT_TIMEOUT,
+        )
     except requests.RequestException as exc:
         raise RuntimeError(_request_error_message(url, exc)) from exc
     return _parse_response(response) or {}
@@ -185,10 +250,16 @@ def confirm_claims(
     return _parse_response(response) or {}
 
 
-def get_document_body(api_url: str, doc_id: str) -> dict:
+def get_document_body(
+    api_url: str, doc_id: str, *, project_id: Optional[str] = None
+) -> dict:
     url = f"{api_url.rstrip('/')}/ingest/{doc_id}/body"
     try:
-        response = requests.get(url, timeout=DEFAULT_TIMEOUT)
+        response = requests.get(
+            url,
+            headers=_ingest_headers(project_id),
+            timeout=DEFAULT_TIMEOUT,
+        )
     except requests.RequestException as exc:
         raise RuntimeError(_request_error_message(url, exc)) from exc
     return _parse_response(response) or {}

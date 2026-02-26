@@ -10,6 +10,7 @@ import re
 import sys
 import tempfile
 from datetime import datetime, timezone
+from uuid import uuid4
 
 import graphviz
 import pandas as pd
@@ -171,9 +172,22 @@ def init_session_state():
         "project_meta": None,
         "project_export_blob": None,
         "project_import_confirm": False,
+        # Scope plumbing (Phase 10-04.5): /ingest endpoints are project-scoped.
+        "project_id": str(getattr(settings, "DEFAULT_PROJECT_ID", "default")),
+        # Phase 10-04.5: unified Intake drop + inbox.
+        "intake_inbox": [],
+        "intake_blobs": {},
     }
     for key, val in defaults.items():
         st.session_state.setdefault(key, val)
+
+
+def get_project_id() -> str:
+    """Return current project scope for X-Project-Id."""
+    pid = str(st.session_state.get("project_id") or "").strip()
+    if pid:
+        return pid
+    return str(getattr(settings, "DEFAULT_PROJECT_ID", "default"))
 
 
 # === Helpers ===
@@ -373,7 +387,7 @@ def refresh_ingested_docs(show_error: bool = True) -> list[dict]:
     api_url = get_api_url()
     previous = st.session_state.get("ingested_docs") or []
     try:
-        documents = list_documents(api_url)
+        documents = list_documents(api_url, project_id=get_project_id())
     except RuntimeError as exc:
         if show_error:
             st.error(f"Failed to load ingested PDFs: {exc}")
@@ -395,7 +409,7 @@ def load_selected_document(show_error: bool = True) -> Optional[dict]:
         return None
     api_url = get_api_url()
     try:
-        document = get_document(api_url, doc_id)
+        document = get_document(api_url, doc_id, project_id=get_project_id())
     except RuntimeError as exc:
         if show_error:
             st.error(f"Failed to load document details: {exc}")
@@ -409,11 +423,17 @@ def handle_pdf_upload():
     if not files:
         return
     api_url = get_api_url()
+    project_id = get_project_id()
     uploaded = []
     with st.spinner("Uploading PDFs..."):
         for file in files:
             try:
-                uploaded_doc = upload_pdf(api_url, file)
+                uploaded_doc = upload_pdf(
+                    api_url,
+                    file,
+                    project_id=project_id,
+                    auto_process=bool(st.session_state.get("auto_extract_on_upload")),
+                )
             except RuntimeError as exc:
                 st.error(f"Upload failed for {getattr(file, 'name', 'file')}: {exc}")
                 continue
@@ -431,7 +451,7 @@ def handle_pdf_upload():
         if doc_id and st.session_state.get("auto_extract_on_upload"):
             with st.spinner("Running extraction..."):
                 try:
-                    trigger_extraction(api_url, doc_id)
+                    trigger_extraction(api_url, doc_id, project_id=project_id)
                     document = load_selected_document(show_error=False)
                     st.session_state["active_document"] = document
                     st.success("Extraction complete.")
@@ -441,7 +461,7 @@ def handle_pdf_upload():
         if doc_id and st.session_state.get("auto_resolve_on_upload"):
             with st.spinner("Resolving references..."):
                 try:
-                    trigger_resolution(api_url, doc_id)
+                    trigger_resolution(api_url, doc_id, project_id=project_id)
                     document = load_selected_document(show_error=False)
                     st.session_state["active_document"] = document
                     st.success("Resolution complete.")
@@ -1316,6 +1336,10 @@ def _render_source_bin_row(item: dict) -> None:
                                 item.get("filename") or os.path.basename(local_path)
                             ),
                         ),
+                        project_id=get_project_id(),
+                        auto_process=bool(
+                            st.session_state.get("auto_extract_on_upload")
+                        ),
                     )
                 except RuntimeError as exc:
                     st.error(f"Could not ingest PDF: {exc}")
@@ -1473,9 +1497,8 @@ def _ledger_fetch(api_url: str, *, force: bool = False) -> dict:
     return payload or {}
 
 
-def render_documents_panel() -> None:
+def render_documents_panel(*, max_rows: int = 18) -> None:
     api_url = get_api_url()
-    st.markdown("**Documents**")
     controls = st.columns([2, 1], gap="small")
     with controls[0]:
         st.text_input(
@@ -1494,42 +1517,7 @@ def render_documents_panel() -> None:
         help="Show documents that only exist as bibliography entries (no PDF yet).",
     )
 
-    with st.expander("Upload documents", expanded=False):
-        st.caption("Uploads create/refresh document nodes in the graph.")
-        upload_key = "docs-upload"
-
-        def _handle_docs_upload() -> None:
-            files = st.session_state.get(upload_key) or []
-            if not files:
-                return
-            uploaded = []
-            with st.spinner("Uploading PDFs..."):
-                for file in files:
-                    try:
-                        uploaded_doc = upload_pdf(api_url, file)
-                    except RuntimeError as exc:
-                        st.error(
-                            f"Upload failed for {getattr(file, 'name', 'file')}: {exc}"
-                        )
-                        continue
-                    if uploaded_doc:
-                        uploaded.append(uploaded_doc)
-            if uploaded:
-                refresh_ingested_docs(show_error=False)
-                last_doc = uploaded[-1]
-                if last_doc.get("id"):
-                    st.session_state["selected_doc_id"] = last_doc["id"]
-                    st.session_state["active_document"] = last_doc
-                # Refresh ledger to pull new node.
-                _ledger_fetch(api_url, force=True)
-
-        st.file_uploader(
-            "Upload PDFs",
-            type=["pdf"],
-            accept_multiple_files=True,
-            key=upload_key,
-            on_change=_handle_docs_upload,
-        )
+    st.caption("Upload PDFs via Intake (top of left pane).")
 
     payload = _ledger_fetch(api_url, force=False)
     if payload.get("error"):
@@ -1593,7 +1581,11 @@ def render_documents_panel() -> None:
         if not extraction_done:
             with st.spinner("Extracting..."):
                 try:
-                    trigger_extraction(api_url, str(ingest_id))
+                    trigger_extraction(
+                        api_url,
+                        str(ingest_id),
+                        project_id=get_project_id(),
+                    )
                 except RuntimeError as exc:
                     st.error(str(exc))
                     return
@@ -1601,13 +1593,22 @@ def render_documents_panel() -> None:
         if not resolution_done:
             with st.spinner("Resolving references..."):
                 try:
-                    trigger_resolution(api_url, str(ingest_id))
+                    trigger_resolution(
+                        api_url,
+                        str(ingest_id),
+                        project_id=get_project_id(),
+                    )
                 except RuntimeError:
                     # Resolution is optional; don't block opening.
                     pass
             doc = load_selected_document(show_error=False) or doc
         refresh_ingested_docs(show_error=False)
         _ledger_fetch(api_url, force=True)
+
+    filtered_total = len(filtered)
+    if max_rows and filtered_total > int(max_rows):
+        st.caption(f"Showing {int(max_rows)} of {filtered_total} documents")
+        filtered = filtered[: int(max_rows)]
 
     for row in filtered:
         try:
@@ -1964,6 +1965,14 @@ def render_project_panel() -> None:
                 )
             except project_api.ProjectApiError as exc:
                 st.error(str(exc))
+
+    st.markdown("**Project scope**")
+    st.caption("Used for ingest scoping via X-Project-Id.")
+    st.text_input(
+        "Project ID",
+        key="project_id",
+        help="Sent as X-Project-Id on all /ingest* requests.",
+    )
 
     st.divider()
     st.markdown("**Current user**")
@@ -4696,58 +4705,561 @@ def render_settings_controls() -> None:
     )
 
 
-def render_workspace_left_pane() -> None:
-    render_project_panel()
+class _BytesUploadFile:
+    def __init__(self, filename: str, data: bytes):
+        self.name = filename or "document.pdf"
+        self.type = "application/pdf"
+        self._data = data
+        self.size = len(data)
 
-    st.divider()
+    def getbuffer(self):
+        return self._data
 
-    st.markdown(
-        '<div class="ws-pane-header">'
-        '<div class="ws-pane-header__title">Workspace</div>'
-        '<div class="ws-pane-header__meta">Sources + nav</div>'
-        "</div>",
-        unsafe_allow_html=True,
-    )
 
-    st.markdown('<div class="ws-pane-body">', unsafe_allow_html=True)
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
-    # Graph-backed document navigation + editing.
-    render_documents_panel()
 
-    # Keep cited-source uploads available, but hidden.
-    with st.expander("Advanced: cited source uploads", expanded=False):
-        inject_attachment_panel_styles()
-        attachment_queue.init_attachment_queue_state()
-        st.caption("Upload cited PDFs to enable 'Open PDF' for evidence snippets.")
-        uploader_key = "source-bin-hidden-upload"
+def _intake_stage_icon(stage: str) -> str:
+    normalized = (stage or "").strip().lower()
+    if normalized in {"unknown", "awaiting-intent"}:
+        return "?"
+    if normalized in {"error", "failed"}:
+        return "!"
+    if normalized in {"complete", "done"}:
+        return "OK"
+    if normalized in {"near-duplicate"}:
+        return "!"
+    return "..."
 
-        def _handle_hidden_sources_upload() -> None:
-            files = st.session_state.get(uploader_key) or []
-            if not files:
-                return
-            selected_target = normalize_target_id(
-                st.session_state.get("citation_selected_target")
-            )
-            doc_id = st.session_state.get("selected_doc_id")
-            reference_hint = (
-                {"reference_id": selected_target} if selected_target else {}
-            )
-            attachment_queue.enqueue_files(
-                files,
-                doc_id=str(doc_id) if doc_id else None,
-                reference_hint=reference_hint,
-                source="source-bin",
-            )
 
-        st.file_uploader(
-            "Upload source PDFs",
-            type=["pdf"],
-            accept_multiple_files=True,
-            key=uploader_key,
-            on_change=_handle_hidden_sources_upload,
+def _intake_guess_intent(*, filename: str, data: bytes) -> str:
+    # Heuristic 1: if we're actively chasing within an existing citing doc,
+    # new drops are more likely supporting sources.
+    if (
+        st.session_state.get("selected_doc_id")
+        and st.session_state.get(WORKSPACE_ACTIVE_TAB) == WORKSPACE_TAB_REVIEW
+    ):
+        return "source"
+
+    # Heuristic 2: try to spot obvious bibliography/citation signals in the PDF bytes.
+    try:
+        sample = data[:200000].decode("latin-1", errors="ignore").lower()
+    except Exception:
+        sample = ""
+    signals = [
+        "references",
+        "bibliography",
+        "works cited",
+        "doi:",
+        "et al",
+    ]
+    if any(sig in sample for sig in signals):
+        return "citing"
+
+    # Otherwise: ask.
+    return "unknown"
+
+
+def _intake_find_item(item_id: str) -> Optional[dict]:
+    inbox = st.session_state.get("intake_inbox") or []
+    for item in inbox:
+        if isinstance(item, dict) and str(item.get("id")) == str(item_id):
+            return item
+    return None
+
+
+def _intake_touch(
+    item: dict, *, stage: Optional[str] = None, error: Optional[str] = None
+):
+    if stage is not None:
+        item["stage"] = str(stage)
+    if error is not None:
+        item["error"] = str(error)
+    item["last_event_at"] = _now_iso()
+
+
+def _intake_route_citing(item_id: str) -> None:
+    item = _intake_find_item(item_id)
+    if not item:
+        return
+    data = (st.session_state.get("intake_blobs") or {}).get(item_id)
+    if not isinstance(data, (bytes, bytearray)):
+        _intake_touch(item, stage="error", error="Missing PDF bytes in session")
+        return
+
+    api_url = get_api_url()
+    project_id = get_project_id()
+    auto_extract = bool(st.session_state.get("auto_extract_on_upload"))
+
+    before_ids = {
+        str(doc.get("id"))
+        for doc in (st.session_state.get("ingested_docs") or [])
+        if isinstance(doc, dict) and doc.get("id")
+    }
+
+    _intake_touch(item, stage="uploading")
+    try:
+        uploaded = upload_pdf(
+            api_url,
+            _BytesUploadFile(str(item.get("filename") or "document.pdf"), bytes(data)),
+            project_id=project_id,
+            auto_process=auto_extract,
+        )
+    except RuntimeError as exc:
+        _intake_touch(item, stage="error", error=str(exc))
+        return
+
+    doc_id = str((uploaded or {}).get("id") or "").strip()
+    if doc_id:
+        item["doc_id"] = doc_id
+    item["extraction_triggered"] = bool(auto_extract)
+    item["resolution_triggered"] = False
+    item["near_duplicate_checked"] = False
+    item["near_duplicate_matches"] = []
+    item["near_duplicate_decision"] = None
+    if doc_id and doc_id in before_ids:
+        item["note"] = (
+            "Exact duplicate bytes; backend should record a new version "
+            "under the same work."
         )
 
-    with st.expander("Legacy import (CSV + TEI)", expanded=False):
+    refresh_ingested_docs(show_error=False)
+    _ledger_fetch(api_url, force=True)
+    _intake_touch(item, stage="uploaded")
+
+
+def _intake_route_source(item_id: str, *, attach_now: bool = False) -> None:
+    item = _intake_find_item(item_id)
+    if not item:
+        return
+    data = (st.session_state.get("intake_blobs") or {}).get(item_id)
+    if not isinstance(data, (bytes, bytearray)):
+        _intake_touch(item, stage="error", error="Missing PDF bytes in session")
+        return
+
+    attachment_queue.init_attachment_queue_state()
+    doc_id = st.session_state.get("selected_doc_id") if attach_now else None
+    selected_target = normalize_target_id(
+        st.session_state.get("citation_selected_target")
+    )
+    reference_hint = (
+        {"reference_id": selected_target} if (attach_now and selected_target) else {}
+    )
+
+    _intake_touch(item, stage="queued")
+    try:
+        created = attachment_queue.enqueue(
+            [
+                _BytesUploadFile(
+                    str(item.get("filename") or "attachment.pdf"), bytes(data)
+                )
+            ],
+            doc_id=str(doc_id) if doc_id else None,
+            reference_hint=reference_hint,
+            source="intake",
+        )
+    except Exception as exc:
+        _intake_touch(item, stage="error", error=str(exc))
+        return
+    item["source_queue_item_ids"] = list(created or [])
+    _intake_touch(item, stage="uploading-source")
+
+
+def _intake_near_duplicate_candidates(
+    extraction_data: dict, ledger_rows: list[dict]
+) -> list[dict]:
+    if not isinstance(extraction_data, dict):
+        return []
+    title = (
+        extraction_data.get("title")
+        or (extraction_data.get("header") or {}).get("title")
+        or ""
+    )
+    year = (
+        extraction_data.get("year")
+        or (extraction_data.get("header") or {}).get("year")
+        or None
+    )
+    if not title:
+        return []
+
+    def tokens(text: str) -> set[str]:
+        return {t for t in re.findall(r"[a-z0-9]+", str(text or "").lower()) if t}
+
+    title_tokens = tokens(title)
+    if len(title_tokens) < 4:
+        return []
+
+    matches: list[dict] = []
+    for row in ledger_rows or []:
+        if not isinstance(row, dict):
+            continue
+        if not bool(row.get("anchored")):
+            continue
+        row_title = row.get("title") or row.get("apa") or row.get("short") or ""
+        row_tokens = tokens(str(row_title))
+        if not row_tokens:
+            continue
+        inter = len(title_tokens & row_tokens)
+        union = max(1, len(title_tokens | row_tokens))
+        jacc = inter / union
+        score = jacc
+        if year and str(year) in str(row_title):
+            score += 0.08
+        if score >= 0.68:
+            matches.append(
+                {
+                    "num": row.get("num"),
+                    "short": row.get("short"),
+                    "title": row.get("title"),
+                    "ingest_id": row.get("ingest_id"),
+                    "score": round(score, 3),
+                }
+            )
+    matches.sort(key=lambda m: float(m.get("score") or 0.0), reverse=True)
+    return matches[:3]
+
+
+def _intake_refresh_item_status(item: dict) -> None:
+    if not isinstance(item, dict):
+        return
+
+    api_url = get_api_url()
+    project_id = get_project_id()
+    intent = str(item.get("intent") or "unknown")
+
+    if intent == "citing":
+        doc_id = str(item.get("doc_id") or "").strip()
+        if not doc_id:
+            return
+        try:
+            doc = get_document(api_url, doc_id, project_id=project_id)
+        except RuntimeError as exc:
+            _intake_touch(item, stage="error", error=str(exc))
+            return
+        extraction = (doc.get("extraction") or {}) if isinstance(doc, dict) else {}
+        resolution = (doc.get("resolution") or {}) if isinstance(doc, dict) else {}
+        extraction_status = str(extraction.get("status") or "").strip().lower()
+        extraction_error = str(extraction.get("error") or "").strip()
+        resolution_status = str(resolution.get("status") or "").strip().lower()
+        resolution_error = str(resolution.get("error") or "").strip()
+
+        if extraction_status == "error":
+            _intake_touch(
+                item, stage="error", error=extraction_error or "Extraction failed"
+            )
+            return
+        if resolution_status == "error":
+            _intake_touch(
+                item, stage="error", error=resolution_error or "Resolution failed"
+            )
+            return
+
+        if resolution_status == "complete":
+            _intake_touch(item, stage="done")
+            return
+        if resolution_status == "running":
+            _intake_touch(item, stage="resolving")
+            return
+
+        if extraction_status == "running":
+            _intake_touch(item, stage="extracting")
+            return
+
+        extraction_data = extraction.get("data") if isinstance(extraction, dict) else {}
+        if extraction_status == "complete" and isinstance(extraction_data, dict):
+            if not bool(item.get("near_duplicate_checked")):
+                payload = _ledger_fetch(api_url, force=False)
+                rows = payload.get("rows") or []
+                candidates = _intake_near_duplicate_candidates(extraction_data, rows)
+                item["near_duplicate_checked"] = True
+                item["near_duplicate_matches"] = candidates
+                if candidates:
+                    _intake_touch(item, stage="near-duplicate")
+                    return
+
+            if bool(st.session_state.get("auto_resolve_on_upload")) and not bool(
+                item.get("resolution_triggered")
+            ):
+                _intake_touch(item, stage="resolving")
+                try:
+                    trigger_resolution(api_url, doc_id, project_id=project_id)
+                except RuntimeError as exc:
+                    _intake_touch(item, stage="error", error=str(exc))
+                    return
+                item["resolution_triggered"] = True
+                return
+
+            _intake_touch(item, stage="uploaded")
+            return
+
+        _intake_touch(item, stage="uploaded")
+        return
+
+    if intent == "source":
+        ids = item.get("source_queue_item_ids") or []
+        if not ids:
+            return
+        attachment_queue.init_attachment_queue_state()
+        # Use local queue snapshot for best-effort stage.
+        snapshot = attachment_queue.get_queue_snapshot()
+        by_id = snapshot.get("items") or {}
+        stages = []
+        errors = []
+        for qid in ids:
+            q = by_id.get(qid) or {}
+            status = str(q.get("status") or "pending").strip().lower()
+            if status == "error":
+                errors.extend(q.get("errors") or [])
+            stages.append(status)
+        if errors:
+            last = errors[0]
+            msg = last.get("message") if isinstance(last, dict) else str(last)
+            _intake_touch(item, stage="error", error=msg or "Source upload failed")
+            return
+        if any(s in {"pending", "converting", "parsing"} for s in stages):
+            _intake_touch(item, stage="processing-source")
+            return
+        if all(s == "matched" for s in stages):
+            _intake_touch(item, stage="done")
+            return
+        _intake_touch(item, stage="queued")
+
+
+def render_intake_panel(*, max_rows: int = 18) -> None:
+    st.markdown("**Drop PDFs**")
+    uploader_key = "intake-dropzone"
+
+    def _handle_drop() -> None:
+        files = st.session_state.get(uploader_key) or []
+        if not files:
+            return
+        inbox = st.session_state.get("intake_inbox")
+        if not isinstance(inbox, list):
+            inbox = []
+            st.session_state["intake_inbox"] = inbox
+        blobs = st.session_state.get("intake_blobs")
+        if not isinstance(blobs, dict):
+            blobs = {}
+            st.session_state["intake_blobs"] = blobs
+        for file_obj in files:
+            if file_obj is None:
+                continue
+            try:
+                data = bytes(file_obj.getbuffer())
+            except Exception:
+                continue
+            item_id = str(uuid4())
+            intent = _intake_guess_intent(
+                filename=str(getattr(file_obj, "name", "")), data=data
+            )
+            item = {
+                "id": item_id,
+                "filename": str(getattr(file_obj, "name", "document.pdf")),
+                "size": len(data),
+                "sha256": hashlib.sha256(data).hexdigest().lower(),
+                "intent": intent,
+                "stage": "awaiting-intent" if intent == "unknown" else "queued",
+                "last_event_at": _now_iso(),
+                "error": "",
+                "note": "",
+                "doc_id": None,
+                "source_queue_item_ids": [],
+            }
+            inbox.insert(0, item)
+            blobs[item_id] = data
+            if intent == "citing":
+                _intake_route_citing(item_id)
+            elif intent == "source":
+                _intake_route_source(item_id)
+        st.session_state[uploader_key] = None
+
+    st.file_uploader(
+        "Drop PDFs",
+        type=["pdf"],
+        accept_multiple_files=True,
+        key=uploader_key,
+        on_change=_handle_drop,
+        label_visibility="collapsed",
+    )
+
+    inbox = st.session_state.get("intake_inbox") or []
+    if not inbox:
+        st.caption(
+            "Drop one or more PDFs to start. Unknown items stay here until you choose "
+            "Citing vs Source."
+        )
+        return
+
+    shown = inbox[: int(max_rows)] if max_rows else list(inbox)
+    if max_rows and len(inbox) > int(max_rows):
+        st.caption(f"Showing {int(max_rows)} of {len(inbox)} intake items")
+
+    for item in shown:
+        if not isinstance(item, dict) or not item.get("id"):
+            continue
+        _intake_refresh_item_status(item)
+
+        item_id = str(item.get("id"))
+        stage = str(item.get("stage") or "")
+        intent = str(item.get("intent") or "unknown")
+        icon = _intake_stage_icon(stage)
+        cols = st.columns([0.9, 5.2, 2.2], gap="small")
+        details_key = f"intake-details::{item_id}"
+        if details_key not in st.session_state:
+            st.session_state[details_key] = False
+
+        with cols[0]:
+            if st.button(icon, key=f"intake-icon::{item_id}", use_container_width=True):
+                st.session_state[details_key] = not bool(
+                    st.session_state.get(details_key)
+                )
+
+        with cols[1]:
+            filename = str(item.get("filename") or "document.pdf")
+            size_label = format_filesize(int(item.get("size") or 0))
+            st.markdown(f"**{html.escape(filename)}**")
+            st.caption(f"Intent: {intent} • Stage: {stage} • Size: {size_label}")
+            note = str(item.get("note") or "").strip()
+            if note:
+                st.caption(note)
+            if str(item.get("error") or "").strip():
+                st.error(str(item.get("error")))
+
+            if bool(st.session_state.get(details_key)):
+                with st.expander("Details", expanded=True):
+                    st.write(f"Stage: {stage}")
+                    st.write(f"Last event: {item.get('last_event_at')}")
+                    if item.get("doc_id"):
+                        st.write(f"Citing doc_id: {item.get('doc_id')}")
+                    if item.get("source_queue_item_ids"):
+                        st.write(
+                            f"Source queue ids: {item.get('source_queue_item_ids')}"
+                        )
+                    if item.get("error"):
+                        st.write(f"Error: {item.get('error')}")
+
+        with cols[2]:
+            if intent == "unknown":
+                attach_ctx = bool(st.session_state.get("selected_doc_id")) and bool(
+                    normalize_target_id(
+                        st.session_state.get("citation_selected_target")
+                    )
+                )
+                if st.button(
+                    "Citing",
+                    key=f"intake-mark-citing::{item_id}",
+                    use_container_width=True,
+                ):
+                    item["intent"] = "citing"
+                    _intake_route_citing(item_id)
+                    _rerun()
+                if st.button(
+                    "Source",
+                    key=f"intake-mark-source::{item_id}",
+                    use_container_width=True,
+                ):
+                    item["intent"] = "source"
+                    _intake_route_source(item_id, attach_now=False)
+                    _rerun()
+                if attach_ctx and st.button(
+                    "Attach now",
+                    key=f"intake-mark-source-attach::{item_id}",
+                    help="Enqueue as a source and prefill current citing context",
+                    use_container_width=True,
+                ):
+                    item["intent"] = "source"
+                    _intake_route_source(item_id, attach_now=True)
+                    _rerun()
+
+            if stage == "near-duplicate":
+                matches = item.get("near_duplicate_matches") or []
+                if matches:
+                    st.warning("Near-duplicate detected in project")
+                    for m in matches:
+                        st.caption(
+                            f"#{m.get('num')} {m.get('short')} (score {m.get('score')})"
+                        )
+                keep_key = f"intake-dup-keep::{item_id}"
+                repl_key = f"intake-dup-replace::{item_id}"
+                if st.button("Keep both", key=keep_key, use_container_width=True):
+                    item["near_duplicate_decision"] = "keep"
+                    item["stage"] = "uploaded"
+                    _rerun()
+                if st.button(
+                    "Replace existing",
+                    key=repl_key,
+                    help=(
+                        "Warn: prior review work may not transfer; "
+                        "default is Keep both."
+                    ),
+                    use_container_width=True,
+                ):
+                    item["near_duplicate_decision"] = "replace"
+                    item["note"] = (
+                        (str(item.get("note") or "").strip() + "\n")
+                        + (
+                            "Replace requested (best-effort): "
+                            "prior review work may not transfer."
+                        )
+                    ).strip()
+                    item["stage"] = "uploaded"
+                    _rerun()
+
+
+def render_sources_panel(*, max_rows: int = 18) -> None:
+    inject_attachment_panel_styles()
+    attachment_queue.init_attachment_queue_state()
+    if st.button("Refresh sources", key="sources-refresh", use_container_width=True):
+        attachment_queue.advance_inflight_items()
+
+    items = attachment_queue.get_queue_items()
+    if not items:
+        st.caption("No sources yet. Route a PDF as Source from Intake.")
+        return
+    if max_rows and len(items) > int(max_rows):
+        st.caption(f"Showing {int(max_rows)} of {len(items)} source items")
+        items = items[: int(max_rows)]
+    for item in items:
+        _render_source_bin_row(item)
+
+
+def render_workspace_left_pane() -> None:
+    reviewer = _active_reviewer_uid()
+    suffix = _reviewer_state_suffix(reviewer)
+
+    def _rows_slider(section_id: str, *, default: int) -> int:
+        key = f"left-pane-rows::{section_id}::{suffix}"
+        if key not in st.session_state:
+            st.session_state[key] = int(default)
+        return int(
+            st.slider(
+                "Section height (rows)",
+                min_value=6,
+                max_value=40,
+                key=key,
+            )
+        )
+
+    with st.expander("Intake", expanded=True):
+        intake_rows = _rows_slider("intake", default=14)
+        render_intake_panel(max_rows=intake_rows)
+
+    with st.expander("Documents", expanded=True):
+        docs_rows = _rows_slider("documents", default=18)
+        render_documents_panel(max_rows=docs_rows)
+
+    with st.expander("Sources", expanded=False):
+        sources_rows = _rows_slider("sources", default=18)
+        render_sources_panel(max_rows=sources_rows)
+
+    with st.expander("Project/Settings", expanded=False):
+        render_project_panel()
+        with st.expander("Settings", expanded=False):
+            render_settings_controls()
+
+    with st.expander("Advanced", expanded=False):
         st.file_uploader(
             "CSV & TEI files",
             type=["csv", "xml"],
@@ -4755,26 +5267,8 @@ def render_workspace_left_pane() -> None:
             key="uploaded_files",
             on_change=handle_upload,
         )
-
-    st.markdown("---")
-    footer = st.columns([1, 1], gap="small")
-    with footer[0]:
+        st.markdown("---")
         st.toggle("Dense", key=WORKSPACE_DENSE_MODE)
-    with footer[1]:
-        if st.button(
-            "Settings",
-            key="workspace-gear",
-            help="Workspace settings",
-            use_container_width=True,
-        ):
-            st.session_state[WORKSPACE_SETTINGS_OPEN] = not bool(
-                st.session_state.get(WORKSPACE_SETTINGS_OPEN)
-            )
-    if st.session_state.get(WORKSPACE_SETTINGS_OPEN):
-        with st.container():
-            render_settings_controls()
-
-    st.markdown("</div>", unsafe_allow_html=True)
 
 
 def draw_workspace() -> None:

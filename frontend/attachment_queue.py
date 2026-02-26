@@ -425,6 +425,26 @@ def enqueue_files(
     return created_ids
 
 
+def enqueue(
+    files: Iterable,
+    *,
+    doc_id: Optional[str] = None,
+    reference_hint: Optional[dict] = None,
+    source: str = "drop",
+) -> List[str]:
+    """Alias for enqueuing into the global Source Inbox.
+
+    Intake (and other UI surfaces) should use this for project-wide source uploads
+    that are not immediately placed onto a specific claim.
+    """
+    return enqueue_files(
+        files,
+        doc_id=doc_id,
+        reference_hint=reference_hint,
+        source=source,
+    )
+
+
 def _is_duplicate_upload(filename: str, size: Optional[int]) -> bool:
     if not filename or size is None:
         return False

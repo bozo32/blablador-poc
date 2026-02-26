@@ -45,6 +45,10 @@ class AttachmentNotFound(RuntimeError):
     """Raised when an attachment id cannot be resolved."""
 
 
+class AttachmentCloneInvariantError(RuntimeError):
+    """Raised when cloning would violate source attachment invariants."""
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -783,6 +787,18 @@ def clone_attachment(
     if src is None:
         raise AttachmentNotFound(f"Attachment {source_attachment_id} not found")
 
+    placement_before = {
+        "claim_id": src.get("claim_id"),
+        "doc_id": src.get("doc_id"),
+        "citation_index": src.get("citation_index"),
+        "target_id": src.get("target_id"),
+    }
+    if any(v is not None for v in placement_before.values()):
+        raise AttachmentCloneInvariantError(
+            "Clone source must be unassigned "
+            "(claim_id/doc_id/target_id/citation_index are null)"
+        )
+
     new_id = str(uuid4())
     now = _now()
     status = _normalize_status(src.get("status"))
@@ -790,7 +806,7 @@ def clone_attachment(
     ref_hint = reference_hint or (src.get("reference_hint") or {})
     parsed_at = src.get("parsed_at")
 
-    with connect(autocommit=True) as conn:
+    with connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -854,6 +870,42 @@ def clone_attachment(
                     json.dumps(artifacts, ensure_ascii=True),
                 ),
             )
+
+            if project_id:
+                cur.execute(
+                    """
+                    SELECT claim_id, doc_id, citation_index, target_id
+                      FROM attachments
+                     WHERE attachment_id=%s AND project_id=%s
+                    """,
+                    (str(source_attachment_id), str(project_id)),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT claim_id, doc_id, citation_index, target_id
+                      FROM attachments
+                     WHERE attachment_id=%s
+                    """,
+                    (str(source_attachment_id),),
+                )
+            row = cur.fetchone()
+            if not row:
+                raise AttachmentCloneInvariantError(
+                    "Clone source disappeared during clone (unexpected)"
+                )
+            placement_after = {
+                "claim_id": row[0],
+                "doc_id": row[1],
+                "citation_index": row[2],
+                "target_id": row[3],
+            }
+            if placement_after != placement_before:
+                raise AttachmentCloneInvariantError(
+                    "Clone mutated source attachment placement (unexpected)"
+                )
+
+        conn.commit()
 
     _log_event(
         attachment_id=new_id,
@@ -1337,6 +1389,7 @@ def clear_sentence_cache(attachment_id: Optional[str] = None) -> None:
 
 __all__ = [
     "AttachmentNotFound",
+    "AttachmentCloneInvariantError",
     "STATUS_PENDING",
     "STATUS_CONVERTING",
     "STATUS_PARSING",

@@ -4072,6 +4072,8 @@ def clone_global_attachment(
         )
     except attachment_store.AttachmentNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except attachment_store.AttachmentCloneInvariantError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     # Persist a doc-level reference -> ingest mapping when possible so auto-place
     # works for other claimspans referencing the same bibliography entry.
@@ -4099,7 +4101,10 @@ def clone_global_attachment(
     except Exception:
         logger.exception("Auto rerun enqueue failed after attachment clone")
 
-    public_record = attachment_store.public_status(record["id"])
+    public_record = attachment_store.public_status_for_project(
+        record["id"],
+        project_id=project_id,
+    )
     return {"attachment": _serialize_attachment(public_record)}
 
 

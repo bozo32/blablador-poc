@@ -15,6 +15,7 @@ Plans:
 - `10-04.5-01-01-PLAN.md` — Backend: source upload via bytes + dedupe
 - `10-04.5-01-03-PLAN.md` — Backend: project scoping + clone invariants
 - `10-04.5-01-02-PLAN.md` — Frontend: unified intake inbox + verifier
+- `10-04.5-01-05-PLAN.md` — Frontend: Source Inbox + assignment + verifier
 - `10-05-PLAN.md` — Demo + trace replay (reproducible E2E)
 - `10-06-PLAN.md` — Optional add-ons (hosted inference, tri-level assessment)
 - `10-07-PLAN.md` — Deprioritized ops/cloud direction (doc-only backlog)

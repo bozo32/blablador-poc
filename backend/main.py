@@ -1134,6 +1134,16 @@ def _require_project_id_for_upload(x_project_id: Optional[str]) -> str:
     raise HTTPException(status_code=400, detail="X-Project-Id header is required")
 
 
+def _allow_local_path_upload_for_dev() -> bool:
+    return str(
+        os.environ.get("ALLOW_LOCAL_PATH_UPLOAD_FOR_DEV", "") or ""
+    ).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+
+
 @app.post("/ingest", response_model=schemas.IngestUploadResponse)
 async def ingest_document(
     background_tasks: BackgroundTasks,
@@ -3761,6 +3771,11 @@ def create_claim_attachment(
     payload: schemas.AttachmentCreateRequest,
     background_tasks: BackgroundTasks,
 ):
+    if not _allow_local_path_upload_for_dev():
+        raise HTTPException(
+            status_code=400,
+            detail=("local_path uploads are disabled; use /attachments/upload"),
+        )
     try:
         record = attachment_store.create_attachment(
             claim_id=claim_id,
@@ -3884,6 +3899,11 @@ def create_global_attachment(
     payload: schemas.AttachmentGlobalCreateRequest,
     background_tasks: BackgroundTasks,
 ):
+    if not _allow_local_path_upload_for_dev():
+        raise HTTPException(
+            status_code=400,
+            detail=("local_path uploads are disabled; use /attachments/upload"),
+        )
     try:
         record = attachment_store.create_attachment(
             claim_id=payload.claim_id,

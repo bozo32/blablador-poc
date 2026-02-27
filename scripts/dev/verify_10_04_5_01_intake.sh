@@ -290,23 +290,10 @@ DOC1=$(ingest_upload "${P1}" "${CITING_PDF_PATH}")
 [ -n "${DOC1}" ] || fail "citing upload did not return doc id"
 pass "citing upload returned doc_id=${DOC1}"
 
-ingest_get "${P1}" "${DOC1}" | python - <<'PY'
-import json,sys
-p=json.load(sys.stdin)
-text=json.dumps(p, sort_keys=True)
-assert 'local_path' not in text
-print('ok')
-PY
+ingest_get "${P1}" "${DOC1}" | python -c 'import json,sys; p=json.load(sys.stdin); text=json.dumps(p, sort_keys=True); assert "local_path" not in text; print("ok")'
 pass "citing ingest contract does not include local_path"
 
-curl_json -H "X-Project-Id: ${P1}" "${API_URL}/ingest" | python - <<'PY' "${DOC1}"
-import json,sys
-p=json.load(sys.stdin)
-docs=p.get('documents') or []
-ids={d.get('id') for d in docs if isinstance(d,dict)}
-assert sys.argv[1] in ids
-print('ok')
-PY
+curl_json -H "X-Project-Id: ${P1}" "${API_URL}/ingest" | python -c 'import json,sys; p=json.load(sys.stdin); docs=p.get("documents") or []; ids={d.get("id") for d in docs if isinstance(d,dict)}; assert sys.argv[1] in ids; print("ok")' "${DOC1}"
 pass "/ingest list contains doc in project"
 
 code=$(curl -s -o /dev/null -w "%{http_code}" -H "X-Project-Id: ${P2}" "${API_URL}/ingest/${DOC1}" || true)
@@ -338,32 +325,17 @@ pass "cross-project uploads do not dedupe across projects"
 CL1=$(curl_json -H "X-Project-Id: ${P1}" -X POST "${API_URL}/attachments/${ATT1}/clone" \
   -H "Content-Type: application/json" \
   -d '{"doc_id":"doc-a"}' \
-  | python - <<'PY'
-import json,sys
-p=json.load(sys.stdin)
-print((p.get('attachment') or {}).get('id') or '')
-PY
+  | python -c 'import json,sys; p=json.load(sys.stdin); print(((p.get("attachment") or {}).get("id") or ""))'
 )
 CL2=$(curl_json -H "X-Project-Id: ${P1}" -X POST "${API_URL}/attachments/${ATT1}/clone" \
   -H "Content-Type: application/json" \
   -d '{"doc_id":"doc-b"}' \
-  | python - <<'PY'
-import json,sys
-p=json.load(sys.stdin)
-print((p.get('attachment') or {}).get('id') or '')
-PY
+  | python -c 'import json,sys; p=json.load(sys.stdin); print(((p.get("attachment") or {}).get("id") or ""))'
 )
 [ -n "${CL1}" ] && [ -n "${CL2}" ] || fail "clone ids missing"
 [ "${CL1}" != "${CL2}" ] || fail "expected distinct clone ids"
 
-attachments_get "${P1}" "${ATT1}" | python - <<'PY'
-import json,sys
-p=json.load(sys.stdin)
-a=p.get('attachment') or {}
-ok=(not a.get('doc_id') and not a.get('claim_id') and not a.get('target_id') and a.get('citation_index') is None)
-assert ok, a
-print('ok')
-PY
+attachments_get "${P1}" "${ATT1}" | python -c 'import json,sys; p=json.load(sys.stdin); a=p.get("attachment") or {}; ok=(not a.get("doc_id") and not a.get("claim_id") and not a.get("target_id") and a.get("citation_index") is None); assert ok, a; print("ok")'
 pass "clone is non-mutating for global source"
 
 code=$(curl -s -o /dev/null -w "%{http_code}" -H "X-Project-Id: ${P2}" "${API_URL}/attachments/${ATT1}" || true)

@@ -512,6 +512,7 @@ class GraphStore:
                 "ingest_ids": [ingest_id] if ingest_id else [],
                 "sha256": ingest_meta.get("sha256"),
                 "doi": doi_meta,
+                "extracted": True,
             },
         )
         if ingest_id:
@@ -603,6 +604,18 @@ class GraphStore:
         ingest_id = str(ingest_meta.get("id") or "").strip() or None
         if not ingest_id:
             return
+        try:
+            doc_key = doc_key_for_ingest(ingest_meta)
+            if doc_key:
+                self._upsert_node(
+                    node_id=doc_node_id_from_key(doc_key),
+                    kind="document",
+                    label=None,
+                    merge_properties={"resolved": True},
+                )
+        except Exception:
+            pass
+
         for entry in resolution_data or []:
             if not isinstance(entry, dict):
                 continue
@@ -643,6 +656,7 @@ class GraphStore:
                     "title": entry.get("title"),
                     "year": entry.get("year"),
                     "ingest_ids": ingest_ids or None,
+                    "resolved": True,
                 },
             )
 

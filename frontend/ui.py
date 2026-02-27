@@ -1650,6 +1650,7 @@ def render_documents_panel(*, max_rows: int = 18) -> None:
                         api_url,
                         str(ingest_id),
                         project_id=get_project_id(),
+                        force=bool(reprocess),
                     )
                 except RuntimeError as exc:
                     st.error(str(exc))
@@ -1662,6 +1663,7 @@ def render_documents_panel(*, max_rows: int = 18) -> None:
                         api_url,
                         str(ingest_id),
                         project_id=get_project_id(),
+                        force=bool(reprocess),
                     )
                 except RuntimeError:
                     # Resolution is optional; don't block opening.

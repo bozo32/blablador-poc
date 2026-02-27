@@ -79,9 +79,15 @@ def get_document(
 
 
 def trigger_extraction(
-    api_url: str, doc_id: str, *, project_id: Optional[str] = None
+    api_url: str,
+    doc_id: str,
+    *,
+    project_id: Optional[str] = None,
+    force: bool = False,
 ) -> dict:
     url = f"{api_url.rstrip('/')}/ingest/{doc_id}/extract"
+    if bool(force):
+        url = url + "?force=true"
     try:
         response = requests.post(
             url,
@@ -94,9 +100,15 @@ def trigger_extraction(
 
 
 def trigger_resolution(
-    api_url: str, doc_id: str, *, project_id: Optional[str] = None
+    api_url: str,
+    doc_id: str,
+    *,
+    project_id: Optional[str] = None,
+    force: bool = False,
 ) -> dict:
     url = f"{api_url.rstrip('/')}/ingest/{doc_id}/resolve"
+    if bool(force):
+        url = url + "?force=true"
     try:
         response = requests.post(
             url,

@@ -3654,7 +3654,13 @@ def resolve_ingested_references(
             )
 
         try:
-            graph_store.index_resolution(ingest_meta=document, resolution_data=resolved)
+            scoped_graph = GraphStore(
+                settings=SimpleNamespace(DEFAULT_PROJECT_ID=project_id)
+            )
+            scoped_graph.index_resolution(
+                ingest_meta=document,
+                resolution_data=resolved,
+            )
         except Exception:
             logger.exception("Graph index failed for resolution")
     except Exception as exc:

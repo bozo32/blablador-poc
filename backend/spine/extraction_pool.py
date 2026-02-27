@@ -3,11 +3,13 @@ from __future__ import annotations
 import queue
 import threading
 from dataclasses import dataclass
+from types import SimpleNamespace
 from pathlib import Path
 from typing import Optional
 
 from backend import extraction, fallback_text, grobid_client
 from backend.object_store import s3 as object_store_s3
+from backend.graph_store import GraphStore
 from backend.spine.attempts import (
     create_or_get_attempt,
     get_attempt,
@@ -19,6 +21,7 @@ from backend.spine.attempts import (
     merge_attempt_quality_json,
 )
 from backend.spine.artifacts import create_artifact
+from backend.spine.ingest_view import build_ingested_document_from_spine
 from backend.settings import settings
 
 import json
@@ -388,6 +391,26 @@ def _run_task(task: ExtractionTask) -> None:
                 len(payload_bytes),
                 "application/json",
             )
+
+            # Index extracted references into the project-scoped graph so work-level
+            # links and placeholders appear without manual reindexing.
+            try:
+                graph = GraphStore(
+                    settings=SimpleNamespace(DEFAULT_PROJECT_ID=task.project_id)
+                )
+                ingest_meta = build_ingested_document_from_spine(
+                    work_id=work_id,
+                    project_id=task.project_id,
+                    include_extraction_data=False,
+                ) or {"id": work_id, "project_id": task.project_id}
+                graph.index_ingest_upload(ingest_meta)
+                graph.index_extraction(
+                    ingest_meta=ingest_meta,
+                    extraction_data=extraction_payload or {},
+                )
+            except Exception:
+                # Best-effort: extraction should not fail because graph indexing failed.
+                pass
 
             if quality_patch:
                 try:

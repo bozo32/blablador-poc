@@ -18,6 +18,7 @@ Plans:
 - `10-04.5-01-04-PLAN.md` — Backend: ingest project scoping + bytes-only confirmation
 - `10-04.5-01-05-PLAN.md` — Frontend: Source Inbox + assignment + verifier
 - `10-04.5-01-06-PLAN.md` — Verification: intake script + human gate
+- `10-04.5-01-07-PLAN.md` — Reading artifacts: project-scoped spans + reviewer opinion layer (follow/annotations/ACL)
 - `10-05-PLAN.md` — Demo + trace replay (reproducible E2E)
 - `10-06-PLAN.md` — Optional add-ons (hosted inference, tri-level assessment)
 - `10-07-PLAN.md` — Deprioritized ops/cloud direction (doc-only backlog)

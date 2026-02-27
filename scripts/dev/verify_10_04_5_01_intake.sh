@@ -2,7 +2,7 @@
 set -euo pipefail
 
 curl_json() {
-  curl -fsS --retry 20 --retry-delay 1 --retry-connrefused --max-time 60 "$@"
+  curl -fsSL --fail-with-body --retry 20 --retry-delay 1 --retry-connrefused --max-time 60 "$@"
 }
 
 fail() {
@@ -70,6 +70,17 @@ ingest_upload() {
     -F "file=@${pdf_path};type=application/pdf" \
     "${API_URL}/ingest?auto_process=true")
 
+  if [ -z "${out}" ]; then
+    echo "ERROR: /ingest returned empty body" >&2
+    echo "DEBUG: response headers/body (first lines):" >&2
+    curl -sS -L -i \
+      -H "X-Project-Id: ${project_id}" \
+      -F "file=@${pdf_path};type=application/pdf" \
+      "${API_URL}/ingest?auto_process=true" \
+      | sed -n '1,40p' >&2 || true
+    return 2
+  fi
+
   echo "${out}" | python - <<'PY'
 import json,sys
 raw=sys.stdin.read()
@@ -102,6 +113,17 @@ attachments_upload() {
     -H "X-Project-Id: ${project_id}" \
     -F "file=@${pdf_path};type=application/pdf" \
     "${API_URL}/attachments/upload")
+
+  if [ -z "${out}" ]; then
+    echo "ERROR: /attachments/upload returned empty body" >&2
+    echo "DEBUG: response headers/body (first lines):" >&2
+    curl -sS -L -i \
+      -H "X-Project-Id: ${project_id}" \
+      -F "file=@${pdf_path};type=application/pdf" \
+      "${API_URL}/attachments/upload" \
+      | sed -n '1,40p' >&2 || true
+    return 2
+  fi
 
   echo "${out}" | python - <<'PY'
 import json,sys

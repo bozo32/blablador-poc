@@ -6,6 +6,7 @@ import json
 import logging
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Iterable, List, Optional
 from uuid import uuid4
 
@@ -46,7 +47,54 @@ def _maybe_ingest_matched_attachment(record: dict) -> None:
     """
     if not isinstance(record, dict):
         return
-    if str(record.get("source_ingest_id") or "").strip():
+    project_id = str(record.get("project_id") or "").strip() or str(
+        settings.DEFAULT_PROJECT_ID
+    )
+    user_id = str(settings.DEFAULT_USER_ID)
+    existing_ingest_id = str(record.get("source_ingest_id") or "").strip()
+    if existing_ingest_id:
+        # Ensure the promoted ingest doc is visible in this attachment's project and
+        # (re)index graph metadata/aliases for work-level linking.
+        try:
+            ensure_project_document(
+                project_id,
+                document_id=existing_ingest_id,
+                added_by_user_id=user_id,
+            )
+        except Exception:
+            logger.exception("Unable to ensure project document for existing ingest")
+        try:
+            scoped_graph = GraphStore(
+                settings=SimpleNamespace(DEFAULT_PROJECT_ID=project_id)
+            )
+            ingest_meta = build_ingested_document_from_spine(
+                work_id=existing_ingest_id,
+                project_id=project_id,
+                include_extraction_data=False,
+            ) or {"id": existing_ingest_id, "project_id": project_id}
+            scoped_graph.index_ingest_upload(ingest_meta)
+        except Exception:
+            logger.exception("Graph index failed for existing attachment ingest")
+        # Reuse TEI artifacts when present.
+        artifacts = record.get("artifacts") or {}
+        tei_xml_key = str(artifacts.get("tei_xml") or "").strip()
+        tei_json_key = str(artifacts.get("tei_json") or "").strip()
+        if tei_xml_key and tei_json_key:
+            try:
+                extraction_payload = json.loads(
+                    object_store_s3.get_bytes(tei_json_key).decode("utf-8")
+                )
+                try:
+                    scoped_graph.index_extraction(
+                        ingest_meta=ingest_meta,
+                        extraction_data=extraction_payload,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Graph index failed for existing attachment extraction"
+                    )
+            except Exception:
+                logger.exception("Unable to load attachment TEI JSON for reindex")
         return
 
     pdf_object_key = str(record.get("pdf_object_key") or "").strip()
@@ -62,9 +110,6 @@ def _maybe_ingest_matched_attachment(record: dict) -> None:
     )
     sha256 = hashlib.sha256(file_bytes).hexdigest().lower()
     size_bytes = int(len(file_bytes))
-
-    project_id = str(settings.DEFAULT_PROJECT_ID)
-    user_id = str(settings.DEFAULT_USER_ID)
 
     existing = get_document_version_by_sha256(sha256=sha256)
     if existing is not None:
@@ -116,7 +161,7 @@ def _maybe_ingest_matched_attachment(record: dict) -> None:
         logger.exception("Spine upsert failed for attachment ingest")
         return
 
-    graph_store = GraphStore(settings=settings)
+    graph_store = GraphStore(settings=SimpleNamespace(DEFAULT_PROJECT_ID=project_id))
     ingest_meta = build_ingested_document_from_spine(
         work_id=ingest_id,
         project_id=project_id,

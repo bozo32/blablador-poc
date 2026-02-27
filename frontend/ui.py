@@ -1391,14 +1391,78 @@ def _render_source_bin_row(item: dict) -> None:
             return
         callout_tuple = st.session_state.get("selected_callout_tuple") or {}
         claim_rec = claim_queue.get_claim_record(str(selected_claim_id)) or {}
-        attachment_queue.place_attachment(
-            str(queue_item_id),
-            str(selected_claim_id),
-            doc_id=claim_rec.get("doc_id") or st.session_state.get("selected_doc_id"),
-            citation_index=callout_tuple.get("citation_index"),
-            target_id=callout_tuple.get("target_id"),
-            via="manual",
+
+        is_global_source = (
+            not str(item.get("claim_id") or "").strip()
+            and not str(item.get("doc_id") or "").strip()
+            and not str(item.get("target_id") or "").strip()
         )
+
+        doc_id = claim_rec.get("doc_id") or st.session_state.get("selected_doc_id")
+        citation_index = callout_tuple.get("citation_index")
+        target_id = callout_tuple.get("target_id")
+
+        if is_global_source:
+            api_url = get_api_url()
+            src_attachment_id = str(item.get("attachment_id") or queue_item_id)
+            headers = {"X-Project-Id": get_project_id()}
+
+            # Ensure source_ingest_id exists when possible (helps graph auto-place).
+            try:
+                details = item.get("backend_details") or {}
+                if not str(details.get("source_ingest_id") or "").strip():
+                    promote_url = (
+                        f"{str(api_url).rstrip('/')}/attachments/"
+                        f"{src_attachment_id}/promote-ingest"
+                    )
+                    resp = requests.post(
+                        promote_url,
+                        headers=headers,
+                        timeout=30,
+                    )
+                    resp.raise_for_status()
+                    promoted = (resp.json() or {}).get("attachment") or {}
+                    if promoted:
+                        item["backend_details"] = promoted
+            except Exception:
+                # Best-effort; clone still works without promote.
+                pass
+
+            payload = {
+                "claim_id": str(selected_claim_id),
+                "doc_id": str(doc_id) if doc_id else None,
+                "citation_index": int(citation_index)
+                if citation_index is not None
+                else None,
+                "target_id": str(target_id) if target_id else None,
+                "reference_hint": {"reference_id": str(target_id)}
+                if target_id
+                else None,
+                "claim_text": (claim_rec.get("claim") or "").strip() or None,
+            }
+            payload = {k: v for k, v in payload.items() if v is not None}
+
+            try:
+                resp = requests.post(
+                    f"{str(api_url).rstrip('/')}/attachments/{src_attachment_id}/clone",
+                    headers=headers,
+                    json=payload,
+                    timeout=30,
+                )
+                resp.raise_for_status()
+            except Exception as exc:
+                st.warning(f"Assign failed: {exc}")
+                return
+        else:
+            attachment_queue.place_attachment(
+                str(queue_item_id),
+                str(selected_claim_id),
+                doc_id=doc_id,
+                citation_index=citation_index,
+                target_id=target_id,
+                via="manual",
+            )
+
         _rerun()
 
     with row[1]:
@@ -5209,19 +5273,63 @@ def render_intake_panel(*, max_rows: int = 18) -> None:
 
 
 def render_sources_panel(*, max_rows: int = 18) -> None:
+    """Project-shared Source Inbox.
+
+    Backed by `GET /attachments?archived=false` (project-scoped via X-Project-Id).
+    """
     inject_attachment_panel_styles()
     attachment_queue.init_attachment_queue_state()
-    if st.button("Refresh sources", key="sources-refresh", use_container_width=True):
-        attachment_queue.advance_inflight_items()
+
+    # Ensure we show the backend-backed, project-shared inbox by default.
+    attachment_queue.set_show_history(True)
+    attachment_queue.set_show_archived(False)
+
+    controls = st.columns([1, 1], gap="small")
+    with controls[0]:
+        if st.button(
+            "Refresh sources",
+            key="sources-refresh",
+            use_container_width=True,
+        ):
+            attachment_queue.advance_inflight_items()
+    with controls[1]:
+        if st.button(
+            "Archive all",
+            key="sources-archive-all",
+            help="Archive all currently-unarchived sources in this project.",
+            use_container_width=True,
+        ):
+            archived = attachment_queue.archive_all_active()
+            st.caption(f"Archived {archived} source(s)")
+
+    # Keep the list fresh even without manual refresh.
+    attachment_queue.sync_backend_state()
 
     items = attachment_queue.get_queue_items()
-    if not items:
+
+    def _is_global_source(item: dict) -> bool:
+        if not isinstance(item, dict):
+            return False
+        if bool(item.get("archived")):
+            return False
+        if str(item.get("claim_id") or "").strip():
+            return False
+        if str(item.get("doc_id") or "").strip():
+            return False
+        if str(item.get("target_id") or "").strip():
+            return False
+        return True
+
+    inbox = [it for it in items if _is_global_source(it)]
+    if not inbox:
         st.caption("No sources yet. Route a PDF as Source from Intake.")
         return
-    if max_rows and len(items) > int(max_rows):
-        st.caption(f"Showing {int(max_rows)} of {len(items)} source items")
-        items = items[: int(max_rows)]
-    for item in items:
+
+    if max_rows and len(inbox) > int(max_rows):
+        st.caption(f"Showing {int(max_rows)} of {len(inbox)} source items")
+        inbox = inbox[: int(max_rows)]
+
+    for item in inbox:
         _render_source_bin_row(item)
 
 

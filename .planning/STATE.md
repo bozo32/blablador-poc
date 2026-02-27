@@ -12,11 +12,11 @@ Planning index: `.planning/PRIORITIES.md`
 ## Current Position
 
 Phase: 10 of 12 (Contracts + core workflow simplification)
-Plan: 3 of 6 (10-04.5-01 Intake hardening)
-Status: In progress (10-04.5 source inbox/project safety; next 10-04.5-01-02)
-Last activity: 2026-02-26 — Completed 10-04.5-01-04 ingest scoping + bytes-only hardening
+Plan: 5 of 7 (10-04.5 Intake hardening)
+Status: In progress (10-04.5 complete; next 10-05)
+Last activity: 2026-02-27 — Completed 10-04.5 Intake hardening; verified bytes-only uploads, project scoping, Source Inbox, and auto graph links
 
-Progress: ███████░░░ 71%
+Progress: ██████████░ 80%
 
 ## Performance Metrics
 

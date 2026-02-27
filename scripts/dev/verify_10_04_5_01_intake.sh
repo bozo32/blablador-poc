@@ -34,14 +34,30 @@ P2="${P2:-proj-b}"
 wait_api() {
   local url="$1"
   local code=""
+  local tmp="/tmp/verify_10_04_5_01_openapi.json"
+
   for _ in $(seq 1 120); do
-    code=$(curl -s --max-time 2 -o /dev/null -w "%{http_code}" "${url}/docs" || true)
+    code=$(curl -s --max-time 2 -o "${tmp}" -w "%{http_code}" "${url}/openapi.json" || true)
     if [ "${code}" = "200" ]; then
-      return 0
+      if python - "${tmp}" >/dev/null 2>&1 <<'PYCHECK'; then
+import json,sys
+raw=open(sys.argv[1],'r',encoding='utf-8',errors='replace').read() or ''
+p=json.loads(raw)
+assert isinstance(p, dict)
+assert p.get('openapi')
+paths=p.get('paths') or {}
+assert isinstance(paths, dict)
+assert '/ingest' in paths
+print('ok')
+PYCHECK
+        return 0
+      fi
     fi
     sleep 1
   done
-  echo "ERROR: API not ready at ${url} (last_code=${code})" >&2
+
+  echo "ERROR: API not ready at ${url} (expected FastAPI openapi.json with /ingest; last_code=${code})" >&2
+  echo "Hint: ensure the API is running on ${url} (not Streamlit/UI)." >&2
   return 1
 }
 
@@ -56,8 +72,21 @@ ingest_upload() {
 
   echo "${out}" | python - <<'PY'
 import json,sys
-p=json.load(sys.stdin)
-d=(p.get('document') or {})
+raw=sys.stdin.read()
+try:
+    p=json.loads(raw)
+except Exception as exc:
+    sys.stderr.write('ERROR: /ingest upload did not return JSON
+')
+    sys.stderr.write(f'error={exc}
+')
+    sys.stderr.write('body_start=')
+    sys.stderr.write((raw[:400].replace('
+',' ') if raw else '<empty>'))
+    sys.stderr.write('
+')
+    raise SystemExit(2)
+d=(p.get('document') or {}) if isinstance(p,dict) else {}
 print(d.get('id') or '')
 PY
 }
@@ -79,8 +108,21 @@ attachments_upload() {
 
   echo "${out}" | python - <<'PY'
 import json,sys
-p=json.load(sys.stdin)
-a=(p.get('attachment') or {})
+raw=sys.stdin.read()
+try:
+    p=json.loads(raw)
+except Exception as exc:
+    sys.stderr.write('ERROR: /attachments/upload did not return JSON
+')
+    sys.stderr.write(f'error={exc}
+')
+    sys.stderr.write('body_start=')
+    sys.stderr.write((raw[:400].replace('
+',' ') if raw else '<empty>'))
+    sys.stderr.write('
+')
+    raise SystemExit(2)
+a=(p.get('attachment') or {}) if isinstance(p,dict) else {}
 print(a.get('id') or '')
 PY
 }

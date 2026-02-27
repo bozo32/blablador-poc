@@ -3706,9 +3706,12 @@ def get_ingested_resolution(
     response_model=schemas.ResolutionResponse,
 )
 def select_resolution_source(
-    doc_id: str, reference_id: str, payload: schemas.ResolutionSelectionRequest
+    doc_id: str,
+    reference_id: str,
+    payload: schemas.ResolutionSelectionRequest,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
 ):
-    project_id = str(app_settings.DEFAULT_PROJECT_ID)
+    project_id = _require_project_id_for_upload(x_project_id)
     user_id = str(app_settings.DEFAULT_USER_ID)
 
     resolution: dict = {}

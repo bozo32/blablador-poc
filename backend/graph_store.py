@@ -120,7 +120,10 @@ class GraphStore:
         self._db_path = db_path
         self.settings = settings
 
-    def _project_id(self) -> str:
+    def _project_id(self, project_id: Optional[str] = None) -> str:
+        override = str(project_id or "").strip()
+        if override:
+            return override
         return str(getattr(self.settings, "DEFAULT_PROJECT_ID", "default") or "default")
 
     def wipe(self) -> None:
@@ -198,8 +201,9 @@ class GraphStore:
         kind: str,
         label: Optional[str] = None,
         merge_properties: Optional[dict] = None,
+        project_id: Optional[str] = None,
     ) -> dict:
-        pid = self._project_id()
+        pid = self._project_id(project_id)
         existing = self._get_node(node_id)
         now = _now()
 
@@ -389,8 +393,9 @@ class GraphStore:
         ref_id: str = "",
         enabled: bool = True,
         merge_properties: Optional[dict] = None,
+        project_id: Optional[str] = None,
     ) -> int:
-        pid = self._project_id()
+        pid = self._project_id(project_id)
         ref_id_norm = str(ref_id or "")
 
         with connect() as conn:
@@ -741,8 +746,8 @@ class GraphStore:
             merge_properties={"ingest_ids": [cited]},
         )
 
-    def ledger_rows(self) -> List[dict]:
-        pid = self._project_id()
+    def ledger_rows(self, *, project_id: Optional[str] = None) -> List[dict]:
+        pid = self._project_id(project_id)
         with connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -884,8 +889,8 @@ class GraphStore:
         rows.sort(key=lambda r: r.get("num", 0))
         return rows
 
-    def ledger_options(self) -> List[dict]:
-        rows = self.ledger_rows()
+    def ledger_options(self, *, project_id: Optional[str] = None) -> List[dict]:
+        rows = self.ledger_rows(project_id=project_id)
         return [
             {
                 "num": r.get("num"),
@@ -896,8 +901,10 @@ class GraphStore:
             for r in rows
         ]
 
-    def _node_id_by_num(self, num: int) -> Optional[str]:
-        pid = self._project_id()
+    def _node_id_by_num(
+        self, num: int, *, project_id: Optional[str] = None
+    ) -> Optional[str]:
+        pid = self._project_id(project_id)
         with connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -911,14 +918,20 @@ class GraphStore:
                 row = cur.fetchone()
                 return str(row[0]) if row and row[0] else None
 
-    def set_outgoing(self, *, source_num: int, target_nums: Sequence[int]) -> None:
-        pid = self._project_id()
-        source_id = self._node_id_by_num(int(source_num))
+    def set_outgoing(
+        self,
+        *,
+        source_num: int,
+        target_nums: Sequence[int],
+        project_id: Optional[str] = None,
+    ) -> None:
+        pid = self._project_id(project_id)
+        source_id = self._node_id_by_num(int(source_num), project_id=pid)
         if not source_id:
             raise KeyError(f"Unknown source document number: {source_num}")
         desired: set[str] = set()
         for n in target_nums or []:
-            tgt = self._node_id_by_num(int(n))
+            tgt = self._node_id_by_num(int(n), project_id=pid)
             if tgt and tgt != source_id:
                 desired.add(tgt)
 
@@ -957,16 +970,23 @@ class GraphStore:
                 ref_id="manual",
                 enabled=True,
                 merge_properties={"source": "manual"},
+                project_id=pid,
             )
 
-    def set_incoming(self, *, target_num: int, source_nums: Sequence[int]) -> None:
-        pid = self._project_id()
-        target_id = self._node_id_by_num(int(target_num))
+    def set_incoming(
+        self,
+        *,
+        target_num: int,
+        source_nums: Sequence[int],
+        project_id: Optional[str] = None,
+    ) -> None:
+        pid = self._project_id(project_id)
+        target_id = self._node_id_by_num(int(target_num), project_id=pid)
         if not target_id:
             raise KeyError(f"Unknown target document number: {target_num}")
         desired_sources: set[str] = set()
         for n in source_nums or []:
-            src = self._node_id_by_num(int(n))
+            src = self._node_id_by_num(int(n), project_id=pid)
             if src and src != target_id:
                 desired_sources.add(src)
 
@@ -1005,10 +1025,18 @@ class GraphStore:
                 ref_id="manual",
                 enabled=True,
                 merge_properties={"source": "manual"},
+                project_id=pid,
             )
 
-    def set_assigned(self, *, doc_num: int, assigned: bool) -> None:
-        node_id = self._node_id_by_num(int(doc_num))
+    def set_assigned(
+        self,
+        *,
+        doc_num: int,
+        assigned: bool,
+        project_id: Optional[str] = None,
+    ) -> None:
+        pid = self._project_id(project_id)
+        node_id = self._node_id_by_num(int(doc_num), project_id=pid)
         if not node_id:
             raise KeyError(f"Unknown document number: {doc_num}")
         self._upsert_node(
@@ -1016,6 +1044,7 @@ class GraphStore:
             kind="document",
             label=None,
             merge_properties={"workflow_assigned": bool(assigned)},
+            project_id=pid,
         )
 
     def _get_edge(self, edge_id: int) -> Optional[dict]:

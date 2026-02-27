@@ -22,6 +22,7 @@ import logging
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, Literal, Optional
 
 from fastapi import (
@@ -1284,15 +1285,19 @@ def get_ingest_document(
 
 
 @app.get("/ledger", response_model=schemas.LedgerResponse)
-def get_document_ledger():
-    rows = graph_store.ledger_rows()
-    options = graph_store.ledger_options()
+def get_document_ledger(
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
+    project_id = _require_project_id_for_upload(x_project_id)
+    scoped_store = GraphStore(settings=SimpleNamespace(DEFAULT_PROJECT_ID=project_id))
+    rows = scoped_store.ledger_rows()
+    options = scoped_store.ledger_options()
 
     # Enrich ledger rows with ingestion stage status/errors so the UI can show
     # failures without requiring a click.
     by_ingest: dict[str, dict] = {}
 
-    project_id = str(app_settings.DEFAULT_PROJECT_ID)
+    project_id = str(project_id)
     try:
         for doc in list_ingests_from_spine(project_id=project_id, limit=2000):
             ingest_id = str(doc.get("id") or "").strip()
@@ -1763,27 +1768,51 @@ def auto_place_claim_source(
 
 
 @app.patch("/ledger/{doc_num}/outgoing", response_model=schemas.LedgerResponse)
-def update_ledger_outgoing(doc_num: int, payload: schemas.LedgerLinksUpdateRequest):
+def update_ledger_outgoing(
+    doc_num: int,
+    payload: schemas.LedgerLinksUpdateRequest,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
     try:
-        graph_store.set_outgoing(source_num=int(doc_num), target_nums=payload.targets)
+        project_id = _require_project_id_for_upload(x_project_id)
+        scoped_store = GraphStore(
+            settings=SimpleNamespace(DEFAULT_PROJECT_ID=project_id)
+        )
+        scoped_store.set_outgoing(source_num=int(doc_num), target_nums=payload.targets)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return get_document_ledger()
 
 
 @app.patch("/ledger/{doc_num}/incoming", response_model=schemas.LedgerResponse)
-def update_ledger_incoming(doc_num: int, payload: schemas.LedgerLinksUpdateRequest):
+def update_ledger_incoming(
+    doc_num: int,
+    payload: schemas.LedgerLinksUpdateRequest,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
     try:
-        graph_store.set_incoming(target_num=int(doc_num), source_nums=payload.targets)
+        project_id = _require_project_id_for_upload(x_project_id)
+        scoped_store = GraphStore(
+            settings=SimpleNamespace(DEFAULT_PROJECT_ID=project_id)
+        )
+        scoped_store.set_incoming(target_num=int(doc_num), source_nums=payload.targets)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return get_document_ledger()
 
 
 @app.patch("/ledger/{doc_num}/assign", response_model=schemas.LedgerResponse)
-def update_ledger_assigned(doc_num: int, payload: schemas.LedgerAssignRequest):
+def update_ledger_assigned(
+    doc_num: int,
+    payload: schemas.LedgerAssignRequest,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
     try:
-        graph_store.set_assigned(doc_num=int(doc_num), assigned=bool(payload.assigned))
+        project_id = _require_project_id_for_upload(x_project_id)
+        scoped_store = GraphStore(
+            settings=SimpleNamespace(DEFAULT_PROJECT_ID=project_id)
+        )
+        scoped_store.set_assigned(doc_num=int(doc_num), assigned=bool(payload.assigned))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return get_document_ledger()

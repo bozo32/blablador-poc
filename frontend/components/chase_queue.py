@@ -17,6 +17,16 @@ except ImportError:  # pragma: no cover
 
 import requests
 
+
+def _project_id() -> str:
+    pid = str(st.session_state.get("project_id") or "").strip()
+    return pid or "default"
+
+
+def _project_headers() -> Dict[str, str]:
+    return {"X-Project-Id": _project_id()}
+
+
 from frontend import workflow_api
 
 
@@ -196,6 +206,7 @@ def render_requested_works_queue(
     try:
         attachments_payload = requests.get(
             f"{str(api_url).rstrip('/')}/attachments?archived=false",
+            headers=_project_headers(),
             timeout=15,
         )
         attachments_payload.raise_for_status()
@@ -258,21 +269,68 @@ def render_requested_works_queue(
             ):
                 attachment_id = str(choice).split(" • ", 1)[0].strip()
                 try:
-                    resp = requests.patch(
-                        f"{str(api_url).rstrip('/')}/attachments/{attachment_id}",
-                        json={
-                            "claim_id": str(claim_id),
-                            "doc_id": str(citing_doc_id),
-                            "citation_index": int(str(claim_id).split(":")[2])
-                            if ":" in str(claim_id)
-                            else None,
-                            "target_id": target_id,
-                        },
+                    src_id = str(choice).split(" • ", 1)[0].strip()
+                    headers = _project_headers()
+
+                    selected = next(
+                        (
+                            a
+                            for a in unassigned
+                            if str(a.get("id") or "").strip() == src_id
+                        ),
+                        None,
+                    )
+
+                    # Ensure source_ingest_id exists when possible.
+                    try:
+                        if not str(
+                            (selected or {}).get("source_ingest_id") or ""
+                        ).strip():
+                            promote_url = (
+                                f"{str(api_url).rstrip('/')}/attachments/"
+                                f"{src_id}/promote-ingest"
+                            )
+                            promote = requests.post(
+                                promote_url,
+                                headers=headers,
+                                timeout=30,
+                            )
+                            promote.raise_for_status()
+                            promoted = (promote.json() or {}).get("attachment") or {}
+                            if isinstance(promoted, dict):
+                                selected = promoted
+                    except Exception:
+                        # Best-effort.
+                        pass
+
+                    payload: Dict[str, object] = {
+                        "claim_id": str(claim_id),
+                        "doc_id": str(citing_doc_id),
+                        "citation_index": entry.get("citation_index"),
+                        "target_id": target_id,
+                        "reference_hint": {"reference_id": reference_id}
+                        if reference_id
+                        else None,
+                    }
+                    payload = {k: v for k, v in payload.items() if v is not None}
+
+                    clone = requests.post(
+                        f"{str(api_url).rstrip('/')}/attachments/{src_id}/clone",
+                        headers=headers,
+                        json=payload,
                         timeout=30,
                     )
-                    resp.raise_for_status()
+                    clone.raise_for_status()
+                    attachment_id = (
+                        str(
+                            ((clone.json() or {}).get("attachment") or {}).get("id")
+                            or ""
+                        ).strip()
+                        or attachment_id
+                    )
+
                     _ = workflow_api.resume_run(api_url, run_id=rid)
-                    st.caption("Assigned; resuming run...")
+                    st.caption("Assigned via clone; resuming run...")
                 except Exception as exc:
                     st.warning(f"Assign failed: {exc}")
 

@@ -245,7 +245,10 @@ def _resolve_reference_targets(
 
 def _ledger_work_graph(api_url: str) -> tuple[dict[str, dict], list[tuple[str, str]]]:
     """Return ingest-id keyed works and directed cite edges between ingested docs."""
-    payload = ledger_api.get_ledger(api_url)
+    payload = ledger_api.get_ledger(
+        api_url,
+        project_id=str(st.session_state.get("project_id") or "").strip() or "default",
+    )
     rows = payload.get("rows") or []
 
     num_to_ingest: dict[int, str] = {}

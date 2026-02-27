@@ -1554,7 +1554,7 @@ def _ledger_fetch(api_url: str, *, force: bool = False) -> dict:
         payload = None
     if payload is None or force:
         try:
-            payload = ledger_api.get_ledger(api_url)
+            payload = ledger_api.get_ledger(api_url, project_id=get_project_id())
         except RuntimeError as exc:
             payload = {"rows": [], "options": [], "error": str(exc)}
         st.session_state["ledger_payload"] = payload
@@ -1844,6 +1844,7 @@ def render_documents_panel(*, max_rows: int = 18) -> None:
                 api_url,
                 int(editor_doc),
                 bool(st.session_state.get(assigned_key)),
+                project_id=get_project_id(),
             )
         except RuntimeError as exc:
             st.error(str(exc))
@@ -1890,7 +1891,10 @@ def render_documents_panel(*, max_rows: int = 18) -> None:
             ):
                 try:
                     st.session_state["ledger_payload"] = ledger_api.set_incoming(
-                        api_url, int(editor_doc), [int(n) for n in incoming_chosen]
+                        api_url,
+                        int(editor_doc),
+                        [int(n) for n in incoming_chosen],
+                        project_id=get_project_id(),
                     )
                 except RuntimeError as exc:
                     st.error(str(exc))
@@ -1911,7 +1915,10 @@ def render_documents_panel(*, max_rows: int = 18) -> None:
             ):
                 try:
                     st.session_state["ledger_payload"] = ledger_api.set_outgoing(
-                        api_url, int(editor_doc), [int(n) for n in outgoing_chosen]
+                        api_url,
+                        int(editor_doc),
+                        [int(n) for n in outgoing_chosen],
+                        project_id=get_project_id(),
                     )
                 except RuntimeError as exc:
                     st.error(str(exc))

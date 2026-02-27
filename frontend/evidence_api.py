@@ -9,6 +9,15 @@ import requests
 import streamlit as st
 
 DEFAULT_TIMEOUT = 45
+
+
+def _project_headers() -> Dict[str, str]:
+    pid = str(st.session_state.get("project_id") or "").strip()
+    if not pid:
+        pid = "default"
+    return {"X-Project-Id": pid}
+
+
 MAX_LIST_REQUESTS = 2
 MAX_TOTAL_CANDIDATES = 50
 INFLIGHT_KEY = "_evidence_list_inflight"
@@ -83,6 +92,8 @@ def _request(
     url = f"{_api_root()}{path}"
     headers = kwargs.pop("headers", {})
     headers = {**_auth_headers(), **headers}
+    if str(path or "").startswith("/attachments"):
+        headers = {**_project_headers(), **headers}
     try:
         response = requests.request(
             method,

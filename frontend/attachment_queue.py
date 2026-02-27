@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import tempfile
 import time
 import uuid
@@ -13,6 +14,7 @@ from typing import Dict, Iterable, List, Optional, cast
 import requests
 import streamlit as st
 
+from backend.settings import AppSettings
 from frontend import claim_queue
 
 
@@ -24,6 +26,10 @@ SESSION_ATTACHMENT_IDS_KEY = "attachment_queue_session_attachment_ids"
 STATUS_FLOW = ("pending", "converting", "parsing", "matched")
 DEFAULT_STATUSES = ("pending", "converting", "parsing", "matched", "error")
 API_TIMEOUT = 15
+UPLOAD_TIMEOUT = 60
+
+
+_APP_SETTINGS = AppSettings()
 
 
 @dataclass
@@ -110,10 +116,37 @@ def _api_url() -> str:
     return api_url.rstrip("/")
 
 
+def _project_id() -> str:
+    pid = str(st.session_state.get("project_id") or "").strip()
+    if pid:
+        return pid
+    return str(getattr(_APP_SETTINGS, "DEFAULT_PROJECT_ID", "default"))
+
+
+def _attachment_headers(headers: Optional[dict] = None) -> dict:
+    merged = dict(headers or {})
+    merged.setdefault("X-Project-Id", _project_id())
+    return merged
+
+
 def _request(method: str, path: str, **kwargs) -> Optional[dict]:
     url = f"{_api_url()}{path}"
+
+    headers = kwargs.pop("headers", None)
+    if str(path or "").startswith("/attachments"):
+        headers = _attachment_headers(headers)
+    elif headers is not None:
+        headers = dict(headers)
+
+    timeout = kwargs.pop("timeout", API_TIMEOUT)
     try:
-        response = requests.request(method, url, timeout=API_TIMEOUT, **kwargs)
+        response = requests.request(
+            method,
+            url,
+            timeout=timeout,
+            headers=headers,
+            **kwargs,
+        )
         response.raise_for_status()
     except requests.RequestException as exc:  # pragma: no cover - UI only
         raise RuntimeError(f"Attachment API error: {exc}") from exc
@@ -239,25 +272,54 @@ def _upload_to_backend(queue_item_id: str) -> None:
     item = queue["items"].get(queue_item_id)
     if not item or not item.get("local_path"):
         return
-    payload = {
-        "claim_id": item.get("claim_id"),
-        "doc_id": item.get("doc_id"),
-        "citation_index": item.get("citation_index"),
-        "target_id": item.get("target_id"),
-        "filename": item.get("filename"),
-        "local_path": item.get("local_path"),
-        "size_bytes": item.get("size"),
-        "reference_hint": item.get("reference_hint"),
-    }
+
+    local_path = str(item.get("local_path") or "").strip()
+    if not local_path:
+        return
+    file_path = Path(local_path)
+    if not file_path.exists():
+        mark_item_error(queue_item_id, f"Local PDF missing: {local_path}")
+        return
+
+    filename = str(item.get("filename") or file_path.name or "attachment.pdf").strip()
+    if not filename:
+        filename = "attachment.pdf"
+
+    data: dict = {}
+
     claim_id = item.get("claim_id")
     if claim_id:
         # Include claim text when available so backend has context.
         record = claim_queue.get_claim_record(claim_id) or {}
         claim_text = record.get("claim") or ""
         if claim_text.strip():
-            payload["claim_text"] = claim_text.strip()
+            data["claim_text"] = claim_text.strip()
+
+    reference_hint = item.get("reference_hint")
+    if isinstance(reference_hint, dict) and reference_hint:
+        data["reference_hint"] = json.dumps(reference_hint, ensure_ascii=True)
+    doc_id = item.get("doc_id")
+    if doc_id:
+        data["doc_id"] = str(doc_id)
+    citation_index = item.get("citation_index")
+    if citation_index is not None:
+        try:
+            data["citation_index"] = str(int(citation_index))
+        except Exception:
+            pass
+    target_id = item.get("target_id")
+    if target_id:
+        data["target_id"] = str(target_id)
+
     try:
-        response = _request("post", "/attachments", json=payload)
+        with open(file_path, "rb") as handle:
+            response = _request(
+                "post",
+                "/attachments/upload",
+                timeout=UPLOAD_TIMEOUT,
+                data=data,
+                files={"file": (filename, handle, "application/pdf")},
+            )
     except RuntimeError as exc:
         mark_item_error(queue_item_id, str(exc))
         return

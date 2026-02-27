@@ -811,15 +811,15 @@ class GraphStore:
                 )
                 cite_rows = cur.fetchall() or []
 
-        outgoing: Dict[str, List[str]] = {k: [] for k in docs.keys()}
-        incoming: Dict[str, List[str]] = {k: [] for k in docs.keys()}
+        outgoing: Dict[str, set[str]] = {k: set() for k in docs.keys()}
+        incoming: Dict[str, set[str]] = {k: set() for k in docs.keys()}
         for src, tgt in cite_rows:
             src2 = str(src)
             tgt2 = str(tgt)
             if src2 in outgoing and tgt2 in docs:
-                outgoing[src2].append(tgt2)
+                outgoing[src2].add(tgt2)
             if tgt2 in incoming and src2 in docs:
-                incoming[tgt2].append(src2)
+                incoming[tgt2].add(src2)
 
         rows: List[dict] = []
         for node_id, doc in docs.items():

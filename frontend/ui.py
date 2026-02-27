@@ -177,6 +177,7 @@ def init_session_state():
         # Phase 10-04.5: unified Intake drop + inbox.
         "intake_inbox": [],
         "intake_blobs": {},
+        "intake_dropzone_nonce": 0,
     }
     for key, val in defaults.items():
         st.session_state.setdefault(key, val)
@@ -5100,7 +5101,9 @@ def _intake_refresh_item_status(item: dict) -> None:
 
 def render_intake_panel(*, max_rows: int = 18) -> None:
     st.markdown("**Drop PDFs**")
-    uploader_key = "intake-dropzone"
+    uploader_key = (
+        f"intake-dropzone::{int(st.session_state.get('intake_dropzone_nonce') or 0)}"
+    )
 
     def _handle_drop() -> None:
         files = st.session_state.get(uploader_key) or []
@@ -5144,7 +5147,10 @@ def render_intake_panel(*, max_rows: int = 18) -> None:
                 _intake_route_citing(item_id)
             elif intent == "source":
                 _intake_route_source(item_id)
-        st.session_state[uploader_key] = None
+        st.session_state["intake_dropzone_nonce"] = (
+            int(st.session_state.get("intake_dropzone_nonce") or 0) + 1
+        )
+        _rerun()
 
     st.file_uploader(
         "Drop PDFs",

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 curl_json() {
-  curl -fsSL --fail-with-body --retry 20 --retry-delay 1 --retry-connrefused --max-time 60 "$@"
+  curl -fsSL --retry 20 --retry-delay 1 --retry-connrefused --max-time 60 "$@"
 }
 
 fail() {

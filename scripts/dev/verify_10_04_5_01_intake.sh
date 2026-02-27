@@ -64,26 +64,55 @@ PYCHECK
 ingest_upload() {
   local project_id="$1"
   local pdf_path="$2"
-  local out
-  out=$(curl_json \
+
+  local body
+  local hdr
+  local err
+  body=$(mktemp)
+  hdr=$(mktemp)
+  err=$(mktemp)
+
+  local code
+  local rc
+  set +e
+  code=$(curl -sS -L --retry 20 --retry-delay 1 --retry-connrefused --max-time 60 \
+    -D "${hdr}" \
+    -o "${body}" \
+    -w "%{http_code}" \
     -H "X-Project-Id: ${project_id}" \
     -F "file=@${pdf_path};type=application/pdf" \
-    "${API_URL}/ingest?auto_process=true")
+    "${API_URL}/ingest?auto_process=true" 2>"${err}")
+  rc=$?
+  set -e
 
-  if [ -z "${out}" ]; then
-    echo "ERROR: /ingest returned empty body" >&2
-    echo "DEBUG: response headers/body (first lines):" >&2
-    curl -sS -L -i \
-      -H "X-Project-Id: ${project_id}" \
-      -F "file=@${pdf_path};type=application/pdf" \
-      "${API_URL}/ingest?auto_process=true" \
-      | sed -n '1,40p' >&2 || true
+  if [ "${rc}" -ne 0 ]; then
+    echo "ERROR: curl failed posting /ingest (rc=${rc})" >&2
+    sed -n '1,10p' "${err}" >&2 || true
+    rm -f "${body}" "${hdr}" "${err}" || true
     return 2
   fi
 
-  echo "${out}" | python - <<'PY'
+  if [ "${code}" != "200" ]; then
+    echo "ERROR: /ingest returned HTTP ${code}" >&2
+    echo "--- headers ---" >&2
+    sed -n '1,40p' "${hdr}" >&2 || true
+    echo "--- body_start ---" >&2
+    sed -n '1,20p' "${body}" >&2 || true
+    rm -f "${body}" "${hdr}" "${err}" || true
+    return 2
+  fi
+
+  if [ ! -s "${body}" ]; then
+    echo "ERROR: /ingest returned empty body (HTTP 200)" >&2
+    echo "--- headers ---" >&2
+    sed -n '1,40p' "${hdr}" >&2 || true
+    rm -f "${body}" "${hdr}" "${err}" || true
+    return 2
+  fi
+
+  python - "${body}" <<'PY'
 import json,sys
-raw=sys.stdin.read()
+raw=open(sys.argv[1],'r',encoding='utf-8',errors='replace').read() or ''
 try:
     p=json.loads(raw)
 except Exception as exc:
@@ -95,8 +124,9 @@ except Exception as exc:
     raise SystemExit(2)
 d=(p.get('document') or {}) if isinstance(p,dict) else {}
 print(d.get('id') or '')
-
 PY
+
+  rm -f "${body}" "${hdr}" "${err}" || true
 }
 
 ingest_get() {
@@ -108,26 +138,55 @@ ingest_get() {
 attachments_upload() {
   local project_id="$1"
   local pdf_path="$2"
-  local out
-  out=$(curl_json \
+
+  local body
+  local hdr
+  local err
+  body=$(mktemp)
+  hdr=$(mktemp)
+  err=$(mktemp)
+
+  local code
+  local rc
+  set +e
+  code=$(curl -sS -L --retry 20 --retry-delay 1 --retry-connrefused --max-time 60 \
+    -D "${hdr}" \
+    -o "${body}" \
+    -w "%{http_code}" \
     -H "X-Project-Id: ${project_id}" \
     -F "file=@${pdf_path};type=application/pdf" \
-    "${API_URL}/attachments/upload")
+    "${API_URL}/attachments/upload" 2>"${err}")
+  rc=$?
+  set -e
 
-  if [ -z "${out}" ]; then
-    echo "ERROR: /attachments/upload returned empty body" >&2
-    echo "DEBUG: response headers/body (first lines):" >&2
-    curl -sS -L -i \
-      -H "X-Project-Id: ${project_id}" \
-      -F "file=@${pdf_path};type=application/pdf" \
-      "${API_URL}/attachments/upload" \
-      | sed -n '1,40p' >&2 || true
+  if [ "${rc}" -ne 0 ]; then
+    echo "ERROR: curl failed posting /attachments/upload (rc=${rc})" >&2
+    sed -n '1,10p' "${err}" >&2 || true
+    rm -f "${body}" "${hdr}" "${err}" || true
     return 2
   fi
 
-  echo "${out}" | python - <<'PY'
+  if [ "${code}" != "200" ]; then
+    echo "ERROR: /attachments/upload returned HTTP ${code}" >&2
+    echo "--- headers ---" >&2
+    sed -n '1,40p' "${hdr}" >&2 || true
+    echo "--- body_start ---" >&2
+    sed -n '1,20p' "${body}" >&2 || true
+    rm -f "${body}" "${hdr}" "${err}" || true
+    return 2
+  fi
+
+  if [ ! -s "${body}" ]; then
+    echo "ERROR: /attachments/upload returned empty body (HTTP 200)" >&2
+    echo "--- headers ---" >&2
+    sed -n '1,40p' "${hdr}" >&2 || true
+    rm -f "${body}" "${hdr}" "${err}" || true
+    return 2
+  fi
+
+  python - "${body}" <<'PY'
 import json,sys
-raw=sys.stdin.read()
+raw=open(sys.argv[1],'r',encoding='utf-8',errors='replace').read() or ''
 try:
     p=json.loads(raw)
 except Exception as exc:
@@ -139,8 +198,9 @@ except Exception as exc:
     raise SystemExit(2)
 a=(p.get('attachment') or {}) if isinstance(p,dict) else {}
 print(a.get('id') or '')
-
 PY
+
+  rm -f "${body}" "${hdr}" "${err}" || true
 }
 
 attachments_get() {

@@ -76,18 +76,15 @@ raw=sys.stdin.read()
 try:
     p=json.loads(raw)
 except Exception as exc:
-    sys.stderr.write('ERROR: /ingest upload did not return JSON
-')
-    sys.stderr.write(f'error={exc}
-')
+    sys.stderr.write('ERROR: /ingest upload did not return JSON\n')
+    sys.stderr.write(f'error={exc}\n')
     sys.stderr.write('body_start=')
-    sys.stderr.write((raw[:400].replace('
-',' ') if raw else '<empty>'))
-    sys.stderr.write('
-')
+    sys.stderr.write((raw[:400].replace('\n',' ') if raw else '<empty>'))
+    sys.stderr.write('\n')
     raise SystemExit(2)
 d=(p.get('document') or {}) if isinstance(p,dict) else {}
 print(d.get('id') or '')
+
 PY
 }
 
@@ -112,18 +109,15 @@ raw=sys.stdin.read()
 try:
     p=json.loads(raw)
 except Exception as exc:
-    sys.stderr.write('ERROR: /attachments/upload did not return JSON
-')
-    sys.stderr.write(f'error={exc}
-')
+    sys.stderr.write('ERROR: /attachments/upload did not return JSON\n')
+    sys.stderr.write(f'error={exc}\n')
     sys.stderr.write('body_start=')
-    sys.stderr.write((raw[:400].replace('
-',' ') if raw else '<empty>'))
-    sys.stderr.write('
-')
+    sys.stderr.write((raw[:400].replace('\n',' ') if raw else '<empty>'))
+    sys.stderr.write('\n')
     raise SystemExit(2)
 a=(p.get('attachment') or {}) if isinstance(p,dict) else {}
 print(a.get('id') or '')
+
 PY
 }
 

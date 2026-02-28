@@ -18,7 +18,10 @@ Plans:
 - `10-04.5-01-04-PLAN.md` — Backend: ingest project scoping + bytes-only confirmation
 - `10-04.5-01-05-PLAN.md` — Frontend: Source Inbox + assignment + verifier
 - `10-04.5-01-06-PLAN.md` — Verification: intake script + human gate
-- `10-04.5-01-07-PLAN.md` — Reading artifacts: project-scoped spans + reviewer opinion layer (follow/annotations/ACL)
+- `10-04.5-01-07-01-PLAN.md` — Spans: require X-Project-Id + project-scoped span graph operations
+- `10-04.5-01-07-02-PLAN.md` — Backend: opinion events table + follow projection APIs (reviewer-scoped)
+- `10-04.5-01-07-03-PLAN.md` — Frontend: reading rail backed by opinion follow projection
+- `10-04.5-01-07-04-PLAN.md` — Export/import: include opinion_events.ndjson in project zip
 - `10-05-PLAN.md` — Demo + trace replay (reproducible E2E)
 - `10-06-PLAN.md` — Optional add-ons (hosted inference, tri-level assessment)
 - `10-07-PLAN.md` — Deprioritized ops/cloud direction (doc-only backlog)

@@ -12,9 +12,9 @@ Planning index: `.planning/PRIORITIES.md`
 ## Current Position
 
 Phase: 10 of 12 (Contracts + core workflow simplification)
-Plan: 5 of 7 (10-04.5 Intake hardening)
-Status: In progress (10-04.5 complete; next 10-05)
-Last activity: 2026-02-27 — Completed 10-04.5 Intake hardening; verified bytes-only uploads, project scoping, Source Inbox, and auto graph links
+Plan: 6 of 7 (10-04.5 Opinion layer)
+Status: In progress (10-04.5-01-07-05 complete; next 10-04.5-01-07-06 or 10-05)
+Last activity: 2026-02-28 — Completed 10-04.5-01-07-05; wired UI to server-backed opinion layer for follow rail
 
 Progress: ██████████░ 80%
 
@@ -45,6 +45,8 @@ Progress: ██████████░ 80%
 
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
+
+  - Reading rail now backed by server opinion layer; follow/drop actions write to opinion events with span_id; drop uses append-only ignore status (10-04.5-01-07-05).
 
   - `/ingest` list/read/upload require `X-Project-Id` by default (400 if missing; dev fallback flag) (10-04.5-01-04).
 
@@ -128,6 +130,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-02-26T17:53:18Z
-Stopped at: Completed 10-04.5-01-04-PLAN.md
+Last session: 2026-02-28T00:00:00Z
+Stopped at: Completed 10-04.5-01-07-05-PLAN.md
 Resume file: None

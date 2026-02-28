@@ -1523,12 +1523,18 @@ def spine_list_locators_for_document_version(
 
 
 @app.get("/project/export")
-def export_project():
-    project_id = str(app_settings.DEFAULT_PROJECT_ID)
+def export_project(
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+    x_reviewer_uid: Optional[str] = Header(None, alias="X-Reviewer-Uid"),
+):
+    project_id = _require_project_id_for_upload(x_project_id)
     meta = get_or_create_project_meta(project_id=project_id)
     name = (meta.get("name") or "project").strip() or "project"
     safe = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in name)
     filename = f"{safe}.zip"
+
+    # If X-Reviewer-Uid is present, export only that reviewer's private events
+    owner_uid = x_reviewer_uid
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -1540,6 +1546,20 @@ def export_project():
             )
         except Exception:
             logger.exception("Decision export failed")
+        
+        # Export opinion events
+        try:
+            zf.writestr(
+                "opinion_events.ndjson",
+                opinion_events.export_events_ndjson(
+                    project_id=project_id, 
+                    owner_uid=owner_uid,
+                    include_private=True,
+                ),
+            )
+        except Exception:
+            logger.exception("Opinion events export failed")
+    
     headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
     return Response(
         content=buf.getvalue(),
@@ -1549,9 +1569,13 @@ def export_project():
 
 
 @app.post("/project/import", response_model=schemas.ProjectImportResponse)
-async def import_project(file: UploadFile = File(...), overwrite: bool = False):
+async def import_project(
+    file: UploadFile = File(...),
+    overwrite: bool = False,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
+    project_id = _require_project_id_for_upload(x_project_id)
     blob = await file.read()
-    project_id = str(app_settings.DEFAULT_PROJECT_ID)
     user_id = str(app_settings.DEFAULT_USER_ID)
     try:
         with zipfile.ZipFile(io.BytesIO(blob), "r") as zf:
@@ -1561,6 +1585,12 @@ async def import_project(file: UploadFile = File(...), overwrite: bool = False):
                 decision_blob = zf.read("evidence_decision_events.ndjson")
             except Exception:
                 decision_blob = None
+            
+            opinion_blob = None
+            try:
+                opinion_blob = zf.read("opinion_events.ndjson")
+            except Exception:
+                opinion_blob = None
     except Exception as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -1575,6 +1605,19 @@ async def import_project(file: UploadFile = File(...), overwrite: bool = False):
             )
         except Exception:
             logger.exception("Decision import failed")
+    
+    # Import opinion events
+    if opinion_blob:
+        try:
+            opinion_events.import_events_ndjson(
+                project_id=project_id,
+                user_id=user_id,
+                blob=opinion_blob,
+                overwrite=bool(overwrite),
+            )
+        except Exception:
+            logger.exception("Opinion events import failed")
+    
     project = get_or_create_project_meta(project_id=project_id, user_id=user_id)
     return {"ok": True, "backup_zip": "", "project": project}
 

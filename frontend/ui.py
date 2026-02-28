@@ -80,6 +80,11 @@ from frontend.ingestion_api import (
     trigger_resolution,
     upload_pdf,
 )
+from frontend.opinion_api import (
+    append_follow,
+    list_follows_by_doc,
+    resolve_span_id,
+)
 from frontend import ledger_api
 from frontend import project_api
 from typing import Any, Dict, List, Optional
@@ -5956,9 +5961,48 @@ def draw_ingestion_panel(*, center, right) -> None:
                 select_citation(desired_idx, desired_tgt)
 
     def _follow_citation(citation_index: int, target_id: str | None) -> None:
-        """Add citation to chase queue, preserving discovery order."""
-        followed = st.session_state.get("followed_citations") or []
+        """Add citation to chase queue, preserving discovery order.
+        
+        Writes to server-backed opinion layer for durability.
+        Falls back to session_state on error.
+        """
         normalized_target = normalize_target_id(target_id)
+        
+        # Try server-backed approach first
+        try:
+            reviewer_uid = _active_reviewer_uid()
+            current_project_id = get_project_id()
+            if reviewer_uid and api_url and current_project_id:
+                # Resolve span_id
+                span_id = resolve_span_id(
+                    api_url,
+                    current_project_id,
+                    doc_id,
+                    citation_index,
+                    normalized_target,
+                )
+                if span_id:
+                    # Write to server
+                    append_follow(
+                        api_url=api_url,
+                        project_id=current_project_id,
+                        reviewer_uid=reviewer_uid,
+                        doc_id=doc_id,
+                        citation_index=int(citation_index),
+                        target_id=normalized_target,
+                        span_id=span_id,
+                        status="follow",
+                        idempotency_key=f"follow:{span_id}:follow",
+                    )
+                    # Invalidate cache to force refresh
+                    st.session_state.pop("_followed_citations_cache", None)
+                    return
+        except Exception:
+            # Fall back to session_state on any error
+            pass
+        
+        # Fallback: session_state behavior
+        followed = st.session_state.get("followed_citations") or []
         entry = {
             "doc_id": doc_id,
             "citation_index": int(citation_index),
@@ -6059,11 +6103,48 @@ def draw_ingestion_panel(*, center, right) -> None:
         if selected_index is not None:
             _follow_citation(int(selected_index), selected_target)
 
-        followed = [
-            entry
-            for entry in (st.session_state.get("followed_citations") or [])
-            if entry.get("doc_id") == doc_id
-        ]
+        # Try to get followed citations from server-backed opinion layer
+        # Fall back to session_state if server unavailable
+        followed: List[Dict[str, Any]] = []
+        try:
+            reviewer_uid = _active_reviewer_uid()
+            current_project_id = get_project_id()
+            if reviewer_uid and api_url and current_project_id:
+                server_follows = list_follows_by_doc(
+                    api_url=api_url,
+                    project_id=current_project_id,
+                    reviewer_uid=reviewer_uid,
+                    doc_id=doc_id,
+                )
+                # Convert server response to expected format
+                # Server returns span_id in response, we need doc_id, citation_index, target_id
+                for sf in server_follows:
+                    entry = {
+                        "doc_id": doc_id,
+                        "citation_index": sf.get("citation_index"),
+                        "target_id": sf.get("target_id"),
+                        "span_id": sf.get("span_id"),  # Store for write operations
+                    }
+                    followed.append(entry)
+                # Cache in session_state for fast re-renders
+                st.session_state["_followed_citations_cache"] = followed
+        except Exception:
+            # Fall back to session_state cache or empty list
+            cached = st.session_state.get("_followed_citations_cache") or []
+            followed = [
+                entry
+                for entry in cached
+                if entry.get("doc_id") == doc_id
+            ]
+
+        # If still no followed, try session_state as last resort
+        if not followed:
+            followed = [
+                entry
+                for entry in (st.session_state.get("followed_citations") or [])
+                if entry.get("doc_id") == doc_id
+            ]
+
         # Display in primary-text order.
         followed.sort(
             key=lambda item: (
@@ -6107,6 +6188,47 @@ def draw_ingestion_panel(*, center, right) -> None:
             _set_query_params(doc=doc_id, cite=int(cite_idx), target=tgt)
 
         def _queue_drop(cite_idx: int, tgt: Optional[str]) -> None:
+            """Drop citation from chase queue.
+            
+            Writes ignore status to server-backed opinion layer.
+            Falls back to session_state on error.
+            """
+            normalized_tgt = normalize_target_id(tgt)
+            
+            # Try server-backed approach first (append-only ignore)
+            try:
+                reviewer_uid = _active_reviewer_uid()
+                current_project_id = get_project_id()
+                if reviewer_uid and api_url and current_project_id:
+                    # Resolve span_id
+                    span_id = resolve_span_id(
+                        api_url,
+                        current_project_id,
+                        doc_id,
+                        cite_idx,
+                        normalized_tgt,
+                    )
+                    if span_id:
+                        # Write ignore status to server (append-only)
+                        append_follow(
+                            api_url=api_url,
+                            project_id=current_project_id,
+                            reviewer_uid=reviewer_uid,
+                            doc_id=doc_id,
+                            citation_index=int(cite_idx),
+                            target_id=normalized_tgt,
+                            span_id=span_id,
+                            status="ignore",
+                            idempotency_key=f"follow:{span_id}:ignore",
+                        )
+                        # Invalidate cache to force refresh
+                        st.session_state.pop("_followed_citations_cache", None)
+                        return
+            except Exception:
+                # Fall back to session_state on any error
+                pass
+            
+            # Fallback: session_state behavior (filter out the dropped citation)
             st.session_state["followed_citations"] = [
                 item
                 for item in (st.session_state.get("followed_citations") or [])

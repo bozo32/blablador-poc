@@ -9,6 +9,14 @@ import requests
 DEFAULT_TIMEOUT = 180
 
 
+def _opinion_headers(project_id: Optional[str]) -> Dict[str, str]:
+    """Return headers with X-Project-Id when project_id is set."""
+    pid = str(project_id or "").strip()
+    if not pid:
+        return {}
+    return {"X-Project-Id": pid}
+
+
 def _request(
     method: str,
     url: str,
@@ -19,9 +27,7 @@ def _request(
     timeout: int = DEFAULT_TIMEOUT,
 ) -> requests.Response:
     """Make an HTTP request with optional X-Project-Id header."""
-    headers: Dict[str, str] = {}
-    if project_id:
-        headers["X-Project-Id"] = str(project_id)
+    headers = _opinion_headers(project_id)
     
     try:
         response = requests.request(
@@ -158,4 +164,47 @@ def get_follow_for_target(
         return response.json() if response.text else None
     except RuntimeError:
         # Not found is OK - return None
+        return None
+
+
+def resolve_span_id(
+    api_url: str,
+    project_id: Optional[str],
+    doc_id: str,
+    citation_index: int,
+    target_id: Optional[str],
+) -> Optional[str]:
+    """Resolve cite-window span_id from (doc_id, citation_index, target_id).
+    
+    Calls the /spans/lookup-citation-window endpoint.
+    
+    Args:
+        api_url: Base API URL
+        project_id: Project ID for scoping
+        doc_id: Document ID (can also serve as ingest_id)
+        citation_index: Citation index
+        target_id: Target ID (optional)
+    
+    Returns:
+        span_id string if found, None otherwise
+    """
+    url = f"{api_url.rstrip('/')}/spans/lookup-citation-window"
+    params: Dict[str, Union[int, str]] = {
+        "ingest_id": doc_id,  # doc_id serves as ingest_id
+        "citation_index": int(citation_index),
+    }
+    if target_id:
+        params["target_id"] = str(target_id).strip()
+    
+    try:
+        response = requests.get(
+            url,
+            headers=_opinion_headers(project_id),
+            params=params,
+            timeout=DEFAULT_TIMEOUT,
+        )
+        response.raise_for_status()
+        data = response.json() if response.text else {}
+        return data.get("span_id")
+    except Exception:
         return None

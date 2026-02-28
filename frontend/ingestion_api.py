@@ -330,13 +330,19 @@ def get_span_status(
     span_id: str,
     *,
     reviewer_uid: str = "default",
+    project_id: Optional[str] = None,
 ) -> dict:
     url = f"{api_url.rstrip('/')}/spans/{span_id}/status"
     params: Dict[str, Union[int, str]] = {
         "reviewer_uid": str(reviewer_uid or "default")
     }
     try:
-        response = requests.get(url, params=params, timeout=DEFAULT_TIMEOUT)
+        response = requests.get(
+            url,
+            headers=_ingest_headers(project_id),
+            params=params,
+            timeout=DEFAULT_TIMEOUT,
+        )
     except requests.RequestException as exc:
         raise RuntimeError(_request_error_message(url, exc)) from exc
     return _parse_response(response) or {}
@@ -348,6 +354,7 @@ def get_span_bundle(
     *,
     reviewer_uid: str = "default",
     include_history: bool = False,
+    project_id: Optional[str] = None,
 ) -> dict:
     url = f"{api_url.rstrip('/')}/spans/{span_id}/bundle"
     params: Dict[str, Union[int, str]] = {
@@ -355,7 +362,12 @@ def get_span_bundle(
         "include_history": "true" if include_history else "false",
     }
     try:
-        response = requests.get(url, params=params, timeout=DEFAULT_TIMEOUT)
+        response = requests.get(
+            url,
+            headers=_ingest_headers(project_id),
+            params=params,
+            timeout=DEFAULT_TIMEOUT,
+        )
     except requests.RequestException as exc:
         raise RuntimeError(_request_error_message(url, exc)) from exc
     return _parse_response(response) or {}
@@ -367,6 +379,7 @@ def lookup_citation_window_span(
     ingest_id: str,
     citation_index: int,
     target_id: Optional[str] = None,
+    project_id: Optional[str] = None,
 ) -> dict:
     url = f"{api_url.rstrip('/')}/spans/lookup-citation-window"
     params: Dict[str, Union[int, str]] = {
@@ -376,7 +389,12 @@ def lookup_citation_window_span(
     if target_id:
         params["target_id"] = str(target_id).strip()
     try:
-        response = requests.get(url, params=params, timeout=DEFAULT_TIMEOUT)
+        response = requests.get(
+            url,
+            headers=_ingest_headers(project_id),
+            params=params,
+            timeout=DEFAULT_TIMEOUT,
+        )
     except requests.RequestException as exc:
         raise RuntimeError(_request_error_message(url, exc)) from exc
     return _parse_response(response) or {}
@@ -389,6 +407,7 @@ def set_span_cite_role(
     cited_work_id: str,
     reviewer_uid: str,
     role: str,
+    project_id: Optional[str] = None,
 ) -> dict:
     span_id = str(span_id or "").strip()
     cited_work_id = str(cited_work_id or "").strip()
@@ -401,7 +420,12 @@ def set_span_cite_role(
         "role": role,
     }
     try:
-        response = requests.put(url, json=payload, timeout=DEFAULT_TIMEOUT)
+        response = requests.put(
+            url,
+            headers=_ingest_headers(project_id),
+            json=payload,
+            timeout=DEFAULT_TIMEOUT,
+        )
     except requests.RequestException as exc:
         raise RuntimeError(_request_error_message(url, exc)) from exc
     return _parse_response(response) or {}

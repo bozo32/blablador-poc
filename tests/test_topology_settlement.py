@@ -6,6 +6,9 @@ import backend.main as backend_main
 from backend.graph_store import GraphStore
 from backend.span_graph_store import SpanGraphStore
 
+# Test project ID constant
+PROJECT_ID = "default"
+
 
 def _seed_claim(store: GraphStore) -> str:
     store.index_ingest_upload(
@@ -45,6 +48,7 @@ def test_topology_edges_can_be_voted_and_settled(tmp_path, monkeypatch):
             "window_fingerprint": "fp",
             "ingest_id": "doc-1",
         },
+        headers={"X-Project-Id": PROJECT_ID},
     )
     assert created.status_code == 200
     span_id = created.json()["span"]["span_id"]
@@ -52,6 +56,7 @@ def test_topology_edges_can_be_voted_and_settled(tmp_path, monkeypatch):
     claim_spans = client.post(
         f"/spans/{span_id}/claim-spans",
         json={"claim_spans": [{"order_index": 1}]},
+        headers={"X-Project-Id": PROJECT_ID},
     )
     assert claim_spans.status_code == 200
     claim_span_id = claim_spans.json()["claim_spans"][0]["claim_span_id"]

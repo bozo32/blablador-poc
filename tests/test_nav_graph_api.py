@@ -5,6 +5,9 @@ from fastapi.testclient import TestClient
 import backend.main as backend_main
 from backend.span_graph_store import SpanGraphStore
 
+# Test project ID constant
+PROJECT_ID = "default"
+
 
 def _seed_one_citing_span(*, client: TestClient) -> dict:
     resp = client.post(
@@ -22,6 +25,7 @@ def _seed_one_citing_span(*, client: TestClient) -> dict:
                 {"claim_index": 1, "parsed_text": "Seed snippet for context."}
             ],
         },
+        headers={"X-Project-Id": PROJECT_ID},
     )
     assert resp.status_code == 200
     return resp.json()
@@ -37,6 +41,7 @@ def test_nav_work_contexts_and_graph(tmp_path, monkeypatch):
     span = client.get(
         "/spans/lookup-citation-window",
         params={"ingest_id": "doc-1", "citation_index": 9, "target_id": "b4"},
+        headers={"X-Project-Id": PROJECT_ID},
     )
     assert span.status_code == 200
     span_id = str((span.json() or {}).get("span_id") or "")

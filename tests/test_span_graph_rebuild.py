@@ -5,6 +5,9 @@ from fastapi.testclient import TestClient
 import backend.main as backend_main
 from backend.span_graph_store import SpanGraphStore
 
+# Test project ID constant
+PROJECT_ID = "default"
+
 
 def test_neighborhood_search_endpoint(tmp_path, monkeypatch):
     store = SpanGraphStore(tmp_path / "graph.db")
@@ -19,6 +22,7 @@ def test_neighborhood_search_endpoint(tmp_path, monkeypatch):
             "window_fingerprint": "fp",
             "ingest_id": "doc-1",
         },
+        headers={"X-Project-Id": PROJECT_ID},
     )
     span_id = created.json()["span"]["span_id"]
     client.post(
@@ -32,6 +36,7 @@ def test_neighborhood_search_endpoint(tmp_path, monkeypatch):
                 }
             ]
         },
+        headers={"X-Project-Id": PROJECT_ID},
     )
 
     def _fake_cited_by(identifier: str, max_nodes: int = 25):
@@ -89,6 +94,7 @@ def test_span_claimspan_assertion_roundtrip(tmp_path, monkeypatch):
             "window_fingerprint": "abc",
             "ingest_id": "doc-1",
         },
+        headers={"X-Project-Id": PROJECT_ID},
     )
     assert created.status_code == 200
     span_id = created.json()["span"]["span_id"]
@@ -106,6 +112,7 @@ def test_span_claimspan_assertion_roundtrip(tmp_path, monkeypatch):
                 }
             ]
         },
+        headers={"X-Project-Id": PROJECT_ID},
     )
     assert cites.status_code == 200
     assert cites.json()["inserted"] >= 1
@@ -113,6 +120,7 @@ def test_span_claimspan_assertion_roundtrip(tmp_path, monkeypatch):
     role = client.put(
         f"/spans/{span_id}/cites/{cited_work_id}/role",
         json={"reviewer_uid": "alice", "role": "evidentiary"},
+        headers={"X-Project-Id": PROJECT_ID},
     )
     assert role.status_code == 200
     assert role.json()["ok"] is True
@@ -120,6 +128,7 @@ def test_span_claimspan_assertion_roundtrip(tmp_path, monkeypatch):
     claim_spans = client.post(
         f"/spans/{span_id}/claim-spans",
         json={"claim_spans": [{"order_index": 1}, {"order_index": 2}]},
+        headers={"X-Project-Id": PROJECT_ID},
     )
     assert claim_spans.status_code == 200
     rows = claim_spans.json()["claim_spans"]
@@ -514,6 +523,7 @@ def test_span_bundle_endpoint(tmp_path, monkeypatch):
             "window_fingerprint": "fp",
             "ingest_id": "doc-1",
         },
+        headers={"X-Project-Id": PROJECT_ID},
     )
     assert created.status_code == 200
     span_id = created.json()["span"]["span_id"]
@@ -529,19 +539,23 @@ def test_span_bundle_endpoint(tmp_path, monkeypatch):
                 }
             ]
         },
+        headers={"X-Project-Id": PROJECT_ID},
     )
     client.put(
         f"/spans/{span_id}/cites/ref:doc-1:b4/role",
         json={"reviewer_uid": "alice", "role": "evidentiary"},
+        headers={"X-Project-Id": PROJECT_ID},
     )
     client.post(
         f"/spans/{span_id}/claim-spans",
         json={"claim_spans": [{"order_index": 1}]},
+        headers={"X-Project-Id": PROJECT_ID},
     )
 
     bundle = client.get(
         f"/spans/{span_id}/bundle",
         params={"reviewer_uid": "alice", "include_history": "true"},
+        headers={"X-Project-Id": PROJECT_ID},
     )
     assert bundle.status_code == 200
     payload = bundle.json()

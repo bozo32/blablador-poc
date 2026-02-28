@@ -2464,11 +2464,14 @@ def lookup_citation_window_span(
     ingest_id: str,
     citation_index: int,
     target_id: Optional[str] = None,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
 ):
+    project_id = _require_project_id_for_upload(x_project_id)
+    scoped_store = SpanGraphStore(settings=SimpleNamespace(DEFAULT_PROJECT_ID=project_id))
     ingest = str(ingest_id or "").strip()
     if not ingest:
         raise HTTPException(status_code=422, detail="ingest_id is required")
-    span = span_graph_store.find_citation_span(
+    span = scoped_store.find_citation_span(
         ingest_id=ingest,
         citation_index=int(citation_index),
         target_id=str(target_id).strip() or None,
@@ -2729,9 +2732,14 @@ def get_claim_candidates(claim_id: str, limit: int = Query(10, ge=1, le=100)):
 
 
 @app.post("/spans/upsert", response_model=schemas.SpanUpsertResponse)
-def upsert_span(payload: schemas.SpanUpsertRequest):
+def upsert_span(
+    payload: schemas.SpanUpsertRequest,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
+    project_id = _require_project_id_for_upload(x_project_id)
+    scoped_store = SpanGraphStore(settings=SimpleNamespace(DEFAULT_PROJECT_ID=project_id))
     try:
-        span = span_graph_store.upsert_span(
+        span = scoped_store.upsert_span(
             kind=str(payload.kind),
             selector=payload.selector.model_dump(),
             window_fingerprint=payload.window_fingerprint,
@@ -2747,8 +2755,14 @@ def upsert_span(payload: schemas.SpanUpsertRequest):
     "/spans/{span_id}/cites",
     response_model=schemas.SpanCitesUpsertResponse,
 )
-def upsert_span_cites(span_id: str, payload: schemas.SpanCitesUpsertRequest):
-    inserted = span_graph_store.add_span_cites(
+def upsert_span_cites(
+    span_id: str,
+    payload: schemas.SpanCitesUpsertRequest,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
+    project_id = _require_project_id_for_upload(x_project_id)
+    scoped_store = SpanGraphStore(settings=SimpleNamespace(DEFAULT_PROJECT_ID=project_id))
+    inserted = scoped_store.add_span_cites(
         span_id=str(span_id),
         cites=[c.model_dump() for c in (payload.cites or [])],
     )
@@ -2763,8 +2777,11 @@ def set_span_cite_role(
     span_id: str,
     cited_work_id: str,
     payload: schemas.SpanCiteRoleUpsertRequest,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
 ):
-    span_graph_store.set_span_cite_role(
+    project_id = _require_project_id_for_upload(x_project_id)
+    scoped_store = SpanGraphStore(settings=SimpleNamespace(DEFAULT_PROJECT_ID=project_id))
+    scoped_store.set_span_cite_role(
         span_id=str(span_id),
         cited_work_id=str(cited_work_id),
         reviewer_uid=str(payload.reviewer_uid),
@@ -2777,12 +2794,18 @@ def set_span_cite_role(
     "/spans/{span_id}/claim-spans",
     response_model=schemas.ClaimSpansUpsertResponse,
 )
-def upsert_claim_spans(span_id: str, payload: schemas.ClaimSpansUpsertRequest):
+def upsert_claim_spans(
+    span_id: str,
+    payload: schemas.ClaimSpansUpsertRequest,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
+    project_id = _require_project_id_for_upload(x_project_id)
+    scoped_store = SpanGraphStore(settings=SimpleNamespace(DEFAULT_PROJECT_ID=project_id))
     items = []
     for cs in payload.claim_spans or []:
         selector = cs.selector.model_dump() if cs.selector is not None else None
         items.append({"order_index": int(cs.order_index), "selector": selector})
-    claim_spans = span_graph_store.upsert_claim_spans(span_id=str(span_id), items=items)
+    claim_spans = scoped_store.upsert_claim_spans(span_id=str(span_id), items=items)
     return {"span_id": str(span_id), "claim_spans": claim_spans}
 
 
@@ -3014,8 +3037,14 @@ def get_claim_span_status(claim_span_id: str, reviewer_uid: str = "default"):
     "/spans/{span_id}/status",
     response_model=schemas.SpanStatusResponse,
 )
-def get_span_status(span_id: str, reviewer_uid: str = "default"):
-    return span_graph_store.span_status(
+def get_span_status(
+    span_id: str,
+    reviewer_uid: str = "default",
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
+    project_id = _require_project_id_for_upload(x_project_id)
+    scoped_store = SpanGraphStore(settings=SimpleNamespace(DEFAULT_PROJECT_ID=project_id))
+    return scoped_store.span_status(
         span_id=str(span_id), reviewer_uid=str(reviewer_uid)
     )
 
@@ -3028,8 +3057,11 @@ def get_span_bundle(
     span_id: str,
     reviewer_uid: str = "default",
     include_history: bool = False,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
 ):
-    bundle = span_graph_store.span_bundle(
+    project_id = _require_project_id_for_upload(x_project_id)
+    scoped_store = SpanGraphStore(settings=SimpleNamespace(DEFAULT_PROJECT_ID=project_id))
+    bundle = scoped_store.span_bundle(
         span_id=str(span_id),
         reviewer_uid=str(reviewer_uid),
         include_history=bool(include_history),

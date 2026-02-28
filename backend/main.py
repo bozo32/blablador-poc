@@ -123,6 +123,7 @@ from backend.spine.pipeline_artifacts import StageArtifactAlreadyExists
 from backend.spine import pipeline_run_scopes as run_scopes_spine
 from backend.spine import pipeline_run_status as run_status_spine
 from backend.spine import evidence_decisions as evidence_decisions_spine
+from backend.spine import opinion_events
 from backend.workflow_happy_path import orchestrator as happy_path_orchestrator
 from backend.spine.project_meta import (
     export_project_meta_json,
@@ -3069,6 +3070,169 @@ def get_span_bundle(
     if not bundle:
         raise HTTPException(status_code=404, detail="Span not found")
     return bundle
+
+
+# --- Opinion events (follow/ignore/complete) -------------------------------
+
+
+class OpinionFollowPayload(BaseModel):
+    status: str  # follow, ignore, complete
+    doc_id: Optional[str] = None
+    citation_index: Optional[int] = None
+    target_id: Optional[str] = None
+    span_id: Optional[str] = None
+
+
+class OpinionEventRequest(BaseModel):
+    kind: str = "follow"
+    target_key: str
+    visibility: str = "private"
+    group_id: Optional[str] = None
+    mode: int = 0o600
+    payload: Dict[str, Any] = {}
+    idempotency_key: Optional[str] = None
+    # Denormalized fields for indexing
+    doc_id: Optional[str] = None
+    citation_index: Optional[int] = None
+    target_id: Optional[str] = None
+    span_id: Optional[str] = None
+
+
+class OpinionEventResponse(BaseModel):
+    event_id: int
+    created_at: str
+    owner_uid: str
+    kind: str
+    target_key: str
+    visibility: str
+    payload: Dict[str, Any]
+
+
+@app.post("/opinions/events", response_model=OpinionEventResponse)
+def append_opinion_event(
+    payload: OpinionEventRequest,
+    reviewer_uid: str = Query("default"),
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+    x_reviewer_uid: Optional[str] = Header(None, alias="X-Reviewer-Uid"),
+):
+    """Append an opinion event (e.g., follow/ignore/complete)."""
+    project_id = _require_project_id_for_upload(x_project_id)
+    
+    # Enforce X-Reviewer-Uid if present
+    owner_uid = str(reviewer_uid or "default").strip() or "default"
+    if x_reviewer_uid:
+        if x_reviewer_uid != owner_uid:
+            raise HTTPException(
+                status_code=403,
+                detail="X-Reviewer-Uid must match reviewer_uid parameter"
+            )
+    
+    # Validate status values for follow events
+    if payload.kind == "follow":
+        status = payload.payload.get("status", "")
+        if status not in {"follow", "ignore", "complete"}:
+            raise HTTPException(
+                status_code=422,
+                detail="Invalid follow status. Must be one of: follow, ignore, complete"
+            )
+    
+    # Build target_key if not provided
+    target_key = payload.target_key
+    if not target_key and payload.span_id:
+        target_key = f"citespan:{payload.span_id}"
+    
+    user_id = str(app_settings.DEFAULT_USER_ID)
+    
+    event = opinion_events.append_event(
+        project_id=project_id,
+        user_id=user_id,
+        owner_uid=owner_uid,
+        kind=payload.kind,
+        target_key=target_key,
+        visibility=payload.visibility,
+        group_id=payload.group_id,
+        mode=payload.mode,
+        payload=payload.payload,
+        idempotency_key=payload.idempotency_key,
+        doc_id=payload.doc_id,
+        citation_index=payload.citation_index,
+        target_id=payload.target_id,
+        span_id=payload.span_id,
+    )
+    
+    return OpinionEventResponse(
+        event_id=event["event_id"],
+        created_at=event["created_at"],
+        owner_uid=event["owner_uid"],
+        kind=event["kind"],
+        target_key=event["target_key"],
+        visibility=event["visibility"],
+        payload=event["payload"],
+    )
+
+
+@app.get("/opinions/follow/by-doc")
+def list_follows_by_doc(
+    doc_id: str,
+    reviewer_uid: str = Query("default"),
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
+    """List projected follow entries for a document."""
+    project_id = _require_project_id_for_upload(x_project_id)
+    owner_uid = str(reviewer_uid or "default").strip() or "default"
+    
+    follows = opinion_events.list_follow_by_doc(
+        project_id=project_id,
+        owner_uid=owner_uid,
+        doc_id=doc_id,
+    )
+    
+    return {"doc_id": doc_id, "reviewer_uid": owner_uid, "follows": follows}
+
+
+@app.get("/opinions/follow/target")
+def get_follow_for_target(
+    target_key: str,
+    reviewer_uid: str = Query("default"),
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
+    """Get projected follow status for a target key."""
+    project_id = _require_project_id_for_upload(x_project_id)
+    owner_uid = str(reviewer_uid or "default").strip() or "default"
+    
+    status = opinion_events.get_follow_status(
+        project_id=project_id,
+        owner_uid=owner_uid,
+        target_key=target_key,
+    )
+    
+    if not status:
+        raise HTTPException(status_code=404, detail="No follow status found")
+    
+    return status
+
+
+@app.get("/opinions/events")
+def list_opinion_events(
+    reviewer_uid: str = Query("default"),
+    target_key: Optional[str] = None,
+    kind: Optional[str] = None,
+    limit: int = Query(20, ge=1, le=100),
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
+    """List recent opinion events."""
+    project_id = _require_project_id_for_upload(x_project_id)
+    owner_uid = str(reviewer_uid or "default").strip() or "default"
+    
+    events = opinion_events.list_recent_events(
+        project_id=project_id,
+        owner_uid=owner_uid,
+        target_key=target_key,
+        kind=kind,
+        limit=limit,
+    )
+    
+    return {"events": events}
 
 
 @app.post(

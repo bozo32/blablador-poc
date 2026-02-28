@@ -1044,6 +1044,66 @@ _DDL_STATEMENTS: list[str] = [
       ON evidence_decision_targets(project_id, claim_id, reviewer_uid)
       WHERE pinned=true;
     """,
+    # Opinion events table (for follow/ignore/complete status)
+    """
+    CREATE TABLE IF NOT EXISTS opinion_events (
+      project_id text NOT NULL DEFAULT 'default',
+      event_id bigserial NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      actor_uid text NOT NULL,
+      owner_uid text NOT NULL,
+      kind text NOT NULL,
+      target_key text NOT NULL,
+      doc_id text NULL,
+      citation_index int NULL,
+      target_id text NULL,
+      span_id text NULL,
+      visibility text NOT NULL DEFAULT 'private',
+      group_id text NULL,
+      mode int NOT NULL DEFAULT 0600,
+      payload_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      idempotency_key text NULL,
+      PRIMARY KEY(project_id, event_id)
+    );
+    """,
+    """
+    ALTER TABLE opinion_events
+      ADD COLUMN IF NOT EXISTS visibility text NOT NULL DEFAULT 'private';
+    """,
+    """
+    ALTER TABLE opinion_events
+      ADD COLUMN IF NOT EXISTS group_id text NULL;
+    """,
+    """
+    ALTER TABLE opinion_events
+      ADD COLUMN IF NOT EXISTS mode int NOT NULL DEFAULT 0600;
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS opinion_events_project_event_id_uniq
+      ON opinion_events(project_id, event_id);
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS opinion_events_idempotency_uniq
+      ON opinion_events(project_id, owner_uid, idempotency_key)
+      WHERE idempotency_key IS NOT NULL;
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS opinion_events_owner_kind_idx
+      ON opinion_events(project_id, owner_uid, kind);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS opinion_events_doc_citation_idx
+      ON opinion_events(project_id, doc_id, citation_index);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS opinion_events_target_key_idx
+      ON opinion_events(project_id, target_key);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS opinion_events_owner_span_idx
+      ON opinion_events(project_id, owner_uid, span_id)
+      WHERE span_id IS NOT NULL;
+    """,
 ]
 
 

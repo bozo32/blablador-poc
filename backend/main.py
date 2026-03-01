@@ -177,6 +177,7 @@ def _resolve_scope_guard(
     x_project_id: Optional[str] = None,
     x_user_id: Optional[str] = None,
     require_project: bool = False,
+    require_user: bool = False,
     allow_dev_project_default: bool = False,
     include_user: bool = True,
 ) -> tuple[str, Optional[str], dict[str, str]]:
@@ -213,6 +214,11 @@ def _resolve_scope_guard(
         if user_id:
             user_source = "header"
         else:
+            if require_user:
+                raise HTTPException(
+                    status_code=400,
+                    detail="X-User-Id header is required",
+                )
             user_id = str(app_settings.DEFAULT_USER_ID)
             user_source = "default-user"
 
@@ -229,6 +235,7 @@ def _resolve_scope_observability(
     x_project_id: Optional[str] = None,
     x_user_id: Optional[str] = None,
     require_project: bool = False,
+    require_user: bool = False,
     allow_dev_project_default: bool = False,
     include_user: bool = True,
 ) -> tuple[str, Optional[str], str]:
@@ -236,6 +243,7 @@ def _resolve_scope_observability(
         x_project_id=x_project_id,
         x_user_id=x_user_id,
         require_project=require_project,
+        require_user=require_user,
         allow_dev_project_default=allow_dev_project_default,
         include_user=include_user,
     )
@@ -1268,6 +1276,25 @@ def _require_scope_for_upload(
     return project_id, user_id
 
 
+def _require_scope_for_write_pilot(
+    *,
+    x_project_id: Optional[str],
+    x_user_id: Optional[str],
+    endpoint: str,
+) -> tuple[str, str]:
+    project_id, user_id, _scope_source = _resolve_scope_observability(
+        endpoint=endpoint,
+        x_project_id=x_project_id,
+        x_user_id=x_user_id,
+        require_project=True,
+        require_user=True,
+        allow_dev_project_default=False,
+        include_user=True,
+    )
+    assert user_id is not None
+    return project_id, user_id
+
+
 def _allow_local_path_upload_for_dev() -> bool:
     return str(
         os.environ.get("ALLOW_LOCAL_PATH_UPLOAD_FOR_DEV", "") or ""
@@ -1990,16 +2017,21 @@ def update_ledger_outgoing(
     doc_num: int,
     payload: schemas.LedgerLinksUpdateRequest,
     x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
 ):
     try:
-        project_id = _require_project_id_for_upload(x_project_id)
+        project_id, _user_id = _require_scope_for_write_pilot(
+            x_project_id=x_project_id,
+            x_user_id=x_user_id,
+            endpoint="/ledger/{doc_num}/outgoing",
+        )
         scoped_store = GraphStore(
             settings=SimpleNamespace(DEFAULT_PROJECT_ID=project_id)
         )
         scoped_store.set_outgoing(source_num=int(doc_num), target_nums=payload.targets)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return get_document_ledger()
+    return {"rows": scoped_store.ledger_rows(), "options": scoped_store.ledger_options()}
 
 
 @app.patch("/ledger/{doc_num}/incoming", response_model=schemas.LedgerResponse)
@@ -2007,16 +2039,21 @@ def update_ledger_incoming(
     doc_num: int,
     payload: schemas.LedgerLinksUpdateRequest,
     x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
 ):
     try:
-        project_id = _require_project_id_for_upload(x_project_id)
+        project_id, _user_id = _require_scope_for_write_pilot(
+            x_project_id=x_project_id,
+            x_user_id=x_user_id,
+            endpoint="/ledger/{doc_num}/incoming",
+        )
         scoped_store = GraphStore(
             settings=SimpleNamespace(DEFAULT_PROJECT_ID=project_id)
         )
         scoped_store.set_incoming(target_num=int(doc_num), source_nums=payload.targets)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return get_document_ledger()
+    return {"rows": scoped_store.ledger_rows(), "options": scoped_store.ledger_options()}
 
 
 @app.patch("/ledger/{doc_num}/assign", response_model=schemas.LedgerResponse)
@@ -2024,25 +2061,35 @@ def update_ledger_assigned(
     doc_num: int,
     payload: schemas.LedgerAssignRequest,
     x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
 ):
     try:
-        project_id = _require_project_id_for_upload(x_project_id)
+        project_id, _user_id = _require_scope_for_write_pilot(
+            x_project_id=x_project_id,
+            x_user_id=x_user_id,
+            endpoint="/ledger/{doc_num}/assign",
+        )
         scoped_store = GraphStore(
             settings=SimpleNamespace(DEFAULT_PROJECT_ID=project_id)
         )
         scoped_store.set_assigned(doc_num=int(doc_num), assigned=bool(payload.assigned))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return get_document_ledger()
+    return {"rows": scoped_store.ledger_rows(), "options": scoped_store.ledger_options()}
 
 
 @app.post("/ledger/place", response_model=schemas.LedgerResponse)
 def place_ledger_relation(
     payload: schemas.LedgerPlaceRequest,
     x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
 ):
     try:
-        project_id = _require_project_id_for_upload(x_project_id)
+        project_id, _user_id = _require_scope_for_write_pilot(
+            x_project_id=x_project_id,
+            x_user_id=x_user_id,
+            endpoint="/ledger/place",
+        )
         scoped_store = GraphStore(
             settings=SimpleNamespace(DEFAULT_PROJECT_ID=project_id)
         )
@@ -2055,13 +2102,14 @@ def place_ledger_relation(
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return get_document_ledger()
+    return {"rows": scoped_store.ledger_rows(), "options": scoped_store.ledger_options()}
 
 
 @app.post("/ledger/place-reference", response_model=schemas.LedgerResponse)
 def place_ledger_reference(
     payload: schemas.LedgerPlaceReferenceRequest,
     x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
 ):
     citing_doc_id = str(payload.citing_doc_id or "").strip()
     reference_id = str(payload.reference_id or "").strip()
@@ -2072,7 +2120,11 @@ def place_ledger_reference(
             detail="citing_doc_id, reference_id, cited_ingest_id are required",
         )
     try:
-        project_id = _require_project_id_for_upload(x_project_id)
+        project_id, _user_id = _require_scope_for_write_pilot(
+            x_project_id=x_project_id,
+            x_user_id=x_user_id,
+            endpoint="/ledger/place-reference",
+        )
         scoped_store = GraphStore(
             settings=SimpleNamespace(DEFAULT_PROJECT_ID=project_id)
         )
@@ -2091,7 +2143,7 @@ def place_ledger_reference(
             )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return get_document_ledger()
+    return {"rows": scoped_store.ledger_rows(), "options": scoped_store.ledger_options()}
 
 
 # --- Claim graph (Phase 09) -------------------------------------------------
@@ -3395,22 +3447,30 @@ class OpinionEventResponse(BaseModel):
 @app.post("/opinions/events", response_model=OpinionEventResponse)
 def append_opinion_event(
     payload: OpinionEventRequest,
-    reviewer_uid: str = Query("default"),
+    reviewer_uid: Optional[str] = Query(None),
     x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
     x_reviewer_uid: Optional[str] = Header(None, alias="X-Reviewer-Uid"),
 ):
     """Append an opinion event (e.g., follow/ignore/complete)."""
-    project_id = _require_project_id_for_upload(x_project_id)
-    
-    # Enforce X-Reviewer-Uid if present
-    owner_uid = str(reviewer_uid or "default").strip() or "default"
-    if x_reviewer_uid:
-        if x_reviewer_uid != owner_uid:
+    project_id, user_id = _require_scope_for_write_pilot(
+        x_project_id=x_project_id,
+        x_user_id=x_user_id,
+        endpoint="/opinions/events",
+    )
+
+    reviewer_header = str(x_reviewer_uid or "").strip()
+    reviewer_param = str(reviewer_uid or "").strip()
+    if not reviewer_header:
+        raise HTTPException(status_code=400, detail="X-Reviewer-Uid header is required")
+    if reviewer_param and reviewer_param != reviewer_header:
             raise HTTPException(
                 status_code=403,
                 detail="X-Reviewer-Uid must match reviewer_uid parameter"
             )
-    
+
+    owner_uid = reviewer_header
+
     # Validate status values for follow events
     if payload.kind == "follow":
         status = payload.payload.get("status", "")
@@ -3425,8 +3485,7 @@ def append_opinion_event(
     if not target_key and payload.span_id:
         target_key = f"citespan:{payload.span_id}"
     
-    user_id = str(app_settings.DEFAULT_USER_ID)
-    
+
     event = opinion_events.append_event(
         project_id=project_id,
         user_id=user_id,
@@ -4361,12 +4420,16 @@ async def upload_source_attachment(
     citation_index: Optional[int] = Form(None),
     target_id: Optional[str] = Form(None),
     x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
 ):
     if not _is_pdf_upload(file):
         raise HTTPException(status_code=400, detail="Only PDF uploads are supported")
 
-    project_id = _require_project_id_for_upload(x_project_id)
-    user_id = str(app_settings.DEFAULT_USER_ID)
+    project_id, user_id = _require_scope_for_write_pilot(
+        x_project_id=x_project_id,
+        x_user_id=x_user_id,
+        endpoint="/attachments/upload",
+    )
 
     file_bytes = await file.read()
     if not file_bytes:
@@ -4512,8 +4575,13 @@ def patch_attachment_status(
     attachment_id: str,
     payload: schemas.AttachmentUpdateRequest,
     x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
 ):
-    project_id = _require_project_id_for_upload(x_project_id)
+    project_id, _user_id = _require_scope_for_write_pilot(
+        x_project_id=x_project_id,
+        x_user_id=x_user_id,
+        endpoint="/attachments/{attachment_id}",
+    )
     record = attachment_store.get_attachment_for_project(
         attachment_id,
         project_id=project_id,
@@ -4631,8 +4699,13 @@ def clone_global_attachment(
     attachment_id: str,
     payload: schemas.AttachmentCloneRequest,
     x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
 ):
-    project_id = _require_project_id_for_upload(x_project_id)
+    project_id, _user_id = _require_scope_for_write_pilot(
+        x_project_id=x_project_id,
+        x_user_id=x_user_id,
+        endpoint="/attachments/{attachment_id}/clone",
+    )
     try:
         record = attachment_store.clone_attachment(
             attachment_id,
@@ -4689,9 +4762,14 @@ def clone_global_attachment(
 def promote_attachment_ingest(
     attachment_id: str,
     x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
 ):
     """Promote an attachment PDF into an ingested Work."""
-    project_id = _require_project_id_for_upload(x_project_id)
+    project_id, _user_id = _require_scope_for_write_pilot(
+        x_project_id=x_project_id,
+        x_user_id=x_user_id,
+        endpoint="/attachments/{attachment_id}/promote-ingest",
+    )
     scoped = attachment_store.get_attachment_for_project(
         attachment_id,
         project_id=project_id,
@@ -4813,8 +4891,13 @@ def retry_attachment(
     attachment_id: str,
     background_tasks: BackgroundTasks,
     x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
 ):
-    project_id = _require_project_id_for_upload(x_project_id)
+    project_id, _user_id = _require_scope_for_write_pilot(
+        x_project_id=x_project_id,
+        x_user_id=x_user_id,
+        endpoint="/attachments/{attachment_id}/retry",
+    )
     try:
         attachment_store.reset_for_retry_for_project(
             attachment_id,

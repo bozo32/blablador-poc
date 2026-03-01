@@ -118,14 +118,33 @@ def _api_url() -> str:
 
 def _project_id() -> str:
     pid = str(st.session_state.get("project_id") or "").strip()
-    if pid:
-        return pid
-    return str(getattr(_APP_SETTINGS, "DEFAULT_PROJECT_ID", "default"))
+    return pid
 
 
-def _attachment_headers(headers: Optional[dict] = None) -> dict:
+def _active_scope_identity() -> str:
+    reviewer = str(st.session_state.get("active_reviewer_uid") or "").strip()
+    if reviewer:
+        return reviewer
+    meta = st.session_state.get("project_meta") or {}
+    return str(meta.get("active_reviewer_uid") or "").strip()
+
+
+def _attachment_headers(
+    headers: Optional[dict] = None,
+    *,
+    require_identity: bool = False,
+) -> dict:
     merged = dict(headers or {})
-    merged.setdefault("X-Project-Id", _project_id())
+    project_id = _project_id()
+    if not project_id:
+        raise RuntimeError("Attachment mutation requires project_id scope")
+    merged.setdefault("X-Project-Id", project_id)
+    identity = _active_scope_identity()
+    if require_identity and not identity:
+        raise RuntimeError("Attachment mutation requires active reviewer identity")
+    if identity:
+        merged.setdefault("X-User-Id", identity)
+        merged.setdefault("X-Reviewer-Uid", identity)
     return merged
 
 
@@ -134,7 +153,13 @@ def _request(method: str, path: str, **kwargs) -> Optional[dict]:
 
     headers = kwargs.pop("headers", None)
     if str(path or "").startswith("/attachments"):
-        headers = _attachment_headers(headers)
+        needs_identity = str(method or "").strip().lower() in {
+            "post",
+            "patch",
+            "put",
+            "delete",
+        }
+        headers = _attachment_headers(headers, require_identity=needs_identity)
     elif headers is not None:
         headers = dict(headers)
 

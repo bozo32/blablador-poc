@@ -78,3 +78,17 @@ def test_require_scope_for_upload_returns_project_and_user(
 
     assert project_id == str(backend_main.app_settings.DEFAULT_PROJECT_ID)
     assert user_id == str(backend_main.app_settings.DEFAULT_USER_ID)
+
+
+def test_scope_guard_rejects_missing_required_user() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        backend_main._resolve_scope_guard(
+            x_project_id="proj-1",
+            x_user_id=None,
+            require_project=True,
+            require_user=True,
+            include_user=True,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "X-User-Id header is required"

@@ -20,17 +20,46 @@ import requests
 
 def _project_id() -> str:
     pid = str(st.session_state.get("project_id") or "").strip()
-    return pid or "default"
+    return pid
+
+
+def _active_reviewer_uid() -> str:
+    direct = str(st.session_state.get("active_reviewer_uid") or "").strip()
+    if direct:
+        return direct
+    meta = st.session_state.get("project_meta") or {}
+    return str(meta.get("active_reviewer_uid") or "").strip()
 
 
 def _project_headers() -> Dict[str, str]:
-    return {"X-Project-Id": _project_id()}
+    project_id = _project_id()
+    reviewer_uid = _active_reviewer_uid()
+    if not project_id:
+        raise RuntimeError("Attachment mutation requires project_id scope")
+    if not reviewer_uid:
+        raise RuntimeError("Attachment mutation requires active reviewer identity")
+    return {
+        "X-Project-Id": project_id,
+        "X-User-Id": reviewer_uid,
+        "X-Reviewer-Uid": reviewer_uid,
+    }
 
 
 from frontend import workflow_api
 
 
-def entry_key(citation_index: int, target_id: Optional[str]) -> str:
+def entry_key(
+    citation_index: int,
+    target_id: Optional[str],
+    *,
+    span_key: Optional[str] = None,
+    order: Optional[int] = None,
+) -> str:
+    sid = str(span_key or "").strip()
+    if sid:
+        return f"{int(citation_index)}:{target_id or ''}:{sid}"
+    if order is not None:
+        return f"{int(citation_index)}:{target_id or ''}:ord{int(order)}"
     return f"{int(citation_index)}:{target_id or ''}"
 
 
@@ -67,98 +96,66 @@ def render(
 
     `render_panel(cite_idx, tgt, scope)` is called for the open item.
     """
-    st.markdown("#### " + title)
-    st.caption(caption)
+    # Header is rendered by the caller pane.
 
     if not followed:
         st.info("Click a citation in Document text to add it here.")
         return
 
-    def _sort_key(entry: dict) -> tuple[int, str]:
+    def _sort_key(entry: dict) -> tuple[int, int, str, str]:
         try:
             cite_idx = int(entry.get("citation_index") or 0)
         except Exception:
             cite_idx = 0
+        try:
+            order = int(entry.get("order") or 0)
+        except Exception:
+            order = 0
         tgt = entry.get("target_id")
-        return (cite_idx, "" if tgt is None else str(tgt))
+        sid = str(entry.get("span_key") or "")
+        return (cite_idx, order, "" if tgt is None else str(tgt), sid)
 
     # Render in stable document order; opening/activating an item must not
     # reshuffle the list.
     ordered_followed = sorted(list(followed), key=_sort_key)
 
-    selected_entry_key = None
-    if selected_index is not None:
-        selected_entry_key = entry_key(int(selected_index), selected_target)
-
-    open_key = str(st.session_state.get(open_state_key) or "")
-    if not open_key and selected_entry_key:
-        # Default to the currently selected citation.
-        open_key = selected_entry_key
-        st.session_state[open_state_key] = open_key
-
-    for entry in ordered_followed:
+    seen_keys: set[str] = set()
+    for idx, entry in enumerate(ordered_followed):
         try:
             cite_idx = int(entry.get("citation_index") or 0)
         except Exception:
             cite_idx = 0
         tgt = entry.get("target_id")
-        ek = entry_key(cite_idx, tgt)
-        is_open = open_key == ek
-        # Avoid literal leading letters (e.g., "v") in labels; use ASCII-only
-        # disclosure markers so the citation label stays clean.
-        caret = "[-]" if is_open else "[+]"
-
-        label = truncate_two_lines(get_label(entry))
+        ek = entry_key(
+            cite_idx,
+            tgt,
+            span_key=str(entry.get("span_key") or "") or None,
+            order=int(entry.get("order") or 0),
+        )
+        if ek in seen_keys:
+            continue
+        seen_keys.add(ek)
+        label = truncate_two_lines(get_label(entry), max_chars=44)
         status = get_status(cite_idx, tgt)
-        has_saved = bool(status.get("has_saved"))
-        processed = bool(status.get("processed"))
+        is_complete = bool(status.get("processed"))
+        status_chip = ":material/check_circle:" if is_complete else ":material/incomplete_circle:"
+        header = f"{label} [{status_chip}]"
 
-        if st.button(
-            f"{caret} {label}",
-            key=f"{scope}::row::{ek}",
-            use_container_width=True,
-        ):
-            st.session_state[open_state_key] = ek if not is_open else ""
-            on_open(cite_idx, tgt)
-            rerun()
-
-        action = st.columns([1, 1], gap="small")
-        with action[0]:
-            if not has_saved:
-                if st.button(
-                    "Segment",
-                    key=f"{scope}::segment::{ek}",
-                    use_container_width=True,
-                ):
-                    st.session_state[open_state_key] = ek
-                    on_open(cite_idx, tgt)
-                    rerun()
-            else:
-                if st.button(
-                    "Chase",
-                    key=f"{scope}::chase::{ek}",
-                    type="primary" if processed else "secondary",
-                    use_container_width=True,
-                ):
-                    # Keep selection but leave routing to caller.
-                    on_open(cite_idx, tgt)
-                    rerun()
-
-        with action[1]:
+        with st.expander(f"> {header}", expanded=False):
+            span_key = str(entry.get("span_key") or "").strip()
+            if span_key:
+                st.session_state["active_queue_span_key"] = span_key
             if st.button(
-                "Drop",
-                key=f"{scope}::drop::{ek}",
-                use_container_width=True,
+                ":material/open_in_browser: Focus in center",
+                key=f"{scope}::focus::{ek}::{idx}",
+                use_container_width=False,
             ):
-                on_drop(cite_idx, tgt)
-                if str(st.session_state.get(open_state_key) or "") == ek:
-                    st.session_state[open_state_key] = ""
+                if span_key:
+                    st.session_state["pending_scroll_span_key"] = span_key
+                    st.session_state["active_queue_span_key"] = span_key
+                on_open(cite_idx, tgt)
                 rerun()
-
-        if is_open:
-            st.markdown("---")
             render_panel(cite_idx, tgt, scope)
-            st.markdown("---")
 
 
 def render_requested_works_queue(
@@ -187,18 +184,14 @@ def render_requested_works_queue(
     run = (data or {}).get("run") or {}
     run_state = str((run or {}).get("state") or "").strip()
 
-    is_terminal = run_state in {"complete", "partial", "error", "cancelled"}
-    if not is_terminal and callable(st_autorefresh):  # pragma: no cover
-        st_autorefresh(
-            interval=int(poll_ms),
-            key=f"{scope}::autorefresh::{rid}",
-        )
+    # Disable in-panel autorefresh to prevent duplicate-element key collisions
+    # when multiple citespan panels render in one Streamlit pass.
 
     queue = (data or {}).get("queue")
     if not isinstance(queue, list):
         queue = []
 
-    st.markdown("**Requested works**")
+    st.markdown("**Available works**")
     if not queue:
         st.caption("No targets yet (citation mapping missing).")
         return
@@ -244,6 +237,8 @@ def render_requested_works_queue(
         attachment_id = str(entry.get("attachment_id") or "").strip() or None
 
         label = reference_id or target_id or "(unknown target)"
+        if len(label) >= 30 and label.count("-") >= 3:
+            label = "Unresolved work"
         cols = st.columns([5, 2], gap="small")
         with cols[0]:
             st.markdown(f"`{label}`")
@@ -252,7 +247,7 @@ def render_requested_works_queue(
 
         if state == "requested" and unassigned:
             options = [
-                f"{str(a.get('id'))} • {str(a.get('filename') or 'attachment.pdf')}"
+                str(a.get("filename") or "attachment.pdf")
                 for a in unassigned
                 if a.get("id")
             ]

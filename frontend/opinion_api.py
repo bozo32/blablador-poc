@@ -22,18 +22,21 @@ def _request(
     url: str,
     *,
     project_id: Optional[str] = None,
+    headers: Optional[Dict[str, str]] = None,
     params: Optional[Dict[str, Union[int, str]]] = None,
     json: Optional[Dict[str, Any]] = None,
     timeout: int = DEFAULT_TIMEOUT,
 ) -> requests.Response:
     """Make an HTTP request with optional X-Project-Id header."""
-    headers = _opinion_headers(project_id)
+    req_headers = _opinion_headers(project_id)
+    if headers:
+        req_headers.update({str(k): str(v) for k, v in headers.items()})
     
     try:
         response = requests.request(
             method=method,
             url=url,
-            headers=headers,
+            headers=req_headers,
             params=params,
             json=json,
             timeout=timeout,
@@ -72,6 +75,13 @@ def append_follow(
     Returns:
         The created event
     """
+    pid = str(project_id or "").strip()
+    rid = str(reviewer_uid or "").strip()
+    if not pid:
+        raise RuntimeError("opinion mutation requires project_id")
+    if not rid:
+        raise RuntimeError("opinion mutation requires reviewer_uid")
+
     url = f"{api_url.rstrip('/')}/opinions/events"
     
     payload = {
@@ -91,7 +101,8 @@ def append_follow(
     response = _request(
         "POST",
         url,
-        project_id=project_id,
+        project_id=pid,
+        headers={"X-User-Id": rid, "X-Reviewer-Uid": rid},
         params={"reviewer_uid": reviewer_uid},
         json=payload,
     )

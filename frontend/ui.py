@@ -2,6 +2,7 @@
 
 # === Imports ===
 import html
+import inspect
 import json
 import hashlib
 import os
@@ -9,6 +10,7 @@ import pathlib
 import re
 import sys
 import tempfile
+import time
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -282,6 +284,20 @@ def reset_segmentation():
 
 def _rerun() -> None:
     """Streamlit rerun helper across versions."""
+    # Streamlit auto-reruns after callbacks; explicit rerun in that context
+    # logs a warning and is ignored.
+    try:
+        for frame in inspect.stack():
+            fn = str(frame.function or "")
+            filename = str(frame.filename or "").replace("\\", "/")
+            if fn in {"call_callback", "_call_callbacks"} and (
+                "streamlit/runtime/state" in filename
+                or "streamlit/runtime/scriptrunner" in filename
+            ):
+                return
+    except Exception:
+        pass
+
     rerun = getattr(st, "rerun", None)
     if callable(rerun):
         rerun()
@@ -597,6 +613,44 @@ def inject_citation_styles() -> None:
             padding-right: 0.25rem;
         }
         </style>
+        <script>
+        function getCenterPane() {
+            var panes = document.querySelectorAll('div[data-testid="stVerticalBlockBorderWrapper"]');
+            if (panes && panes.length >= 2) return panes[1];
+            return null;
+        }
+        // Save center-pane scroll position before page unloads
+        window.addEventListener('click', function(e) {
+            if (e.target.closest('.citation-chip-link')) {
+                var pane = getCenterPane();
+                if (pane) {
+                    sessionStorage.setItem('citationCenterScrollPos', pane.scrollTop || 0);
+                }
+            }
+        });
+        // Restore center-pane scroll position after page loads
+        window.addEventListener('load', function() {
+            var pos = sessionStorage.getItem('citationCenterScrollPos');
+            if (pos !== null) {
+                setTimeout(function() {
+                    var pane = getCenterPane();
+                    if (pane) {
+                        pane.scrollTop = parseInt(pos);
+                    }
+                    sessionStorage.removeItem('citationCenterScrollPos');
+                }, 50);
+            }
+            // Check for hash and scroll to anchor
+            if (window.location.hash) {
+                var id = window.location.hash.substring(1);
+                var el = document.getElementById(id);
+                if (el) {
+                    setTimeout(function() {
+                        el.scrollIntoView();
+                    }, 100);
+                }
+            }
+        });
         """,
         unsafe_allow_html=True,
     )
@@ -621,11 +675,14 @@ def _citation_href(
     citation_index: int,
     target_id: Optional[str],
     anchor: str,
+    span_key: Optional[str] = None,
 ) -> str:
     target = normalize_target_id(target_id)
     base = (
         f"?doc={doc_id}&cite={citation_index}" if doc_id else f"?cite={citation_index}"
     )
+    if span_key:
+        base += f"&sid={span_key}"
     if target:
         return f"{base}&target={target}#{anchor}"
     return f"{base}#{anchor}"
@@ -932,6 +989,21 @@ WORKSPACE_CSS_PATH = (
 JUDGMENT_CSS_PATH = pathlib.Path(__file__).resolve().parent / "assets" / "judgment.css"
 
 
+RAIL_DEBUG_LOG_PATH = pathlib.Path("/tmp/rail_debug.log")
+
+
+def _rail_debug_log(event: str, **payload: Any) -> None:
+    try:
+        ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        rec: Dict[str, Any] = {"ts": ts, "event": str(event)}
+        if payload:
+            rec["payload"] = payload
+        with RAIL_DEBUG_LOG_PATH.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(rec, ensure_ascii=True) + "\n")
+    except Exception:
+        pass
+
+
 def inject_evidence_review_styles() -> None:
     if EVIDENCE_REVIEW_CSS_PATH.exists():
         st.markdown(
@@ -962,6 +1034,42 @@ def inject_workspace_styles(*, dense: bool) -> None:
         dense_css = splitter + dense_css
     css = base_css + (dense_css if dense else "")
     st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
+
+    st.markdown(
+        """
+        <style>
+        /* Reduce spacing in right pane chase queue */
+        .citation-workflow-rail {
+            gap: 0.25rem !important;
+        }
+        .citation-workflow-rail > div {
+            margin-bottom: 0.25rem !important;
+            padding: 0.25rem !important;
+        }
+        div[data-testid="stHorizontalBlockGap"] > div:has(> .citation-workflow-rail) {
+            gap: 0.25rem !important;
+        }
+        /* Make each column scroll independently - target Streamlit's column structure */
+        section[data-testid="stVerticalBlock"] {
+            overflow-y: auto !important;
+            max-height: calc(100vh - 120px) !important;
+        }
+        /* Don't scroll the top area */
+        header, div[data-testid="stHeader"], div[data-testid="stToolbar"] {
+            position: sticky !important;
+            top: 0 !important;
+            z-index: 100 !important;
+            background: var(--ws-app-bg) !important;
+        }
+        /* Make sure main content area scrolls */
+        div[data-testid="stAppViewContainer"] > div {
+            max-height: calc(100vh - 50px) !important;
+            overflow-y: auto !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def inject_attachment_panel_styles() -> None:
@@ -1280,116 +1388,155 @@ def _render_source_bin_row(item: dict) -> None:
     if progress is not None and progress < 1.0:
         st.progress(progress)
 
-    action_key = f"source-action::{queue_item_id}"
+    relation_key = f"source-relation::{queue_item_id}"
+    target_doc_key = f"source-target-doc::{queue_item_id}"
     assign_key = f"source-assign::{queue_item_id}"
-    row = st.columns([2, 3], gap="small")
-
-    def _on_action_change() -> None:
-        choice = st.session_state.get(action_key)
-        if not choice:
-            return
-        if choice == "View PDF":
-            snippet_source = (
-                (claim_text or "")
-                if claim_text
-                else (item.get("reference_hint") or {}).get("callout") or filename
-            )
-            snippet = _cmdf_snippet(str(snippet_source), words=4)
-            copied = clipboard.copy_text(snippet) if snippet else False
-            if snippet:
-                if copied:
-                    st.caption(f"Cmd-F snippet copied: {snippet}")
-                else:
-                    st.info(f"Copy this Cmd-F snippet: {snippet}")
-
-            local_path = (item.get("local_path") or "").strip()
-            if not local_path:
-                local_path = (
-                    _local_path_for_attachment(
-                        str(item.get("attachment_id") or queue_item_id)
-                    )
-                    or ""
-                )
-            if local_path:
-                err = clipboard.open_file(local_path)
-                if err:
-                    st.info(f"Could not open PDF: {err}")
-            else:
-                st.info(
-                    "No local PDF path recorded for this item. "
-                    "Upload from this machine to enable open."
-                )
-        elif choice == "Use as citing document":
-            local_path = (item.get("local_path") or "").strip() or (
-                _local_path_for_attachment(
-                    str(item.get("attachment_id") or queue_item_id)
-                )
-                or ""
-            )
-            if not local_path or not os.path.exists(local_path):
-                st.info(
-                    "No local PDF path is available to re-upload. "
-                    "Re-upload the PDF using 'Citing document' mode."
-                )
-            else:
-                api_url = get_api_url()
-                try:
-                    uploaded_doc = upload_pdf(
-                        api_url,
-                        _LocalUploadFile(
-                            local_path,
-                            name=str(
-                                item.get("filename") or os.path.basename(local_path)
-                            ),
-                        ),
-                        project_id=get_project_id(),
-                        auto_process=bool(
-                            st.session_state.get("auto_extract_on_upload")
-                        ),
-                    )
-                except RuntimeError as exc:
-                    st.error(f"Could not ingest PDF: {exc}")
-                else:
-                    if uploaded_doc and uploaded_doc.get("id"):
-                        refresh_ingested_docs(show_error=False)
-                        st.session_state["selected_doc_id"] = uploaded_doc["id"]
-                        st.session_state["selected_doc_choice"] = uploaded_doc["id"]
-                        st.session_state["active_document"] = uploaded_doc
-                        # Archive the source-bin item to avoid duplicates/confusion.
-                        if not archived:
-                            attachment_queue.archive_attachment(
-                                str(queue_item_id), archived=True
-                            )
-        elif choice == "Retry":
-            if str(item.get("status") or "").strip().lower() == "error":
-                attachment_queue.retry_attachment(str(queue_item_id))
-        elif choice == "Archive":
-            if not archived:
-                attachment_queue.archive_attachment(str(queue_item_id), archived=True)
-        elif choice == "Unarchive":
-            if archived:
-                attachment_queue.archive_attachment(str(queue_item_id), archived=False)
-
-        st.session_state[action_key] = None
-        _rerun()
+    row = st.columns([3, 2], gap="small")
 
     with row[0]:
-        action_options = [
-            None,
-            "View PDF",
-            "Use as citing document",
-            "Retry",
-            "Archive",
-            "Unarchive",
-        ]
-        st.selectbox(
-            "Action",
-            action_options,
-            key=action_key,
-            format_func=lambda v: "Action…" if v is None else str(v),
-            on_change=_on_action_change,
+        st.radio(
+            "Relationship",
+            ["is cited by", "cites"],
+            key=relation_key,
+            horizontal=False,
             label_visibility="collapsed",
         )
+
+        ledger_payload = _ledger_fetch(get_api_url(), force=False)
+        ledger_rows = [
+            r
+            for r in (ledger_payload.get("rows") or [])
+            if isinstance(r, dict) and r.get("ingest_id")
+        ]
+
+        def _target_doc_label(row_data: dict) -> str:
+            short = str(row_data.get("short") or "").strip()
+            title = str(row_data.get("title") or "").strip()
+            words = [w for w in title.split() if w][:2]
+            title_part = " ".join(words)
+            if short and title_part:
+                return f"{short} {title_part}..."
+            if short:
+                return short
+            return title or "Document"
+
+        target_options = [
+            (str(r.get("ingest_id")), _target_doc_label(r))
+            for r in ledger_rows
+            if str(r.get("ingest_id") or "").strip()
+        ]
+        option_values = [v for v, _ in target_options]
+        label_lookup = {v: lbl for v, lbl in target_options}
+        num_by_ingest = {
+            str(r.get("ingest_id")): int(r.get("num") or 0)
+            for r in ledger_rows
+            if str(r.get("ingest_id") or "").strip()
+        }
+
+        st.selectbox(
+            "All placed documents",
+            option_values,
+            key=target_doc_key,
+            format_func=lambda v: label_lookup.get(str(v), str(v)),
+            label_visibility="collapsed",
+        )
+
+        if st.button(":material/check_circle:", key=f"source-place-submit::{queue_item_id}", use_container_width=True):
+            relation = str(st.session_state.get(relation_key) or "is cited by")
+            target_ingest_id = str(st.session_state.get(target_doc_key) or "").strip()
+            if not target_ingest_id:
+                st.info("Select a placed document first.")
+            else:
+                api_url = get_api_url()
+                target_num = int(num_by_ingest.get(target_ingest_id) or 0)
+                source_ingest_id = str(
+                    (item.get("backend_details") or {}).get("source_ingest_id")
+                    or item.get("doc_id")
+                    or ""
+                ).strip()
+                if not source_ingest_id:
+                    src_attachment_id = str(item.get("attachment_id") or queue_item_id)
+                    try:
+                        promote_url = (
+                            f"{str(api_url).rstrip('/')}/attachments/"
+                            f"{src_attachment_id}/promote-ingest"
+                        )
+                        resp = requests.post(
+                            promote_url,
+                            headers={"X-Project-Id": get_project_id()},
+                            timeout=30,
+                        )
+                        resp.raise_for_status()
+                        promoted = (resp.json() or {}).get("attachment") or {}
+                        source_ingest_id = str(
+                            promoted.get("source_ingest_id")
+                            or promoted.get("doc_id")
+                            or ""
+                        ).strip()
+                        if promoted:
+                            item["backend_details"] = promoted
+                    except Exception:
+                        source_ingest_id = ""
+
+                source_num = int(num_by_ingest.get(source_ingest_id) or 0)
+                if source_num <= 0:
+                    st.info(
+                        "This stray document is not yet in the ledger as a placeable work. "
+                        "Wait for processing, then retry placement."
+                    )
+                elif target_num <= 0:
+                    st.info("Selected target is not a placeable ledger work.")
+                else:
+                    try:
+                        st.session_state["ledger_payload"] = ledger_api.place_relation(
+                            api_url,
+                            source_num=source_num,
+                            target_num=target_num,
+                            relation=relation,
+                            canonical=False,
+                            reviewer_uid=_active_reviewer_uid(),
+                            project_id=get_project_id(),
+                            user_id=_active_reviewer_uid(),
+                        )
+                    except RuntimeError as exc:
+                        st.error(str(exc))
+                    else:
+                        st.caption(
+                            "Placement suggestion recorded for review: "
+                            f"{label_lookup.get(target_ingest_id, target_ingest_id)}"
+                        )
+                        try:
+                            callout = st.session_state.get("selected_callout_tuple") or {}
+                            active_doc = str(st.session_state.get("selected_doc_id") or "").strip()
+                            callout_doc = str(callout.get("doc_id") or "").strip()
+                            ref_id = str(callout.get("target_id") or "").strip()
+                            callout_matches_target = bool(
+                                target_ingest_id
+                                and (active_doc == target_ingest_id or callout_doc == target_ingest_id)
+                            )
+                            if (
+                                relation == "is cited by"
+                                and source_ingest_id
+                                and target_ingest_id
+                                and ref_id
+                                and callout_matches_target
+                            ):
+                                st.session_state["ledger_payload"] = ledger_api.place_reference(
+                                    api_url,
+                                    citing_doc_id=target_ingest_id,
+                                    reference_id=ref_id,
+                                    cited_ingest_id=source_ingest_id,
+                                    canonical=False,
+                                    reviewer_uid=_active_reviewer_uid(),
+                                    project_id=get_project_id(),
+                                    user_id=_active_reviewer_uid(),
+                                )
+                        except RuntimeError as exc:
+                            st.warning(str(exc))
+                        st.session_state.pop("citation_context_cache", None)
+                        st.session_state.pop("citation_context", None)
+                        _ledger_fetch(api_url, force=True)
+                        _rerun()
 
     def _on_assign_change() -> None:
         selected_claim_id = st.session_state.get(assign_key)
@@ -1411,7 +1558,15 @@ def _render_source_bin_row(item: dict) -> None:
         if is_global_source:
             api_url = get_api_url()
             src_attachment_id = str(item.get("attachment_id") or queue_item_id)
-            headers = {"X-Project-Id": get_project_id()}
+            reviewer_uid = str(_active_reviewer_uid() or "").strip()
+            if not reviewer_uid:
+                st.warning("Select an active reviewer before assigning sources.")
+                return
+            headers = {
+                "X-Project-Id": get_project_id(),
+                "X-User-Id": reviewer_uid,
+                "X-Reviewer-Uid": reviewer_uid,
+            }
 
             # Ensure source_ingest_id exists when possible (helps graph auto-place).
             try:
@@ -1567,7 +1722,13 @@ def _ledger_fetch(api_url: str, *, force: bool = False) -> dict:
     return payload or {}
 
 
-def render_documents_panel(*, max_rows: int = 18) -> None:
+def _ledger_rows_cached() -> list[dict[str, Any]]:
+    payload = st.session_state.get("ledger_payload") or {}
+    rows = payload.get("rows") if isinstance(payload, dict) else []
+    return rows if isinstance(rows, list) else []
+
+
+def render_documents_panel(*, max_rows: Optional[int] = None) -> None:
     api_url = get_api_url()
     controls = st.columns([2, 1], gap="small")
     with controls[0]:
@@ -1587,7 +1748,7 @@ def render_documents_panel(*, max_rows: int = 18) -> None:
         help="Show documents that only exist as bibliography entries (no PDF yet).",
     )
 
-    st.caption("Upload PDFs via Intake (top of left pane).")
+    st.caption("Upload PDFs via Upload documents (top of left pane).")
 
     payload = _ledger_fetch(api_url, force=False)
     if payload.get("error"):
@@ -1678,20 +1839,48 @@ def render_documents_panel(*, max_rows: int = 18) -> None:
         _ledger_fetch(api_url, force=True)
 
     filtered_total = len(filtered)
-    if max_rows and filtered_total > int(max_rows):
+    if max_rows is not None and filtered_total > int(max_rows):
         st.caption(f"Showing {int(max_rows)} of {filtered_total} documents")
         filtered = filtered[: int(max_rows)]
 
+    seen_docs = {}
+    deduplicated = []
     for row in filtered:
+        short = str(row.get("short") or "").lower().strip()
+        title = str(row.get("title") or "").lower().strip()
+        if not short:
+            short = str(row.get("title") or "").lower().strip()
+        doc_key = short or title
+        if not doc_key:
+            continue
+        existing = seen_docs.get(doc_key)
+        if existing is None:
+            seen_docs[doc_key] = row
+            deduplicated.append(row)
+            continue
+
+        existing_score = int(bool(existing.get("ingest_id"))) + int(
+            str(existing.get("status") or "").strip().lower() == "green"
+        )
+        new_score = int(bool(row.get("ingest_id"))) + int(
+            str(row.get("status") or "").strip().lower() == "green"
+        )
+        if new_score > existing_score:
+            seen_docs[doc_key] = row
+            try:
+                idx = deduplicated.index(existing)
+                deduplicated[idx] = row
+            except Exception:
+                pass
+
+    for row in deduplicated:
         try:
             num = int(row.get("num"))
         except Exception:
             continue
         status = str(row.get("status") or "orange").strip().lower()
-        dot_class = (
-            "ledger-dot ledger-dot--green"
-            if status == "green"
-            else "ledger-dot ledger-dot--orange"
+        status_icon = (
+            "check_circle" if status == "green" else "running_with_errors"
         )
         short = str(row.get("short") or f"Document {num}")
         apa = str(row.get("apa") or short)
@@ -1711,6 +1900,10 @@ def render_documents_panel(*, max_rows: int = 18) -> None:
             if row.get("outgoing_live") is not None
             else outgoing
         )
+        suggested_pending = bool(
+            (row.get("incoming_suggested_live") or [])
+            or (row.get("outgoing_suggested_live") or [])
+        )
 
         deg_html = (
             f"<span class='doc-degree'>"
@@ -1718,73 +1911,69 @@ def render_documents_panel(*, max_rows: int = 18) -> None:
             f"</span>"
         )
 
-        cols = st.columns([1.1, 6.0, 0.9], gap="small")
+        title = row.get("title") or ""
+        title_hint = f" - {title}" if title else ""
+        extraction_status = str(row.get("extraction_status") or "").strip().lower()
+        extraction_error = str(row.get("extraction_error") or "").strip()
+        body_status = str(row.get("body_extraction_status") or "").strip().lower()
+        body_error = str(row.get("body_extraction_error") or "").strip()
+        resolution_status = str(row.get("resolution_status") or "").strip().lower()
+        resolution_error = str(row.get("resolution_error") or "").strip()
+        chips = []
+        if (
+            extraction_status == "running"
+            or body_status == "running"
+            or resolution_status == "running"
+        ):
+            chips.append("clock_loader_10")
+        elif body_status == "error":
+            chips.append("running_with_errors")
+        elif extraction_status == "error" or resolution_status == "error":
+            chips.append("running_with_errors")
+        elif suggested_pending:
+            chips.append("running_with_errors")
+        elif extracted and resolved:
+            chips.append("check_circle")
+        else:
+            chips.append("incomplete_circle")
+
+        tooltip_lines = [apa]
+        if extraction_status == "error" and extraction_error:
+            tooltip_lines.append(f"Extraction error: {extraction_error}")
+        if body_status == "error" and body_error:
+            tooltip_lines.append(f"Body error: {body_error}")
+        if resolution_status == "error" and resolution_error:
+            tooltip_lines.append(f"Resolution error: {resolution_error}")
+
+        row_icon = chips[0] if chips else status_icon
+        open_href = (
+            f"?doc={ingest_id}&docnum={int(num)}" if ingest_id else f"?docnum={int(num)}"
+        )
+
+        cols = st.columns([0.7, 6.3, 0.9, 0.7], gap="small")
         with cols[0]:
+            st.markdown(f":material/{row_icon}:")
+        with cols[1]:
             selected = bool(
                 int(st.session_state.get("documents_selected_num") or 0) == int(num)
             )
-            label = f"#{num}" + ("" if not selected else "")
-            if st.button(
-                label,
-                key=f"doc-select-{num}",
-                use_container_width=True,
-                type="primary" if selected else "secondary",
-            ):
-                st.session_state["documents_selected_num"] = int(num)
-                if ingest_id:
-                    _open_process_doc(str(ingest_id), reprocess=False)
-        with cols[1]:
-            title = row.get("title") or ""
-            title_hint = f" - {title}" if title else ""
-            extraction_status = str(row.get("extraction_status") or "").strip().lower()
-            extraction_error = str(row.get("extraction_error") or "").strip()
-            body_status = str(row.get("body_extraction_status") or "").strip().lower()
-            body_error = str(row.get("body_extraction_error") or "").strip()
-            resolution_status = str(row.get("resolution_status") or "").strip().lower()
-            resolution_error = str(row.get("resolution_error") or "").strip()
-            chips = []
-            if ingest_id:
-                chips.append("PDF")
-            if extraction_status == "running":
-                chips.append("E...")
-            elif extraction_status == "error":
-                chips.append("E!")
-            elif extracted:
-                chips.append("E")
-
-            if body_status == "running":
-                chips.append("B...")
-            elif body_status == "error":
-                chips.append("B!")
-            elif body_status == "complete":
-                chips.append("B")
-
-            if resolution_status == "running":
-                chips.append("R...")
-            elif resolution_status == "error":
-                chips.append("R!")
-            elif resolved:
-                chips.append("R")
-            chips_text = (" " + " ".join(chips)) if chips else ""
-            # Tooltip: full APA + stage errors.
-            tooltip_lines = [apa]
-            if extraction_status == "error" and extraction_error:
-                tooltip_lines.append(f"Extraction error: {extraction_error}")
-            if body_status == "error" and body_error:
-                tooltip_lines.append(f"Body error: {body_error}")
-            if resolution_status == "error" and resolution_error:
-                tooltip_lines.append(f"Resolution error: {resolution_error}")
-            tooltip = "\n".join(tooltip_lines)
+            row_class = "ledger-label ledger-label--link"
+            if selected:
+                row_class += " ledger-label--selected"
+            tooltip_text = html.escape("\n".join(tooltip_lines))
             st.markdown(
-                f"<div class='ledger-label' title='{html.escape(tooltip)}'>"
-                f"<span class='{dot_class}'></span> "
-                f"{html.escape(short)}{html.escape(title_hint)}"
-                f"<span class='doc-chips'>{html.escape(chips_text)}</span>"
-                f"</div>",
+                (
+                    f"<a class='{row_class}' href='{html.escape(open_href)}' target='_self' "
+                    f"title='{tooltip_text}'>"
+                    f"{html.escape(short)}{html.escape(title_hint)}"
+                    "</a>"
+                ),
                 unsafe_allow_html=True,
             )
         with cols[2]:
             st.markdown(deg_html, unsafe_allow_html=True)
+        with cols[3]:
+            st.markdown(":material/open_in_browser:")
 
     # Editor for currently selected document.
     editor_doc = int(st.session_state.get("documents_selected_num") or 0)
@@ -1853,6 +2042,7 @@ def render_documents_panel(*, max_rows: int = 18) -> None:
                 int(editor_doc),
                 bool(st.session_state.get(assigned_key)),
                 project_id=get_project_id(),
+                user_id=_active_reviewer_uid(),
             )
         except RuntimeError as exc:
             st.error(str(exc))
@@ -1903,6 +2093,7 @@ def render_documents_panel(*, max_rows: int = 18) -> None:
                         int(editor_doc),
                         [int(n) for n in incoming_chosen],
                         project_id=get_project_id(),
+                        user_id=_active_reviewer_uid(),
                     )
                 except RuntimeError as exc:
                     st.error(str(exc))
@@ -1927,6 +2118,7 @@ def render_documents_panel(*, max_rows: int = 18) -> None:
                         int(editor_doc),
                         [int(n) for n in outgoing_chosen],
                         project_id=get_project_id(),
+                        user_id=_active_reviewer_uid(),
                     )
                 except RuntimeError as exc:
                     st.error(str(exc))
@@ -4802,14 +4994,14 @@ def _now_iso() -> str:
 def _intake_stage_icon(stage: str) -> str:
     normalized = (stage or "").strip().lower()
     if normalized in {"unknown", "awaiting-intent"}:
-        return "?"
+        return ":material/running_with_errors:"
     if normalized in {"error", "failed"}:
-        return "!"
+        return ":material/running_with_errors:"
     if normalized in {"complete", "done"}:
-        return "OK"
+        return ":material/check_circle:"
     if normalized in {"near-duplicate"}:
-        return "!"
-    return "..."
+        return ":material/running_with_errors:"
+    return ":material/clock_loader_10:"
 
 
 def _intake_guess_intent(*, filename: str, data: bytes) -> str:
@@ -5106,7 +5298,7 @@ def _intake_refresh_item_status(item: dict) -> None:
         _intake_touch(item, stage="queued")
 
 
-def render_intake_panel(*, max_rows: int = 18) -> None:
+def render_intake_panel(*, max_rows: Optional[int] = None) -> None:
     st.markdown("**Drop PDFs**")
     uploader_key = (
         f"intake-dropzone::{int(st.session_state.get('intake_dropzone_nonce') or 0)}"
@@ -5176,8 +5368,8 @@ def render_intake_panel(*, max_rows: int = 18) -> None:
         )
         return
 
-    shown = inbox[: int(max_rows)] if max_rows else list(inbox)
-    if max_rows and len(inbox) > int(max_rows):
+    shown = inbox[: int(max_rows)] if max_rows is not None else list(inbox)
+    if max_rows is not None and len(inbox) > int(max_rows):
         st.caption(f"Showing {int(max_rows)} of {len(inbox)} intake items")
 
     for item in shown:
@@ -5292,7 +5484,7 @@ def render_intake_panel(*, max_rows: int = 18) -> None:
                     _rerun()
 
 
-def render_sources_panel(*, max_rows: int = 18) -> None:
+def render_sources_panel(*, max_rows: Optional[int] = None) -> None:
     """Project-shared Source Inbox.
 
     Backed by `GET /attachments?archived=false` (project-scoped via X-Project-Id).
@@ -5342,10 +5534,10 @@ def render_sources_panel(*, max_rows: int = 18) -> None:
 
     inbox = [it for it in items if _is_global_source(it)]
     if not inbox:
-        st.caption("No sources yet. Route a PDF as Source from Intake.")
+        st.caption("No sources yet. Route a PDF as Source from Upload documents.")
         return
 
-    if max_rows and len(inbox) > int(max_rows):
+    if max_rows is not None and len(inbox) > int(max_rows):
         st.caption(f"Showing {int(max_rows)} of {len(inbox)} source items")
         inbox = inbox[: int(max_rows)]
 
@@ -5354,38 +5546,23 @@ def render_sources_panel(*, max_rows: int = 18) -> None:
 
 
 def render_workspace_left_pane() -> None:
-    reviewer = _active_reviewer_uid()
-    suffix = _reviewer_state_suffix(reviewer)
 
-    def _rows_slider(section_id: str, *, default: int) -> int:
-        key = f"left-pane-rows::{section_id}::{suffix}"
-        if key not in st.session_state:
-            st.session_state[key] = int(default)
-        return int(
-            st.slider(
-                "Section height (rows)",
-                min_value=6,
-                max_value=40,
-                key=key,
-            )
-        )
+    st.markdown(
+        '<div class="ws-pane-header"><div class="ws-pane-header__title">Admin</div></div>',
+        unsafe_allow_html=True,
+    )
 
-    with st.expander("Intake", expanded=True):
-        intake_rows = _rows_slider("intake", default=14)
-        render_intake_panel(max_rows=intake_rows)
+    with st.expander("Upload documents", expanded=True):
+        render_intake_panel(max_rows=None)
 
-    with st.expander("Documents", expanded=True):
-        docs_rows = _rows_slider("documents", default=18)
-        render_documents_panel(max_rows=docs_rows)
+    with st.expander("Placed documents", expanded=True):
+        render_documents_panel(max_rows=None)
 
-    with st.expander("Sources", expanded=False):
-        sources_rows = _rows_slider("sources", default=18)
-        render_sources_panel(max_rows=sources_rows)
+    with st.expander("Stray documents", expanded=False):
+        render_sources_panel(max_rows=None)
 
-    with st.expander("Project/Settings", expanded=False):
+    with st.expander("Project", expanded=False):
         render_project_panel()
-        with st.expander("Settings", expanded=False):
-            render_settings_controls()
 
     with st.expander("Advanced", expanded=False):
         st.file_uploader(
@@ -5396,14 +5573,160 @@ def render_workspace_left_pane() -> None:
             on_change=handle_upload,
         )
         st.markdown("---")
+
+    with st.expander("⚙ Settings", expanded=False):
+        render_settings_controls()
         st.toggle("Dense", key=WORKSPACE_DENSE_MODE)
 
 
+def render_activity_console_strip() -> None:
+    lines: list[str] = []
+    now = datetime.now(timezone.utc).strftime("%H:%M:%S")
+    lines.append(f"[{now}] Workspace active")
+    followed = st.session_state.get("followed_citations") or []
+    if isinstance(followed, list):
+        lines.append(f"[rail] followed_citations={len(followed)}")
+
+    inbox = st.session_state.get("intake_inbox") or []
+    for item in inbox[-8:]:
+        if not isinstance(item, dict):
+            continue
+        fname = str(item.get("filename") or "document.pdf")
+        stage = str(item.get("stage") or "queued")
+        lines.append(f"[intake] {fname} -> {stage}")
+
+    try:
+        for att in (attachment_queue.get_queue_items() or [])[-8:]:
+            if not isinstance(att, dict):
+                continue
+            name = str(att.get("filename") or att.get("id") or "attachment")
+            status = str(att.get("status") or "pending")
+            lines.append(f"[attachment] {name} -> {status}")
+    except Exception:
+        pass
+
+    lines = lines[-30:]
+    st.session_state["activity_console_lines"] = lines
+
+    st.markdown("<div class='activity-strip'>", unsafe_allow_html=True)
+    preview = "\n".join(lines[-4:]) if lines else "(idle)"
+    if st.button(
+        ":material/terminal: Activity Console",
+        key="activity-console-toggle",
+        use_container_width=True,
+    ):
+        st.session_state["activity_console_open"] = not bool(
+            st.session_state.get("activity_console_open")
+        )
+    st.code(preview, language="bash")
+    if bool(st.session_state.get("activity_console_open")):
+        st.code("\n".join(lines), language="bash")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
 def draw_workspace() -> None:
+    # Top banner - outside columns
+    st.markdown('<div class="app-banner">os-ERIN</div>', unsafe_allow_html=True)
+    
+    # CSS for all panes
+    st.markdown("""
+    <style>
+    /* Remove top gap */
+    .block-container {
+        padding-top: 0rem !important;
+    }
+    header[data-testid="stHeader"] {
+        height: 0 !important;
+        min-height: 0 !important;
+    }
+    div[data-testid="stToolbar"] { display: none !important; }
+    [data-testid="stAppViewContainer"] { margin-top: 0 !important; }
+    /* Top banner */
+    .app-banner {
+        font-size: 1.4rem;
+        font-weight: bold;
+        padding: 0.5rem 1rem;
+        background: var(--ws-surface);
+        border-bottom: 1px solid var(--ws-border);
+        margin-bottom: 0rem;
+    }
+    .ms {
+        font-family: "Material Symbols Outlined";
+        font-weight: 400;
+        font-style: normal;
+        font-size: 1.05rem;
+        line-height: 1;
+        letter-spacing: normal;
+        text-transform: none;
+        display: inline-block;
+        white-space: nowrap;
+        direction: ltr;
+    }
+    /* Sticky headers - adjust positions */
+    .ws-pane-header {
+        position: sticky !important;
+        top: 0px !important;
+        z-index: 100 !important;
+        background: var(--ws-surface) !important;
+    }
+    .ws-contextbar {
+        position: sticky !important;
+        top: 0px !important;
+        z-index: 99 !important;
+        background: var(--ws-app-bg) !important;
+    }
+    .ws-tabs {
+        position: sticky !important;
+        top: 60px !important;
+        z-index: 98 !important;
+        background: var(--ws-app-bg) !important;
+    }
+    div[data-testid="stExpander"] summary {
+        background: var(--ws-app-bg) !important;
+        margin: 0 !important;
+    }
+    div[data-testid="stVerticalBlockBorderWrapper"] {
+        overscroll-behavior: contain !important;
+    }
+    div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] div[data-testid="stVerticalBlockBorderWrapper"] {
+        height: 76vh !important;
+    }
+    .citation-workflow-rail div[data-testid="stButton"] > button {
+        justify-content: flex-start !important;
+        text-align: left !important;
+    }
+    div[data-testid="stButton"] > button {
+        justify-content: flex-start !important;
+        text-align: left !important;
+    }
+    .activity-strip {
+        margin-top: 0.5rem;
+        border-top: 1px solid var(--ws-border);
+        padding-top: 0.25rem;
+    }
+    .ledger-label--link {
+        text-decoration: underline;
+        text-underline-offset: 2px;
+        color: var(--ws-text);
+        display: block;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
     left, center, right = st.columns([3, 6, 4], gap="large")
     with left:
-        render_workspace_left_pane()
-    draw_ingestion_panel(center=center, right=right)
+        left_pane = st.container(height=1200, border=False)
+        with left_pane:
+            render_workspace_left_pane()
+    with center:
+        center_pane = st.container(height=1200, border=False)
+    with right:
+        right_pane = st.container(height=1200, border=False)
+    draw_ingestion_panel(center=center_pane, right=right_pane)
+    render_activity_console_strip()
 
 
 def draw_ingestion_panel(*, center, right) -> None:
@@ -5422,15 +5745,19 @@ def draw_ingestion_panel(*, center, right) -> None:
 
     params = _read_query_params()
     param_doc = params.get("doc")
+    param_docnum = params.get("docnum")
     param_cite = params.get("cite")
     param_target = params.get("target")
+    param_sid = params.get("sid")
     if isinstance(param_doc, list):
         param_doc = param_doc[0] if param_doc else None
     if isinstance(param_cite, list):
         param_cite = param_cite[0] if param_cite else None
     if isinstance(param_target, list):
         param_target = param_target[0] if param_target else None
-    should_clear_params = bool(param_doc or param_cite or param_target)
+    if isinstance(param_sid, list):
+        param_sid = param_sid[0] if param_sid else None
+    should_clear_params = bool(param_doc or param_docnum or param_cite or param_target or param_sid)
 
     docs = st.session_state.get("ingested_docs")
     if docs is None or not st.session_state.get("_ingested_docs_loaded"):
@@ -5438,6 +5765,35 @@ def draw_ingestion_panel(*, center, right) -> None:
         st.session_state["_ingested_docs_loaded"] = True
     elif should_clear_params:
         docs = refresh_ingested_docs(show_error=False)
+
+    if (not param_doc) and param_docnum:
+        try:
+            wanted_num = int(str(param_docnum))
+        except Exception:
+            wanted_num = None
+        if wanted_num is not None:
+            found_doc_id = None
+            for d in (docs or []):
+                if not isinstance(d, dict):
+                    continue
+                try:
+                    if int(d.get("num") or -1) == wanted_num and d.get("id"):
+                        found_doc_id = str(d.get("id"))
+                        break
+                except Exception:
+                    continue
+            if not found_doc_id:
+                for r in (_ledger_rows_cached() or []):
+                    if not isinstance(r, dict):
+                        continue
+                    try:
+                        if int(r.get("num") or -1) == wanted_num and r.get("ingest_id"):
+                            found_doc_id = str(r.get("ingest_id"))
+                            break
+                    except Exception:
+                        continue
+            if found_doc_id:
+                param_doc = found_doc_id
 
     if param_doc and str(param_doc) != str(
         st.session_state.get("selected_doc_id") or ""
@@ -5462,18 +5818,11 @@ def draw_ingestion_panel(*, center, right) -> None:
         return
     doc_id = st.session_state.get("selected_doc_id")
     if not doc_id:
-        # Auto-select the most recently uploaded document so the workspace
-        # always has a default context (Graph should not require a start point).
-        first = docs[0] if isinstance(docs, list) and docs else None
-        first_id = (first or {}).get("id") if isinstance(first, dict) else None
-        if first_id:
-            st.session_state["selected_doc_id"] = str(first_id)
-            doc_id = str(first_id)
-            load_selected_document(show_error=False)
-        else:
-            with center:
-                st.info("Select a PDF to view details.")
-            return
+        with center:
+            st.info("Select a placed document to view details.")
+        with right:
+            st.info("Select a placed document to load citing spans.")
+        return
     document = st.session_state.get("active_document")
     if not document or document.get("id") != doc_id:
         document = load_selected_document(show_error=False)
@@ -5485,8 +5834,17 @@ def draw_ingestion_panel(*, center, right) -> None:
     # Document details are rendered at the bottom of the center pane.
     extraction = document.get("extraction") or {}
     extraction_data = extraction.get("data") or {}
+    body_paragraphs = (
+        (extraction_data.get("body") or {}).get("paragraphs") or []
+        if isinstance(extraction_data, dict)
+        else []
+    )
     resolution = document.get("resolution") or {}
     resolution_data = resolution.get("data") or []
+
+    if not body_paragraphs:
+        with center:
+            st.info("No extracted reading text is available for this document yet.")
 
     # NOTE: Citation context fetching is used to render the center-pane header.
     # Initialize api_url before defining any closures that reference it.
@@ -5519,18 +5877,9 @@ def draw_ingestion_panel(*, center, right) -> None:
                 st.session_state["citation_context"] = context
         return context
 
-    header = "Citation workspace"
     if selected_index is not None:
-        context = _get_context_cached(int(selected_index), selected_target)
-        reference = context.get("reference") or {}
-        resolution = context.get("resolution") or {}
-        summary, has_consolidated = build_citing_bibliography_summary(
-            reference, resolution
-        )
-        if has_consolidated and summary:
-            header = summary
-    with center:
-        st.caption(header)
+        # Warm cache for selected citation without rendering legacy header text.
+        _get_context_cached(int(selected_index), selected_target)
     extraction_stage = (
         (document.get("extraction") or {}) if isinstance(document, dict) else {}
     )
@@ -5960,20 +6309,33 @@ def draw_ingestion_panel(*, center, right) -> None:
             else:
                 select_citation(desired_idx, desired_tgt)
 
-    def _follow_citation(citation_index: int, target_id: str | None) -> None:
+    def _follow_citation(
+        citation_index: int,
+        target_id: str | None,
+        *,
+        span_key: str | None = None,
+    ) -> None:
         """Add citation to chase queue, preserving discovery order.
         
         Writes to server-backed opinion layer for durability.
         Falls back to session_state on error.
         """
         normalized_target = normalize_target_id(target_id)
+        _rail_debug_log(
+            "follow_start",
+            doc_id=str(doc_id),
+            citation_index=int(citation_index),
+            target_id=str(normalized_target or ""),
+            span_key=str(span_key or ""),
+        )
         
         # Try server-backed approach first
         try:
-            reviewer_uid = _active_reviewer_uid()
+            reviewer_uid = _active_reviewer_uid() or "default"
             current_project_id = get_project_id()
-            if reviewer_uid and api_url and current_project_id:
-                # Resolve span_id
+            if api_url and current_project_id:
+                # Prefer per-occurrence sid when available so multi-citation
+                # sentences accumulate as distinct rail items.
                 span_id = resolve_span_id(
                     api_url,
                     current_project_id,
@@ -5981,42 +6343,142 @@ def draw_ingestion_panel(*, center, right) -> None:
                     citation_index,
                     normalized_target,
                 )
-                if span_id:
-                    # Write to server
-                    append_follow(
-                        api_url=api_url,
-                        project_id=current_project_id,
-                        reviewer_uid=reviewer_uid,
-                        doc_id=doc_id,
-                        citation_index=int(citation_index),
-                        target_id=normalized_target,
-                        span_id=span_id,
-                        status="follow",
-                        idempotency_key=f"follow:{span_id}:follow",
-                    )
-                    # Invalidate cache to force refresh
-                    st.session_state.pop("_followed_citations_cache", None)
-                    return
-        except Exception:
+                event_span_id = str(
+                    (str(span_key or "").strip() and f"sid:{str(span_key).strip()}")
+                    or span_id
+                    or f"sid:auto:{int(citation_index)}:{normalize_target_id(normalized_target) or ''}"
+                )
+                append_follow(
+                    api_url=api_url,
+                    project_id=current_project_id,
+                    reviewer_uid=reviewer_uid,
+                    doc_id=doc_id,
+                    citation_index=int(citation_index),
+                    target_id=normalized_target,
+                    span_id=event_span_id,
+                    status="follow",
+                    idempotency_key=(
+                        f"follow:{event_span_id}:{int(citation_index)}:"
+                        f"{normalize_target_id(normalized_target) or ''}:follow"
+                    ),
+                )
+                _rail_debug_log(
+                    "follow_append_server_ok",
+                    event_span_id=str(event_span_id),
+                    citation_index=int(citation_index),
+                    target_id=str(normalized_target or ""),
+                )
+                # Invalidate cache to force refresh
+                st.session_state.pop("_followed_citations_cache", None)
+        except Exception as exc:
+            _rail_debug_log(
+                "follow_append_server_error",
+                citation_index=int(citation_index),
+                target_id=str(normalized_target or ""),
+                error=str(exc),
+            )
             # Fall back to session_state on any error
             pass
         
-        # Fallback: session_state behavior
+        # Always maintain a local ordered list for robust UI behavior.
         followed = st.session_state.get("followed_citations") or []
+        resolved_span_key = str(span_key or "").strip() or None
+        if not resolved_span_key:
+            resolved_span_key = (
+                f"auto-{int(citation_index)}-{len(followed)+1}-{int(time.time()*1000)}"
+            )
+
         entry = {
             "doc_id": doc_id,
             "citation_index": int(citation_index),
             "target_id": normalized_target,
+            "span_key": resolved_span_key,
         }
-        if entry not in followed:
+        anchor_map = st.session_state.get("citation_anchor_map") or {}
+        if resolved_span_key and isinstance(anchor_map, dict):
+            info = anchor_map.get(str(resolved_span_key)) or {}
+            if isinstance(info, dict):
+                if str(info.get("doc_id") or "") == str(doc_id):
+                    entry["snippet"] = str(info.get("snippet") or "").strip() or None
+                    entry["order"] = int(info.get("order") or 0)
+        existing_same_sid = None
+        if resolved_span_key:
+            for existing in followed:
+                if str(existing.get("span_key") or "") == str(resolved_span_key):
+                    existing_same_sid = existing
+                    break
+
+        if existing_same_sid is not None:
+            _rail_debug_log(
+                "follow_local_same_sid_skip",
+                count=len(followed),
+                span_key=str(resolved_span_key or ""),
+                citation_index=int(citation_index),
+            )
+        elif entry not in followed:
             followed.append(entry)
+            followed.sort(
+                key=lambda item: (
+                    int(item.get("citation_index") or 0),
+                    int(item.get("order") or 0),
+                    str(item.get("target_id") or ""),
+                )
+            )
             st.session_state["followed_citations"] = followed
+            _rail_debug_log(
+                "follow_local_append",
+                count=len(followed),
+                added_span_key=str(resolved_span_key or ""),
+                citation_index=int(citation_index),
+            )
+        else:
+            _rail_debug_log(
+                "follow_local_duplicate_skip",
+                count=len(followed),
+                span_key=str(resolved_span_key or ""),
+                citation_index=int(citation_index),
+            )
 
     if param_cite is not None:
         try:
-            _follow_citation(
-                int(str(param_cite)), str(param_target) if param_target else None
+            event_key = "|".join(
+                [
+                    str(doc_id or ""),
+                    str(param_cite or ""),
+                    str(param_target or ""),
+                    str(param_sid or ""),
+                ]
             )
+            if str(st.session_state.get("_last_follow_event") or "") != event_key:
+                st.session_state["_last_follow_event"] = event_key
+                _rail_debug_log("follow_event_new", event_key=event_key)
+                if param_sid:
+                    st.session_state["active_queue_span_key"] = str(param_sid)
+                _follow_citation(
+                    int(str(param_cite)),
+                    str(param_target) if param_target else None,
+                    span_key=str(param_sid) if param_sid else None,
+                )
+                # If this click belongs to a clustered citespan sentence,
+                # enqueue all sibling citations in that same sentence.
+                sid_val = str(param_sid or "").strip()
+                anchor_map = st.session_state.get("citation_anchor_map") or {}
+                if sid_val and isinstance(anchor_map, dict):
+                    info = anchor_map.get(sid_val) or {}
+                    siblings = info.get("related_citations") if isinstance(info, dict) else []
+                    if isinstance(siblings, list):
+                        for sibling in siblings:
+                            try:
+                                s_idx = int(sibling.get("citation_index"))
+                            except Exception:
+                                continue
+                            s_tgt = normalize_target_id(sibling.get("target_id"))
+                            if s_idx == int(str(param_cite)) and s_tgt == normalize_target_id(param_target):
+                                continue
+                            _follow_citation(s_idx, s_tgt, span_key=sid_val)
+            else:
+                _rail_debug_log("follow_event_duplicate_skip", event_key=event_key)
+            
         except ValueError:
             pass
 
@@ -6059,6 +6521,46 @@ def draw_ingestion_panel(*, center, right) -> None:
                 return True
         return False
 
+    def _drop_followed_entry(cite_idx: int, tgt: Optional[str]) -> None:
+        normalized_tgt = normalize_target_id(tgt)
+
+        try:
+            reviewer_uid = _active_reviewer_uid()
+            current_project_id = get_project_id()
+            if reviewer_uid and api_url and current_project_id:
+                span_id = resolve_span_id(
+                    api_url,
+                    current_project_id,
+                    doc_id,
+                    int(cite_idx),
+                    normalized_tgt,
+                )
+                if span_id:
+                    append_follow(
+                        api_url=api_url,
+                        project_id=current_project_id,
+                        reviewer_uid=reviewer_uid,
+                        doc_id=doc_id,
+                        citation_index=int(cite_idx),
+                        target_id=normalized_tgt,
+                        span_id=span_id,
+                        status="ignore",
+                        idempotency_key=f"follow:{span_id}:ignore",
+                    )
+                    st.session_state.pop("_followed_citations_cache", None)
+        except Exception:
+            pass
+
+        st.session_state["followed_citations"] = [
+            item
+            for item in (st.session_state.get("followed_citations") or [])
+            if not (
+                item.get("doc_id") == doc_id
+                and int(item.get("citation_index") or -1) == int(cite_idx)
+                and normalize_target_id(item.get("target_id")) == normalized_tgt
+            )
+        ]
+
     def _render_chasing_panel(cite_idx: int, tgt: str | None, *, scope: str) -> None:
         meta = st.session_state.get("project_meta")
         reviewers = _project_reviewers(meta) if isinstance(meta, dict) else []
@@ -6082,6 +6584,7 @@ def draw_ingestion_panel(*, center, right) -> None:
             format_reference_summary=format_reference_summary,
             render_retrieval_instructions=claim_queue.render_retrieval_instructions,
             api_url=api_url,
+            project_id=get_project_id(),
             selected_model=st.session_state.get("selected_model"),
             active_reviewer_uid=active_uid,
             reviewers=reviewers,
@@ -6092,80 +6595,173 @@ def draw_ingestion_panel(*, center, right) -> None:
         st.markdown(
             '<div class="ws-pane-header">'
             '<div class="ws-pane-header__title">Citing spans</div>'
-            '<div class="ws-pane-header__meta">Collector</div>'
             "</div>",
+            unsafe_allow_html=True,
+        )
+        doc_header = ""
+        ledger = _ledger_rows_cached()
+        if isinstance(ledger, list):
+            for r in ledger:
+                if str(r.get("ingest_id") or "") == str(doc_id):
+                    doc_header = str(r.get("short") or r.get("title") or "").strip()
+                    break
+        if not doc_header:
+            doc_header = str(document.get("filename") or doc_id)
+        st.markdown(
+            f"<div class='ws-pane-header__meta'>From: {html.escape(doc_header)}</div>",
             unsafe_allow_html=True,
         )
         st.markdown('<div class="ws-pane-body">', unsafe_allow_html=True)
         st.markdown('<div class="citation-workflow-rail">', unsafe_allow_html=True)
 
-        # Keep the currently selected citation at the top of the queue.
-        if selected_index is not None:
-            _follow_citation(int(selected_index), selected_target)
-
-        # Try to get followed citations from server-backed opinion layer
-        # Fall back to session_state if server unavailable
+        # Build rail from durable server follows + local UI follows.
         followed: List[Dict[str, Any]] = []
         try:
-            reviewer_uid = _active_reviewer_uid()
+            reviewer_uid = _active_reviewer_uid() or "default"
             current_project_id = get_project_id()
-            if reviewer_uid and api_url and current_project_id:
+            if api_url and current_project_id:
                 server_follows = list_follows_by_doc(
                     api_url=api_url,
                     project_id=current_project_id,
                     reviewer_uid=reviewer_uid,
                     doc_id=doc_id,
                 )
-                # Convert server response to expected format
-                # Server returns span_id in response, we need doc_id, citation_index, target_id
                 for sf in server_follows:
-                    entry = {
-                        "doc_id": doc_id,
-                        "citation_index": sf.get("citation_index"),
-                        "target_id": sf.get("target_id"),
-                        "span_id": sf.get("span_id"),  # Store for write operations
-                    }
-                    followed.append(entry)
-                # Cache in session_state for fast re-renders
+                    sf_span_id = str(sf.get("span_id") or "").strip()
+                    sf_span_key = sf_span_id.replace("sid:", "") if sf_span_id.startswith("sid:") else None
+                    sf_cite_idx = int(sf.get("citation_index") or sf.get("sort_key") or 0)
+                    sf_order = int(sf.get("sort_key") or sf_cite_idx or 0)
+                    sf_snippet = None
+                    anchor_map = st.session_state.get("citation_anchor_map") or {}
+                    if sf_span_key and isinstance(anchor_map, dict):
+                        info = anchor_map.get(sf_span_key) or {}
+                        if isinstance(info, dict):
+                            sf_order = int(info.get("order") or sf_order)
+                            sf_snippet = str(info.get("snippet") or "").strip() or None
+                    followed.append(
+                        {
+                            "doc_id": doc_id,
+                            "citation_index": sf_cite_idx,
+                            "target_id": sf.get("target_id"),
+                            "span_id": sf_span_id,
+                            "span_key": sf_span_key,
+                            "order": sf_order,
+                            "snippet": sf_snippet,
+                        }
+                    )
                 st.session_state["_followed_citations_cache"] = followed
+                _rail_debug_log(
+                    "rail_server_follows",
+                    count=len(server_follows),
+                    doc_id=str(doc_id),
+                )
         except Exception:
-            # Fall back to session_state cache or empty list
             cached = st.session_state.get("_followed_citations_cache") or []
             followed = [
-                entry
-                for entry in cached
-                if entry.get("doc_id") == doc_id
+                entry for entry in cached if entry.get("doc_id") == doc_id
             ]
+            _rail_debug_log(
+                "rail_server_follows_error",
+                cached_count=len(followed),
+                doc_id=str(doc_id),
+            )
 
-        # If still no followed, try session_state as last resort
-        if not followed:
-            followed = [
-                entry
-                for entry in (st.session_state.get("followed_citations") or [])
-                if entry.get("doc_id") == doc_id
-            ]
+        local_followed = [
+            entry
+            for entry in (st.session_state.get("followed_citations") or [])
+            if entry.get("doc_id") == doc_id
+        ]
+        for entry in local_followed:
+            if entry not in followed:
+                followed.append(entry)
+
+        deduped_followed: list[dict[str, Any]] = []
+        dedupe_index: dict[str, int] = {}
+        for entry in followed:
+            sid = str(entry.get("span_key") or entry.get("span_id") or "").strip()
+            if sid.startswith("sid:"):
+                sid = sid.replace("sid:", "", 1)
+            if not sid:
+                sid = (
+                    f"cite:{int(entry.get('citation_index') or 0)}:"
+                    f"{normalize_target_id(entry.get('target_id')) or ''}"
+                )
+            if sid in dedupe_index:
+                pos = dedupe_index[sid]
+                existing = deduped_followed[pos]
+                merged = dict(existing)
+                for key in (
+                    "snippet",
+                    "span_key",
+                    "span_id",
+                    "target_id",
+                    "citation_index",
+                    "order",
+                ):
+                    v_new = entry.get(key)
+                    if v_new not in (None, "", 0):
+                        merged[key] = v_new
+                if int(merged.get("order") or 0) == 0:
+                    merged["order"] = int(entry.get("citation_index") or 0)
+                deduped_followed[pos] = merged
+            else:
+                candidate = dict(entry)
+                if int(candidate.get("order") or 0) == 0:
+                    candidate["order"] = int(candidate.get("citation_index") or 0)
+                dedupe_index[sid] = len(deduped_followed)
+                deduped_followed.append(candidate)
+        followed = deduped_followed
+
+        _rail_debug_log(
+            "rail_merge",
+            server_plus_local_count=len(followed),
+            local_count=len(local_followed),
+            doc_id=str(doc_id),
+        )
 
         # Display in primary-text order.
         followed.sort(
             key=lambda item: (
                 int(item.get("citation_index") or 0),
+                int(item.get("order") or 0),
                 str(item.get("target_id") or ""),
             )
         )
+        _rail_debug_log(
+            "rail_sorted",
+            count=len(followed),
+            keys=[
+                {
+                    "cite": int(item.get("citation_index") or 0),
+                    "order": int(item.get("order") or 0),
+                    "sid": str(item.get("span_key") or item.get("span_id") or ""),
+                }
+                for item in followed[:20]
+            ],
+        )
 
         def _queue_label(entry: dict) -> str:
-            cite_idx = int(entry.get("citation_index"))
+            snippet = str(entry.get("snippet") or "").strip()
+            if snippet:
+                return _sentence_label(snippet)
+            try:
+                cite_idx = int(entry.get("citation_index") or 0)
+            except Exception:
+                cite_idx = 0
             tgt = normalize_target_id(entry.get("target_id"))
             context = _get_context_cached(cite_idx, tgt)
             cite_text = (
-                context.get("citing_prefix")
-                or context.get("citing_sentence")
+                context.get("citing_sentence")
                 or context.get("sentence")
+                or context.get("citing_prefix")
                 or ""
             )
-            return (
-                _sentence_label(cite_text) if cite_text else f"Citation {cite_idx + 1}"
-            )
+            label = _sentence_label(cite_text) if cite_text else f"Citation {cite_idx + 1}"
+            if re.fullmatch(r"\(?\d{4}\)?\s*(and|;|,)?\s*", label.strip(), re.IGNORECASE):
+                return f"Citation {cite_idx + 1}"
+            if len(label.strip()) <= 8:
+                return f"Citation {cite_idx + 1}"
+            return label
 
         def _queue_status(cite_idx: int, tgt: Optional[str]) -> Dict[str, bool]:
             reviewer_state = _reviewer_state_suffix(_active_reviewer_uid())
@@ -6183,62 +6779,23 @@ def draw_ingestion_panel(*, center, right) -> None:
             }
 
         def _queue_open(cite_idx: int, tgt: Optional[str]) -> None:
-            _follow_citation(int(cite_idx), tgt)
             select_citation(int(cite_idx), tgt)
-            _set_query_params(doc=doc_id, cite=int(cite_idx), target=tgt)
 
         def _queue_drop(cite_idx: int, tgt: Optional[str]) -> None:
-            """Drop citation from chase queue.
-            
-            Writes ignore status to server-backed opinion layer.
-            Falls back to session_state on error.
-            """
-            normalized_tgt = normalize_target_id(tgt)
-            
-            # Try server-backed approach first (append-only ignore)
+            _drop_followed_entry(int(cite_idx), normalize_target_id(tgt))
+
+        drop_request = st.session_state.pop("queue_drop_request", None)
+        if isinstance(drop_request, dict) and str(drop_request.get("doc_id") or "") == str(doc_id):
             try:
-                reviewer_uid = _active_reviewer_uid()
-                current_project_id = get_project_id()
-                if reviewer_uid and api_url and current_project_id:
-                    # Resolve span_id
-                    span_id = resolve_span_id(
-                        api_url,
-                        current_project_id,
-                        doc_id,
-                        cite_idx,
-                        normalized_tgt,
-                    )
-                    if span_id:
-                        # Write ignore status to server (append-only)
-                        append_follow(
-                            api_url=api_url,
-                            project_id=current_project_id,
-                            reviewer_uid=reviewer_uid,
-                            doc_id=doc_id,
-                            citation_index=int(cite_idx),
-                            target_id=normalized_tgt,
-                            span_id=span_id,
-                            status="ignore",
-                            idempotency_key=f"follow:{span_id}:ignore",
-                        )
-                        # Invalidate cache to force refresh
-                        st.session_state.pop("_followed_citations_cache", None)
-                        return
+                rq_idx = int(drop_request.get("citation_index"))
             except Exception:
-                # Fall back to session_state on any error
-                pass
-            
-            # Fallback: session_state behavior (filter out the dropped citation)
-            st.session_state["followed_citations"] = [
-                item
-                for item in (st.session_state.get("followed_citations") or [])
-                if not (
-                    item.get("doc_id") == doc_id
-                    and int(item.get("citation_index")) == int(cite_idx)
-                    and normalize_target_id(item.get("target_id"))
-                    == normalize_target_id(tgt)
-                )
-            ]
+                rq_idx = None
+            rq_tgt = normalize_target_id(drop_request.get("target_id"))
+            if rq_idx is not None:
+                _drop_followed_entry(rq_idx, rq_tgt)
+                if selected_index is not None and int(selected_index) == int(rq_idx):
+                    st.session_state["citation_selected_index"] = None
+                    st.session_state["citation_selected_target"] = None
 
         def _queue_panel(cite_idx: int, tgt: Optional[str], scope: str) -> None:
             _render_chasing_panel(int(cite_idx), normalize_target_id(tgt), scope=scope)
@@ -6262,33 +6819,19 @@ def draw_ingestion_panel(*, center, right) -> None:
         st.markdown("</div>", unsafe_allow_html=True)
 
     with center:
-        project_name = (
-            str(st.session_state.get("project-name") or "").strip()
-            or str(
-                (st.session_state.get("project_meta") or {}).get("name") or ""
-            ).strip()
-            or "Project"
-        )
         doc_label = str(document.get("filename") or doc_id)
         if extraction_data.get("metadata", {}).get("title"):
             doc_label = str(extraction_data.get("metadata", {}).get("title"))
 
-        project_html = html.escape(project_name)
         doc_html = html.escape(doc_label)
-        st.markdown(
-            (
-                "<div class='ws-contextbar'>"
-                f"<div class='ws-contextbar__project'>{project_html}</div>"
-                f"<div class='ws-contextbar__doc'>{doc_html}</div>"
-                "</div>"
-            ),
-            unsafe_allow_html=True,
-        )
         st.markdown(
             '<div class="ws-pane-header">'
             '<div class="ws-pane-header__title">Work area</div>'
-            '<div class="ws-pane-header__meta">Reading / Chasing / Surfing</div>'
             "</div>",
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            f"<div class='ws-contextbar'><div class='ws-contextbar__doc'>{doc_html}</div></div>",
             unsafe_allow_html=True,
         )
         st.markdown('<div class="ws-pane-body">', unsafe_allow_html=True)
@@ -6323,7 +6866,9 @@ def draw_ingestion_panel(*, center, right) -> None:
             else:
                 j_doc_state = {}
 
-            for para in paragraphs or []:
+            anchor_map: dict[str, dict[str, Any]] = {}
+            order_counter = 0
+            for para_idx, para in enumerate(paragraphs or []):
                 para_sentences = para.get("sentences") or []
                 if not para_sentences:
                     # Backward compatibility: older backend may return flat segments.
@@ -6335,8 +6880,30 @@ def draw_ingestion_panel(*, center, right) -> None:
                     ]
 
                 sentence_html: list[str] = []
-                for sent in para_sentences:
+                for sent_idx, sent in enumerate(para_sentences):
                     segments = sent.get("segments") or []
+                    sentence_snippet = " ".join(
+                        str(s.get("text") or "")
+                        for s in segments
+                        if s.get("type") == "text"
+                    ).strip()
+                    sentence_citations: list[dict[str, Any]] = []
+                    for seg in segments:
+                        if seg.get("type") != "citation":
+                            continue
+                        ci = seg.get("citation_index")
+                        if ci is None:
+                            continue
+                        rel_label = str(
+                            seg.get("label") or seg.get("callout") or ""
+                        ).strip()
+                        sentence_citations.append(
+                            {
+                                "citation_index": int(ci),
+                                "target_id": normalize_target_id(seg.get("target_id")),
+                                "label": rel_label,
+                            }
+                        )
                     sent_citations = set(sent.get("citation_indices") or [])
                     sent_selected = (
                         selected_index is not None and selected_index in sent_citations
@@ -6354,7 +6921,7 @@ def draw_ingestion_panel(*, center, right) -> None:
                         else "citation-sentence-row"
                     )
                     parts: list[str] = []
-                    for seg in segments:
+                    for seg_idx, seg in enumerate(segments):
                         seg_type = seg.get("type")
                         if seg_type == "text":
                             parts.append(html.escape(seg.get("text") or ""))
@@ -6385,6 +6952,19 @@ def draw_ingestion_panel(*, center, right) -> None:
                         if selected_index == cite_index:
                             chip_class += " citation-chip-selected"
                         normalized_target = normalize_target_id(target_id)
+                        span_key = hashlib.sha1(
+                            f"{doc_id}:{para_idx}:{sent_idx}:{sentence_snippet}".encode("utf-8")
+                        ).hexdigest()[:12]
+                        order_counter += 1
+                        snippet_text = sentence_snippet
+                        anchor_map[span_key] = {
+                            "doc_id": str(doc_id),
+                            "citation_index": int(cite_index),
+                            "target_id": normalized_target,
+                            "order": int(order_counter),
+                            "snippet": snippet_text,
+                            "related_citations": sentence_citations,
+                        }
 
                         if active_reviewer_uid:
                             status_snapshot = j_store.callout_status(
@@ -6409,8 +6989,13 @@ def draw_ingestion_panel(*, center, right) -> None:
                             chip_class += " citation-chip--unvalidated"
 
                         parts.append(f'<a id="{anchor}"></a>')
+                        parts.append(f'<a id="cite-span-{span_key}"></a>')
                         href = _citation_href(
-                            doc_id, cite_index, normalized_target, anchor
+                            doc_id,
+                            cite_index,
+                            normalized_target,
+                            anchor,
+                            span_key=span_key,
                         )
 
                         # Render chip inline as a hyperlink so click drives existing
@@ -6431,6 +7016,18 @@ def draw_ingestion_panel(*, center, right) -> None:
                 rendered_para = " ".join(sentence_html)
                 st.markdown(
                     f'<div class="citation-paragraph">{rendered_para}</div>',
+                    unsafe_allow_html=True,
+                )
+            st.session_state["citation_anchor_map"] = anchor_map
+            pending_span = str(st.session_state.pop("pending_scroll_span_key", "") or "").strip()
+            if pending_span:
+                st.markdown(
+                    (
+                        "<script>"
+                        f"(function(){{var el=document.getElementById('cite-span-{pending_span}');"
+                        "if(el){el.scrollIntoView({block:'center'});}}})();"
+                        "</script>"
+                    ),
                     unsafe_allow_html=True,
                 )
 

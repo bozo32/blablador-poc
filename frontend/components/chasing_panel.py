@@ -16,6 +16,7 @@ from frontend.state_keys import (
 from frontend.ingestion_api import auto_place_claim_source, confirm_claims
 from frontend.citation_anchors import maybe_attach_citation_anchor
 from frontend import judgment_api
+from frontend import graph_api
 from frontend import workflow_api
 from frontend.components import chase_queue as chase_queue_component
 
@@ -51,6 +52,7 @@ def render(
     format_reference_summary: Callable[[dict, dict], str],
     render_retrieval_instructions: Callable[..., None],
     api_url: str,
+    project_id: Optional[str],
     selected_model: Optional[str],
     active_reviewer_uid: Optional[str],
     reviewers: list[str],
@@ -144,11 +146,12 @@ def render(
                 sentence_text=sentence_text,
                 citation_index=int(citation_index),
                 target_id=str(target_id) if target_id else None,
-                reviewer_uid=reviewer_label,
+                reviewer_uid=str(active_reviewer_uid or "").strip(),
                 confirmed_claims=confirmed,
                 segmentation_model=(selected_model or "local"),
                 cited_work_id=prov.get("cited_work_id"),
                 citation_anchor=prov.get("citation_anchor"),
+                project_id=project_id,
             )
         except RuntimeError:
             # Non-blocking: evidence can still run without graph indexing.
@@ -169,9 +172,9 @@ def render(
 
     context = get_context_cached(int(citation_index), target_id)
     cite_text = (
-        context.get("citing_prefix")
-        or context.get("citing_sentence")
+        context.get("citing_sentence")
         or context.get("sentence")
+        or context.get("citing_prefix")
         or ""
     )
     if context.get("error"):
@@ -340,6 +343,8 @@ def render(
                             doc_id=str(doc_id),
                             citation_index=int(citation_index),
                             target_id=str(target_id),
+                            project_id=project_id,
+                            user_id=str(active_reviewer_uid or "").strip(),
                         )
                     except RuntimeError:
                         resp = None
@@ -352,11 +357,6 @@ def render(
                 f"Accepted {len(lines)} claim(s). "
                 f"Auto-placed sources for {placed} claim(s)."
             )
-            st.session_state["chase_intent"] = {
-                "doc_id": doc_id,
-                "citation_index": int(citation_index),
-                "target_id": target_id,
-            }
             st.session_state[mode_key] = "own"
             rerun()
 
@@ -413,14 +413,36 @@ def render(
     )
     st.session_state[canonical_segments] = seg_text
 
-    if st.button(
-        "Save",
-        key=scoped(
-            scope=scope,
-            canonical=f"save-claims-inline-{citation_index}-{reviewer_state}",
-        ),
-        type="primary",
-    ):
+    action_cols = st.columns([1, 1], gap="small")
+    with action_cols[0]:
+        save_clicked = st.button(
+            "Save",
+            key=scoped(
+                scope=scope,
+                canonical=f"save-claims-inline-{citation_index}-{reviewer_state}",
+            ),
+            type="primary",
+            use_container_width=True,
+        )
+    with action_cols[1]:
+        drop_clicked = st.button(
+            "Drop",
+            key=scoped(
+                scope=scope,
+                canonical=f"drop-citespan-inline-{citation_index}-{reviewer_state}",
+            ),
+            use_container_width=True,
+        )
+
+    if drop_clicked:
+        st.session_state["queue_drop_request"] = {
+            "doc_id": str(doc_id),
+            "citation_index": int(citation_index),
+            "target_id": target_id,
+        }
+        rerun()
+
+    if save_clicked:
         lines = [ln.strip() for ln in seg_text.splitlines() if ln.strip()]
         reviewer_segments[cite_key] = lines
         st.session_state[canonical_segments] = "\n".join(lines)
@@ -494,6 +516,8 @@ def render(
                         doc_id=str(doc_id),
                         citation_index=int(citation_index),
                         target_id=str(target_id),
+                        project_id=project_id,
+                        user_id=str(active_reviewer_uid or "").strip(),
                     )
                 except RuntimeError:
                     resp = None
@@ -521,12 +545,6 @@ def render(
             f"Saved {len(lines)} claim(s). Auto-placed sources for {placed} claim(s)."
         )
 
-        # Automatically enter chase mode after saving claims.
-        st.session_state["chase_intent"] = {
-            "doc_id": doc_id,
-            "citation_index": int(citation_index),
-            "target_id": target_id,
-        }
         st.session_state[mode_key] = "own"
         rerun()
 
@@ -569,9 +587,15 @@ def render(
             )
             st.session_state["workflow_selected_claim_id"] = selected_claim_id
 
+        seen_segment_ids: dict[str, int] = {}
         for idx, line in enumerate(accepted_lines):
             parsed = to_segment_dict(str(line))
             segment_id = parsed.get("segment_id") or f"seg-{idx+1}"
+            if segment_id in seen_segment_ids:
+                seen_segment_ids[segment_id] += 1
+                segment_id = f"{segment_id}_dup{seen_segment_ids[segment_id]}"
+            else:
+                seen_segment_ids[segment_id] = 0
             claim_id = (
                 f"cite:{doc_id}:{int(citation_index)}:{reviewer_state}:{segment_id}"
             )
@@ -627,31 +651,152 @@ def render(
 
         selected_run_id = runs_by_claim.get(selected_claim_id)
         if selected_run_id:
-            with st.expander("Requested works", expanded=True):
-                chase_queue_component.render_requested_works_queue(
-                    api_url=api_url,
-                    run_id=str(selected_run_id),
-                    claim_id=str(selected_claim_id),
-                    citing_doc_id=str(doc_id),
-                    reviewer_uid=reviewer_label,
-                    scope=f"workflow::{selected_claim_id}",
-                )
+            st.markdown("**Available works**")
+            chase_queue_component.render_requested_works_queue(
+                api_url=api_url,
+                run_id=str(selected_run_id),
+                claim_id=str(selected_claim_id),
+                citing_doc_id=str(doc_id),
+                reviewer_uid=reviewer_label,
+                scope=f"workflow::{selected_claim_id}",
+            )
 
-    st.markdown("**Retrieving**")
-    reference_id = target_id or (context.get("reference") or {}).get("id")
-    if not reference_id:
-        st.info("No target ID available for this citation.")
-        return
-    reference = context.get("reference") or {}
-    resolution = context.get("resolution") or {}
-    summary = format_reference_summary(reference, resolution)
-    if summary:
-        st.markdown("**Reference summary**")
-        st.markdown(summary)
-    with st.expander("Retrieval instructions", expanded=False):
-        render_retrieval_instructions(
-            api_url=api_url,
-            doc_id=doc_id,
-            reference_id=reference_id,
-            key_prefix=f"{scope}-{int(citation_index)}",
+    def _suggest_filename(reference: dict, resolution: dict) -> str:
+        raw_title = str(
+            resolution.get("title")
+            or reference.get("raw_reference")
+            or "reference"
         )
+        title_words = [w for w in re.findall(r"[A-Za-z0-9]+", raw_title) if w]
+        title_part = "-".join(w.lower() for w in title_words[:3]) or "reference"
+
+        surname = "work"
+        author_guess = str(
+            (resolution.get("grobid") or {}).get("first_author")
+            or (resolution.get("crossref") or {}).get("first_author")
+            or ""
+        ).strip()
+        if author_guess:
+            surname = re.sub(r"[^A-Za-z0-9]+", "-", author_guess.split()[-1]).lower()
+
+        year = str(resolution.get("year") or "nd").strip() or "nd"
+        return f"{surname}-{year}-{title_part}.pdf"
+
+    st.markdown("**Retrieval instructions**")
+
+    active_span_key = str(st.session_state.get("active_queue_span_key") or "").strip()
+    anchor_map = st.session_state.get("citation_anchor_map") or {}
+    related = []
+    if active_span_key and isinstance(anchor_map, dict):
+        related = (anchor_map.get(active_span_key) or {}).get("related_citations") or []
+
+    candidates = []
+    if related:
+        for rc in related:
+            try:
+                ci = int(rc.get("citation_index"))
+            except Exception:
+                continue
+            rt = rc.get("target_id")
+            lbl = str(rc.get("label") or "").strip()
+            candidates.append((ci, rt, lbl))
+    else:
+        candidates.append((int(citation_index), target_id, ""))
+
+    seen: set[tuple[int, str]] = set()
+    resolved_ref_cache: dict[str, Optional[str]] = {}
+
+    def _resolved_ingest_id(reference_id: str) -> Optional[str]:
+        rid = str(reference_id or "").strip()
+        if not rid:
+            return None
+        if rid not in resolved_ref_cache:
+            value: Optional[str] = None
+            try:
+                payload = graph_api.resolve_references(
+                    citing_doc_id=str(doc_id),
+                    reference_ids=[rid],
+                    project_id=project_id,
+                )
+                mapping = payload.get("mapping") if isinstance(payload, dict) else {}
+                if isinstance(mapping, dict):
+                    mapped = mapping.get(rid)
+                    text = str(mapped or "").strip()
+                    value = text or None
+            except Exception:
+                value = None
+            resolved_ref_cache[rid] = value
+        return resolved_ref_cache.get(rid)
+
+    def _status_icon(ctx: dict, resolved_ingest_id: Optional[str]) -> str:
+        if resolved_ingest_id:
+            return "check_circle"
+        resolution = ctx.get("resolution") if isinstance(ctx, dict) else {}
+        state = str((resolution or {}).get("status") or "").strip().lower()
+        if state in {"complete", "resolved", "done"}:
+            return "check_circle"
+        if state in {"error", "failed", "blocked"}:
+            return "running_with_errors"
+        if state in {"running", "queued", "pending"}:
+            return "clock_loader_10"
+        return "incomplete_circle"
+
+    for idx, (ci, rt, raw_label) in enumerate(candidates):
+        rt_norm = str(rt or "").strip()
+        dedupe_key = (int(ci), rt_norm)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+
+        ctx = get_context_cached(int(ci), rt_norm or None)
+        reference = ctx.get("reference") or {}
+        resolution = ctx.get("resolution") or {}
+        reference_id = rt_norm or str(reference.get("id") or "").strip()
+        resolved_ingest_id = _resolved_ingest_id(reference_id)
+
+        first_author = str(
+            (resolution.get("grobid") or {}).get("first_author")
+            or (resolution.get("crossref") or {}).get("first_author")
+            or ((resolution.get("authors") or [""])[0] if isinstance(resolution.get("authors"), list) else "")
+            or "Unknown"
+        ).strip()
+        surname = first_author.split()[-1] if first_author else "Unknown"
+        year = str(resolution.get("year") or "n.d.").strip() or "n.d."
+        if surname.lower() == "unknown":
+            raw_ref = str(reference.get("raw_reference") or "")
+            m_ref = re.search(r"([A-Za-z][A-Za-z\-']{2,})\D*(19\d{2}|20\d{2})", raw_ref)
+            if m_ref:
+                surname = m_ref.group(1)
+                year = m_ref.group(2)
+        if surname.lower() == "unknown" and raw_label:
+            m = re.search(r"([A-Za-z][A-Za-z\-']{2,})\D*(19\d{2}|20\d{2})", raw_label)
+            if m:
+                surname = m.group(1)
+                year = m.group(2)
+        icon_name = _status_icon(ctx, resolved_ingest_id)
+        title = f"{surname} ({year}) :material/{icon_name}:"
+        with st.expander(title, expanded=(idx == 0)):
+            st.markdown("**Resolved**" if resolved_ingest_id else "**Retrieving**")
+            if not reference_id:
+                st.info("No target ID available for this citation.")
+                continue
+
+            if resolved_ingest_id:
+                st.caption(f"Linked to uploaded source: `{resolved_ingest_id}`")
+
+            summary = format_reference_summary(reference, resolution)
+            if summary:
+                st.markdown("**Reference summary**")
+                st.markdown(summary)
+
+            suggested_name = _suggest_filename(reference, resolution)
+            if not resolved_ingest_id:
+                st.caption(f"Before uploading, change filename to `{suggested_name}`")
+
+            render_retrieval_instructions(
+                api_url=api_url,
+                doc_id=doc_id,
+                reference_id=reference_id,
+                resolved_ingest_id=resolved_ingest_id,
+                key_prefix=f"{scope}-{int(ci)}-{reference_id}",
+            )

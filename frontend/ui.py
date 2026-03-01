@@ -454,6 +454,7 @@ def handle_pdf_upload():
                     api_url,
                     file,
                     project_id=project_id,
+                    user_id=_active_reviewer_uid(),
                     auto_process=bool(st.session_state.get("auto_extract_on_upload")),
                 )
             except RuntimeError as exc:
@@ -473,7 +474,12 @@ def handle_pdf_upload():
         if doc_id and st.session_state.get("auto_extract_on_upload"):
             with st.spinner("Running extraction..."):
                 try:
-                    trigger_extraction(api_url, doc_id, project_id=project_id)
+                    trigger_extraction(
+                        api_url,
+                        doc_id,
+                        project_id=project_id,
+                        user_id=_active_reviewer_uid(),
+                    )
                     document = load_selected_document(show_error=False)
                     st.session_state["active_document"] = document
                     st.success("Extraction complete.")
@@ -483,7 +489,12 @@ def handle_pdf_upload():
         if doc_id and st.session_state.get("auto_resolve_on_upload"):
             with st.spinner("Resolving references..."):
                 try:
-                    trigger_resolution(api_url, doc_id, project_id=project_id)
+                    trigger_resolution(
+                        api_url,
+                        doc_id,
+                        project_id=project_id,
+                        user_id=_active_reviewer_uid(),
+                    )
                     document = load_selected_document(show_error=False)
                     st.session_state["active_document"] = document
                     st.success("Resolution complete.")
@@ -1457,13 +1468,21 @@ def _render_source_bin_row(item: dict) -> None:
                 if not source_ingest_id:
                     src_attachment_id = str(item.get("attachment_id") or queue_item_id)
                     try:
+                        acting_user = str(_active_reviewer_uid() or "").strip()
+                        if not acting_user:
+                            raise RuntimeError(
+                                "promote-ingest requires active reviewer identity"
+                            )
                         promote_url = (
                             f"{str(api_url).rstrip('/')}/attachments/"
                             f"{src_attachment_id}/promote-ingest"
                         )
                         resp = requests.post(
                             promote_url,
-                            headers={"X-Project-Id": get_project_id()},
+                            headers={
+                                "X-Project-Id": get_project_id(),
+                                "X-User-Id": acting_user,
+                            },
                             timeout=30,
                         )
                         resp.raise_for_status()
@@ -1816,6 +1835,7 @@ def render_documents_panel(*, max_rows: Optional[int] = None) -> None:
                         api_url,
                         str(ingest_id),
                         project_id=get_project_id(),
+                        user_id=_active_reviewer_uid(),
                         force=bool(reprocess),
                     )
                 except RuntimeError as exc:
@@ -1829,6 +1849,7 @@ def render_documents_panel(*, max_rows: Optional[int] = None) -> None:
                         api_url,
                         str(ingest_id),
                         project_id=get_project_id(),
+                        user_id=_active_reviewer_uid(),
                         force=bool(reprocess),
                     )
                 except RuntimeError:
@@ -1999,7 +2020,12 @@ def render_documents_panel(*, max_rows: Optional[int] = None) -> None:
                 use_container_width=True,
             ):
                 with st.spinner("Retrying extraction..."):
-                    trigger_extraction(api_url, str(ingest_id))
+                    trigger_extraction(
+                        api_url,
+                        str(ingest_id),
+                        project_id=get_project_id(),
+                        user_id=_active_reviewer_uid(),
+                    )
                 refresh_ingested_docs(show_error=False)
                 _ledger_fetch(api_url, force=True)
         if resolution_status == "error":
@@ -2010,7 +2036,12 @@ def render_documents_panel(*, max_rows: Optional[int] = None) -> None:
             ):
                 with st.spinner("Retrying resolution..."):
                     try:
-                        trigger_resolution(api_url, str(ingest_id))
+                        trigger_resolution(
+                            api_url,
+                            str(ingest_id),
+                            project_id=get_project_id(),
+                            user_id=_active_reviewer_uid(),
+                        )
                     except RuntimeError as exc:
                         st.error(str(exc))
                 refresh_ingested_docs(show_error=False)
@@ -3034,6 +3065,7 @@ def render_evidence_panel() -> None:
                                         cited_work_id=str(cited_work_id),
                                         reviewer_uid=reviewer_uid,
                                         role=str(role),
+                                        project_id=get_project_id(),
                                     )
                                 except RuntimeError as exc:
                                     st.error(str(exc))
@@ -3468,6 +3500,8 @@ def render_evidence_panel() -> None:
                                 doc_id=str(doc_id_hint),
                                 citation_index=int(cite_idx_hint),
                                 target_id=str(target_id),
+                                project_id=get_project_id(),
+                                user_id=_active_reviewer_uid(),
                             )
                         except RuntimeError as exc:
                             st.error(str(exc))
@@ -5075,6 +5109,7 @@ def _intake_route_citing(item_id: str) -> None:
             api_url,
             _BytesUploadFile(str(item.get("filename") or "document.pdf"), bytes(data)),
             project_id=project_id,
+            user_id=_active_reviewer_uid(),
             auto_process=auto_extract,
         )
     except RuntimeError as exc:
@@ -5255,7 +5290,12 @@ def _intake_refresh_item_status(item: dict) -> None:
             ):
                 _intake_touch(item, stage="resolving")
                 try:
-                    trigger_resolution(api_url, doc_id, project_id=project_id)
+                    trigger_resolution(
+                        api_url,
+                        doc_id,
+                        project_id=project_id,
+                        user_id=_active_reviewer_uid(),
+                    )
                 except RuntimeError as exc:
                     _intake_touch(item, stage="error", error=str(exc))
                     return
@@ -6164,13 +6204,14 @@ def draw_ingestion_panel(*, center, right) -> None:
                         sentence_text=sentence_text,
                         citation_index=int(cite_idx),
                         target_id=normalize_target_id(target_id),
-                        reviewer_uid=str(_active_reviewer_uid() or "default"),
+                        reviewer_uid=str(_active_reviewer_uid() or "").strip(),
                         confirmed_claims=confirmed_claims,
                         segmentation_model=str(
                             st.session_state.get("selected_model") or "local"
                         ),
                         cited_work_id=prov.get("cited_work_id"),
                         citation_anchor=prov.get("citation_anchor"),
+                        project_id=get_project_id(),
                     )
             except Exception:
                 pass
@@ -6204,6 +6245,8 @@ def draw_ingestion_panel(*, center, right) -> None:
                         doc_id=str(doc_id),
                         citation_index=int(cite_idx),
                         target_id=str(normalize_target_id(target_id)),
+                        project_id=get_project_id(),
+                        user_id=_active_reviewer_uid(),
                     )
                 except RuntimeError:
                     resp = None

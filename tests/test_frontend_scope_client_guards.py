@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from frontend import ledger_api, opinion_api
+from frontend import graph_api, ingestion_api, ledger_api, opinion_api
 
 
 class _FakeResponse:
@@ -106,3 +106,75 @@ def test_opinion_append_follow_sends_identity_headers(
     assert captured["headers"]["X-Project-Id"] == "proj-a"
     assert captured["headers"]["X-User-Id"] == "reviewer-a"
     assert captured["headers"]["X-Reviewer-Uid"] == "reviewer-a"
+
+
+def test_ingestion_mutation_fails_fast_without_project_or_user() -> None:
+    with pytest.raises(RuntimeError, match="project_id"):
+        ingestion_api.trigger_resolution(
+            "http://api",
+            "doc-1",
+            project_id=None,
+            user_id="reviewer-a",
+        )
+
+    with pytest.raises(RuntimeError, match="user_id"):
+        ingestion_api.trigger_resolution(
+            "http://api",
+            "doc-1",
+            project_id="proj-a",
+            user_id=None,
+        )
+
+
+def test_ingestion_mutation_sends_scope_identity_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def _fake_post(url: str, **kwargs):
+        captured["url"] = url
+        captured.update(kwargs)
+        return _FakeResponse({"document_id": "doc-1", "resolution": {"status": "running"}})
+
+    monkeypatch.setattr(ingestion_api.requests, "post", _fake_post)
+
+    payload = ingestion_api.trigger_resolution(
+        "http://api",
+        "doc-1",
+        project_id="proj-a",
+        user_id="reviewer-a",
+    )
+    assert payload["document_id"] == "doc-1"
+    assert captured["headers"] == {
+        "X-Project-Id": "proj-a",
+        "X-User-Id": "reviewer-a",
+    }
+
+
+def test_graph_mutation_fails_fast_without_scope_identity() -> None:
+    with pytest.raises(graph_api.GraphApiError, match="project_id"):
+        graph_api.reindex_docs(project_id=None, user_id="reviewer-a")
+
+    with pytest.raises(graph_api.GraphApiError, match="user_id"):
+        graph_api.reindex_docs(project_id="proj-a", user_id=None)
+
+
+def test_graph_reindex_sends_scope_identity_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def _fake_post(url: str, **kwargs):
+        captured["url"] = url
+        captured.update(kwargs)
+        return _FakeResponse({"ok": True})
+
+    monkeypatch.setattr(graph_api, "_api_root", lambda: "http://api")
+    monkeypatch.setattr(graph_api.requests, "post", _fake_post)
+
+    payload = graph_api.reindex_docs(project_id="proj-a", user_id="reviewer-a")
+    assert payload == {"ok": True}
+    assert captured["headers"] == {
+        "X-Project-Id": "proj-a",
+        "X-User-Id": "reviewer-a",
+    }

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import inspect
 from typing import Any, Optional
 
 import streamlit as st
@@ -91,6 +92,21 @@ def _seed_state() -> None:
     st.session_state.setdefault("surf_live_citespan_followup", {})
     st.session_state.setdefault("surf_live_open_todo_by_work", {})
     st.session_state.setdefault("surf_live_todo_cap_by_work", {})
+
+
+def _safe_rerun() -> None:
+    try:
+        for frame in inspect.stack():
+            fn = str(frame.function or "")
+            filename = str(frame.filename or "").replace("\\", "/")
+            if fn in {"call_callback", "_call_callbacks"} and (
+                "streamlit/runtime/state" in filename
+                or "streamlit/runtime/scriptrunner" in filename
+            ):
+                return
+    except Exception:
+        pass
+    st.rerun()
 
 
 def _active_reviewer_uid() -> str:
@@ -230,6 +246,7 @@ def _resolve_reference_targets(
             resp = graph_api.resolve_references(
                 citing_doc_id=citing_doc_id,
                 reference_ids=missing,
+                project_id=str(st.session_state.get("project_id") or "").strip() or None,
             )
         except Exception:
             resp = {}
@@ -2328,11 +2345,14 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
                     help="Rebuild DOI/bib aliases from ingestion store.",
                 ):
                     try:
-                        graph_api.reindex_docs()
+                        graph_api.reindex_docs(
+                            project_id=str(st.session_state.get("project_id") or "").strip() or None,
+                            user_id=_active_reviewer_uid(),
+                        )
                     except Exception:
                         pass
                     st.session_state["surf_live_ref_cache"] = {}
-                    st.rerun()
+                    _safe_rerun()
 
             st.divider()
             st.markdown("**Work list**")
@@ -2432,7 +2452,7 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
                     else:
                         follow_map.pop(sel_id, None)
                     st.session_state["surf_live_citespan_followup"] = follow_map
-                    st.rerun()
+                    _safe_rerun()
 
                 row = st.columns([1, 1, 1], gap="small")
                 with row[0]:
@@ -2451,7 +2471,7 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
                             st.session_state[
                                 WORKSPACE_ACTIVE_TAB
                             ] = WORKSPACE_TAB_DOCUMENT
-                            st.rerun()
+                            _safe_rerun()
                 with row[1]:
                     if st.button(
                         "Open in Chasing",
@@ -2468,7 +2488,7 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
                             st.session_state[
                                 WORKSPACE_ACTIVE_TAB
                             ] = WORKSPACE_TAB_REVIEW
-                            st.rerun()
+                            _safe_rerun()
                 with row[2]:
                     if st.button(
                         "Jump to Target",
@@ -2487,7 +2507,7 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
                             st.session_state["surf_live_pending_focus"] = {
                                 "node_id": target_ingest_id
                             }
-                            st.rerun()
+                            _safe_rerun()
 
                 if doc_id and reference_id and not target_ingest_id:
                     if st.button(
@@ -2499,7 +2519,12 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
                         ),
                     ):
                         try:
-                            trigger_resolution(api_url, doc_id)
+                            trigger_resolution(
+                                api_url,
+                                doc_id,
+                                project_id=str(st.session_state.get("project_id") or "").strip() or None,
+                                user_id=_active_reviewer_uid(),
+                            )
                         except Exception:
                             pass
                         cache = _as_dict(st.session_state.get("surf_live_ref_cache"))
@@ -2510,7 +2535,7 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
                             if not str(k).startswith(prefix)
                         }
                         st.session_state["surf_live_ref_cache"] = cache
-                        st.rerun()
+                        _safe_rerun()
 
                 if doc_id:
                     # ClaimSpan generation lives in Chasing (confirm_claims).
@@ -2547,7 +2572,7 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
                             bundle_cache.pop(f"{span_id}::{reviewer_uid}", None)
                             st.session_state["surf_live_bundle_cache"] = bundle_cache
                             expanded_cites.add(sel_id)
-                            st.rerun()
+                            _safe_rerun()
 
                 is_exp = sel_id in expanded_cites
                 next_exp = st.toggle(
@@ -2587,7 +2612,7 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
                             target_id=reference_id,
                         )
                         st.session_state[WORKSPACE_ACTIVE_TAB] = WORKSPACE_TAB_REVIEW
-                        st.rerun()
+                        _safe_rerun()
 
                 if st.button("Expand claim spans", key="surf-live-expand-cs"):
                     expanded_cites.add(sel_id)

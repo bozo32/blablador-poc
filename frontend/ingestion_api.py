@@ -14,6 +14,24 @@ def _ingest_headers(project_id: Optional[str]) -> Dict[str, str]:
     return {"X-Project-Id": pid}
 
 
+def _require_mutation_headers(
+    *,
+    project_id: Optional[str],
+    user_id: Optional[str],
+    operation: str,
+) -> Dict[str, str]:
+    pid = str(project_id or "").strip()
+    uid = str(user_id or "").strip()
+    if not pid:
+        raise RuntimeError(f"{operation} requires project_id")
+    if not uid:
+        raise RuntimeError(f"{operation} requires user_id")
+    return {
+        "X-Project-Id": pid,
+        "X-User-Id": uid,
+    }
+
+
 def _parse_response(response: requests.Response) -> Optional[dict]:
     try:
         response.raise_for_status()
@@ -29,6 +47,7 @@ def upload_pdf(
     file,
     *,
     project_id: Optional[str] = None,
+    user_id: Optional[str] = None,
     auto_process: bool = True,
 ) -> dict:
     url = f"{api_url.rstrip('/')}/ingest"
@@ -38,7 +57,11 @@ def upload_pdf(
         response = requests.post(
             url,
             params={"auto_process": "true" if bool(auto_process) else "false"},
-            headers=_ingest_headers(project_id),
+            headers=_require_mutation_headers(
+                project_id=project_id,
+                user_id=user_id,
+                operation="ingest upload",
+            ),
             files=files,
             timeout=DEFAULT_TIMEOUT,
         )
@@ -83,6 +106,7 @@ def trigger_extraction(
     doc_id: str,
     *,
     project_id: Optional[str] = None,
+    user_id: Optional[str] = None,
     force: bool = False,
 ) -> dict:
     url = f"{api_url.rstrip('/')}/ingest/{doc_id}/extract"
@@ -91,7 +115,11 @@ def trigger_extraction(
     try:
         response = requests.post(
             url,
-            headers=_ingest_headers(project_id),
+            headers=_require_mutation_headers(
+                project_id=project_id,
+                user_id=user_id,
+                operation="ingest extraction",
+            ),
             timeout=DEFAULT_TIMEOUT,
         )
     except requests.RequestException as exc:
@@ -104,6 +132,7 @@ def trigger_resolution(
     doc_id: str,
     *,
     project_id: Optional[str] = None,
+    user_id: Optional[str] = None,
     force: bool = False,
 ) -> dict:
     url = f"{api_url.rstrip('/')}/ingest/{doc_id}/resolve"
@@ -112,7 +141,11 @@ def trigger_resolution(
     try:
         response = requests.post(
             url,
-            headers=_ingest_headers(project_id),
+            headers=_require_mutation_headers(
+                project_id=project_id,
+                user_id=user_id,
+                operation="ingest resolution",
+            ),
             timeout=DEFAULT_TIMEOUT,
         )
     except requests.RequestException as exc:
@@ -127,13 +160,18 @@ def submit_resolution_choice(
     selected_source: str,
     *,
     project_id: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> dict:
     url = f"{api_url.rstrip('/')}/ingest/{doc_id}/resolution/{reference_id}/select"
     payload = {"selected_source": selected_source}
     try:
         response = requests.post(
             url,
-            headers=_ingest_headers(project_id),
+            headers=_require_mutation_headers(
+                project_id=project_id,
+                user_id=user_id,
+                operation="ingest resolution select",
+            ),
             json=payload,
             timeout=DEFAULT_TIMEOUT,
         )
@@ -206,6 +244,8 @@ def auto_place_claim_source(
     doc_id: str,
     citation_index: Optional[int],
     target_id: Optional[str],
+    project_id: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> dict:
     url = f"{api_url.rstrip('/')}/claims/{claim_id}/auto-place"
     payload = {
@@ -214,7 +254,16 @@ def auto_place_claim_source(
         "target_id": target_id,
     }
     try:
-        response = requests.post(url, json=payload, timeout=DEFAULT_TIMEOUT)
+        response = requests.post(
+            url,
+            headers=_require_mutation_headers(
+                project_id=project_id,
+                user_id=user_id,
+                operation="claim auto-place",
+            ),
+            json=payload,
+            timeout=DEFAULT_TIMEOUT,
+        )
     except requests.RequestException as exc:
         raise RuntimeError(_request_error_message(url, exc)) from exc
     return _parse_response(response) or {}
@@ -233,6 +282,7 @@ def confirm_claims(
     segmentation_model: Optional[str] = None,
     cited_work_id: Optional[str] = None,
     citation_anchor: Optional[Dict[str, Any]] = None,
+    project_id: Optional[str] = None,
 ) -> dict:
     """Persist confirmed claims for a citing sentence.
 
@@ -248,7 +298,7 @@ def confirm_claims(
         "segmentation_model": str(segmentation_model).strip()
         if segmentation_model
         else None,
-        "reviewer_uid": str(reviewer_uid or "default").strip() or "default",
+        "reviewer_uid": str(reviewer_uid or "").strip(),
         "cited_work_id": str(cited_work_id).strip() if cited_work_id else None,
         "citation_anchor": citation_anchor,
         "confirmed_claims": list(confirmed_claims or []),
@@ -256,7 +306,16 @@ def confirm_claims(
     payload = {k: v for k, v in payload.items() if v is not None}
 
     try:
-        response = requests.post(url, json=payload, timeout=DEFAULT_TIMEOUT)
+        response = requests.post(
+            url,
+            headers=_require_mutation_headers(
+                project_id=project_id,
+                user_id=reviewer_uid,
+                operation="claim confirm",
+            ),
+            json=payload,
+            timeout=DEFAULT_TIMEOUT,
+        )
     except requests.RequestException as exc:
         raise RuntimeError(_request_error_message(url, exc)) from exc
     return _parse_response(response) or {}
@@ -416,13 +475,17 @@ def set_span_cite_role(
     quoted = urllib.parse.quote(cited_work_id, safe="")
     url = f"{api_url.rstrip('/')}/spans/{span_id}/cites/{quoted}/role"
     payload = {
-        "reviewer_uid": str(reviewer_uid or "default").strip() or "default",
+        "reviewer_uid": str(reviewer_uid or "").strip(),
         "role": role,
     }
     try:
         response = requests.put(
             url,
-            headers=_ingest_headers(project_id),
+            headers=_require_mutation_headers(
+                project_id=project_id,
+                user_id=reviewer_uid,
+                operation="set span cite role",
+            ),
             json=payload,
             timeout=DEFAULT_TIMEOUT,
         )

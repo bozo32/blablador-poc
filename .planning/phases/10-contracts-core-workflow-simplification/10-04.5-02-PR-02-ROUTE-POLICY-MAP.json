@@ -1,0 +1,3245 @@
+{
+  "generated_at_utc": "2026-03-01T21:33:40+00:00",
+  "route_total": 113,
+  "routes": [
+    {
+      "args": [],
+      "current_scope_class": "admin-dev",
+      "function": "get_background_state",
+      "line": 300,
+      "method": "GET",
+      "path": "/background/state",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "admin/dev"
+    },
+    {
+      "args": [
+        {
+          "name": "payload",
+          "required": true
+        }
+      ],
+      "current_scope_class": "admin-dev",
+      "function": "set_background_pause",
+      "line": 305,
+      "method": "POST",
+      "path": "/background/pause",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "admin/dev"
+    },
+    {
+      "args": [],
+      "current_scope_class": "admin-dev",
+      "function": "get_scope_observability_fallbacks",
+      "line": 310,
+      "method": "GET",
+      "path": "/scope/observability/fallbacks",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "admin/dev"
+    },
+    {
+      "args": [
+        {
+          "name": "work_id",
+          "required": true
+        },
+        {
+          "name": "reviewer_uid",
+          "required": false
+        }
+      ],
+      "current_scope_class": "reviewer-scoped",
+      "function": "nav_work_contexts",
+      "line": 432,
+      "method": "GET",
+      "path": "/nav/works/{work_id}/contexts",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": true,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "reviewer_uid",
+          "required": false
+        },
+        {
+          "name": "focus_type",
+          "required": false
+        },
+        {
+          "name": "focus_id",
+          "required": false
+        },
+        {
+          "name": "show_claimspans",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "nav_graph",
+      "line": 460,
+      "method": "GET",
+      "path": "/nav/graph",
+      "scope_signals": {
+        "fallback_signals": [
+          "default_project_fallback"
+        ],
+        "has_user_scope_arg": true,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "background_tasks",
+          "required": true
+        },
+        {
+          "name": "file",
+          "required": false
+        },
+        {
+          "name": "auto_process",
+          "required": false
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "ingest_document",
+      "line": 1243,
+      "method": "POST",
+      "path": "/ingest",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [
+          {
+            "allow_dev_project_default": true,
+            "endpoint": "/ingest",
+            "include_user": true,
+            "line": 1255,
+            "require_project": true
+          }
+        ],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "list_ingest_documents",
+      "line": 1350,
+      "method": "GET",
+      "path": "/ingest",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "doc_id",
+          "required": true
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "get_ingest_document",
+      "line": 1367,
+      "method": "GET",
+      "path": "/ingest/{doc_id}",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "get_document_ledger",
+      "line": 1388,
+      "method": "GET",
+      "path": "/ledger",
+      "scope_signals": {
+        "fallback_signals": [
+          "default_project_fallback"
+        ],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "get_project_meta",
+      "line": 1433,
+      "method": "GET",
+      "path": "/project",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [
+          {
+            "allow_dev_project_default": null,
+            "endpoint": "/project",
+            "include_user": true,
+            "line": 1437,
+            "require_project": null
+          }
+        ],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "payload",
+          "required": true
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "put_project_meta",
+      "line": 1455,
+      "method": "PUT",
+      "path": "/project",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [
+          {
+            "allow_dev_project_default": null,
+            "endpoint": "/project",
+            "include_user": true,
+            "line": 1461,
+            "require_project": null
+          }
+        ],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "spine_get_settings",
+      "line": 1484,
+      "method": "GET",
+      "path": "/spine/settings",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [
+          {
+            "allow_dev_project_default": null,
+            "endpoint": "/spine/settings",
+            "include_user": true,
+            "line": 1488,
+            "require_project": null
+          }
+        ],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "payload",
+          "required": true
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "spine_post_settings",
+      "line": 1506,
+      "method": "POST",
+      "path": "/spine/settings",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [
+          {
+            "allow_dev_project_default": null,
+            "endpoint": "/spine/settings",
+            "include_user": true,
+            "line": 1511,
+            "require_project": null
+          }
+        ],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "spine_list_workflows",
+      "line": 1542,
+      "method": "GET",
+      "path": "/spine/workflows",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [
+          {
+            "allow_dev_project_default": null,
+            "endpoint": "/spine/workflows",
+            "include_user": false,
+            "line": 1546,
+            "require_project": null
+          }
+        ],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "payload",
+          "required": true
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "spine_create_workflow",
+      "line": 1554,
+      "method": "POST",
+      "path": "/spine/workflows",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [
+          {
+            "allow_dev_project_default": null,
+            "endpoint": "/spine/workflows",
+            "include_user": true,
+            "line": 1559,
+            "require_project": null
+          }
+        ],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "workflow_id",
+          "required": true
+        },
+        {
+          "name": "payload",
+          "required": true
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "spine_append_workflow_version",
+      "line": 1579,
+      "method": "POST",
+      "path": "/spine/workflows/{workflow_id}/versions",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [
+          {
+            "allow_dev_project_default": null,
+            "endpoint": "/spine/workflows/{workflow_id}/versions",
+            "include_user": true,
+            "line": 1585,
+            "require_project": null
+          }
+        ],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "payload",
+          "required": true
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "spine_create_locator",
+      "line": 1609,
+      "method": "POST",
+      "path": "/spine/locators",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [
+          {
+            "allow_dev_project_default": null,
+            "endpoint": "/spine/locators",
+            "include_user": true,
+            "line": 1614,
+            "require_project": null
+          }
+        ],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "locator_id",
+          "required": true
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "spine_get_locator",
+      "line": 1630,
+      "method": "GET",
+      "path": "/spine/locators/{locator_id}",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [
+          {
+            "allow_dev_project_default": null,
+            "endpoint": "/spine/locators/{locator_id}",
+            "include_user": false,
+            "line": 1635,
+            "require_project": null
+          }
+        ],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "document_version_id",
+          "required": true
+        },
+        {
+          "name": "limit",
+          "required": false
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "spine_list_locators_for_document_version",
+      "line": 1646,
+      "method": "GET",
+      "path": "/spine/document-versions/{document_version_id}/locators",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [
+          {
+            "allow_dev_project_default": null,
+            "endpoint": "/spine/document-versions/{document_version_id}/locators",
+            "include_user": false,
+            "line": 1652,
+            "require_project": null
+          }
+        ],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "x_project_id",
+          "required": false
+        },
+        {
+          "name": "x_reviewer_uid",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "export_project",
+      "line": 1665,
+      "method": "GET",
+      "path": "/project/export",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": true,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "file",
+          "required": false
+        },
+        {
+          "name": "overwrite",
+          "required": false
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "import_project",
+      "line": 1711,
+      "method": "POST",
+      "path": "/project/import",
+      "scope_signals": {
+        "fallback_signals": [
+          "default_user_fallback"
+        ],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "claim_id",
+          "required": true
+        },
+        {
+          "name": "payload",
+          "required": true
+        },
+        {
+          "name": "background_tasks",
+          "required": true
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "auto_place_claim_source",
+      "line": 1765,
+      "method": "POST",
+      "path": "/claims/{claim_id}/auto-place",
+      "scope_signals": {
+        "fallback_signals": [
+          "default_project_fallback"
+        ],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "doc_num",
+          "required": true
+        },
+        {
+          "name": "payload",
+          "required": true
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "update_ledger_outgoing",
+      "line": 1954,
+      "method": "PATCH",
+      "path": "/ledger/{doc_num}/outgoing",
+      "scope_signals": {
+        "fallback_signals": [
+          "default_project_fallback"
+        ],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "doc_num",
+          "required": true
+        },
+        {
+          "name": "payload",
+          "required": true
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "update_ledger_incoming",
+      "line": 1971,
+      "method": "PATCH",
+      "path": "/ledger/{doc_num}/incoming",
+      "scope_signals": {
+        "fallback_signals": [
+          "default_project_fallback"
+        ],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "doc_num",
+          "required": true
+        },
+        {
+          "name": "payload",
+          "required": true
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "update_ledger_assigned",
+      "line": 1988,
+      "method": "PATCH",
+      "path": "/ledger/{doc_num}/assign",
+      "scope_signals": {
+        "fallback_signals": [
+          "default_project_fallback"
+        ],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "payload",
+          "required": true
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "place_ledger_relation",
+      "line": 2005,
+      "method": "POST",
+      "path": "/ledger/place",
+      "scope_signals": {
+        "fallback_signals": [
+          "default_project_fallback"
+        ],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "payload",
+          "required": true
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "place_ledger_reference",
+      "line": 2027,
+      "method": "POST",
+      "path": "/ledger/place-reference",
+      "scope_signals": {
+        "fallback_signals": [
+          "default_project_fallback"
+        ],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "claim_id",
+          "required": true
+        }
+      ],
+      "current_scope_class": "unscoped",
+      "function": "get_claim_graph_node",
+      "line": 2123,
+      "method": "GET",
+      "path": "/graph/claim/{claim_id}",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "global-read"
+    },
+    {
+      "args": [
+        {
+          "name": "doc_id",
+          "required": false
+        },
+        {
+          "name": "limit",
+          "required": false
+        }
+      ],
+      "current_scope_class": "unscoped",
+      "function": "list_claim_graph_nodes",
+      "line": 2131,
+      "method": "GET",
+      "path": "/graph/claim-nodes",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "global-read"
+    },
+    {
+      "args": [
+        {
+          "name": "payload",
+          "required": true
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "resolve_graph_references",
+      "line": 2155,
+      "method": "POST",
+      "path": "/graph/resolve-references",
+      "scope_signals": {
+        "fallback_signals": [
+          "default_project_fallback"
+        ],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [
+          {
+            "allow_dev_project_default": null,
+            "endpoint": "/graph/resolve-references",
+            "include_user": false,
+            "line": 2160,
+            "require_project": null
+          }
+        ],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [],
+      "current_scope_class": "fallback",
+      "function": "reindex_graph_documents",
+      "line": 2183,
+      "method": "POST",
+      "path": "/graph/reindex-docs",
+      "scope_signals": {
+        "fallback_signals": [
+          "default_project_fallback"
+        ],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "background_tasks",
+          "required": true
+        },
+        {
+          "name": "limit",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "reextract_all_ingested_documents",
+      "line": 2235,
+      "method": "POST",
+      "path": "/ingest/reextract-all",
+      "scope_signals": {
+        "fallback_signals": [
+          "default_project_fallback"
+        ],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "payload",
+          "required": true
+        }
+      ],
+      "current_scope_class": "admin-dev",
+      "function": "dev_wipe",
+      "line": 2272,
+      "method": "POST",
+      "path": "/dev/wipe",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "admin/dev"
+    },
+    {
+      "args": [
+        {
+          "name": "payload",
+          "required": true
+        }
+      ],
+      "current_scope_class": "unscoped",
+      "function": "post_pipeline_run",
+      "line": 2401,
+      "method": "POST",
+      "path": "/pipeline/runs",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "run_id",
+          "required": true
+        },
+        {
+          "name": "stage",
+          "required": true
+        },
+        {
+          "name": "payload",
+          "required": true
+        }
+      ],
+      "current_scope_class": "unscoped",
+      "function": "put_pipeline_stage",
+      "line": 2425,
+      "method": "PUT",
+      "path": "/pipeline/runs/{run_id}/stages/{stage}",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "run_id",
+          "required": true
+        },
+        {
+          "name": "stage",
+          "required": true
+        }
+      ],
+      "current_scope_class": "unscoped",
+      "function": "get_pipeline_stage",
+      "line": 2461,
+      "method": "GET",
+      "path": "/pipeline/runs/{run_id}/stages/{stage}",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "global-read"
+    },
+    {
+      "args": [
+        {
+          "name": "claim_id",
+          "required": true
+        },
+        {
+          "name": "payload",
+          "required": true
+        }
+      ],
+      "current_scope_class": "unscoped",
+      "function": "workflow_start_run",
+      "line": 2482,
+      "method": "POST",
+      "path": "/workflow/claimspans/{claim_id}/runs",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "claim_id",
+          "required": true
+        },
+        {
+          "name": "payload",
+          "required": true
+        }
+      ],
+      "current_scope_class": "unscoped",
+      "function": "workflow_finalize_assessment",
+      "line": 2506,
+      "method": "POST",
+      "path": "/workflow/claimspans/{claim_id}/assessment/finalize",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "run_id",
+          "required": true
+        }
+      ],
+      "current_scope_class": "unscoped",
+      "function": "workflow_resume_run",
+      "line": 2614,
+      "method": "POST",
+      "path": "/workflow/runs/{run_id}/resume",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "claim_id",
+          "required": true
+        },
+        {
+          "name": "reviewer_uid",
+          "required": false
+        }
+      ],
+      "current_scope_class": "reviewer-scoped",
+      "function": "workflow_latest_run",
+      "line": 2624,
+      "method": "GET",
+      "path": "/workflow/claimspans/{claim_id}/runs/latest",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": true,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "run_id",
+          "required": true
+        }
+      ],
+      "current_scope_class": "unscoped",
+      "function": "workflow_get_run_status",
+      "line": 2637,
+      "method": "GET",
+      "path": "/workflow/runs/{run_id}/status",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "global-read"
+    },
+    {
+      "args": [
+        {
+          "name": "run_id",
+          "required": true
+        },
+        {
+          "name": "target_id",
+          "required": true
+        }
+      ],
+      "current_scope_class": "unscoped",
+      "function": "workflow_cancel_target",
+      "line": 2662,
+      "method": "POST",
+      "path": "/workflow/runs/{run_id}/targets/{target_id}/cancel",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "run_id",
+          "required": true
+        },
+        {
+          "name": "after_event_id",
+          "required": false
+        },
+        {
+          "name": "heartbeat_ms",
+          "required": false
+        }
+      ],
+      "current_scope_class": "unscoped",
+      "function": "workflow_events_sse",
+      "line": 2672,
+      "method": "GET",
+      "path": "/workflow/runs/{run_id}/events",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "global-read"
+    },
+    {
+      "args": [
+        {
+          "name": "ingest_id",
+          "required": true
+        },
+        {
+          "name": "citation_index",
+          "required": true
+        },
+        {
+          "name": "target_id",
+          "required": false
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "lookup_citation_window_span",
+      "line": 2710,
+      "method": "GET",
+      "path": "/spans/lookup-citation-window",
+      "scope_signals": {
+        "fallback_signals": [
+          "default_project_fallback"
+        ],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "edge_id",
+          "required": true
+        }
+      ],
+      "current_scope_class": "unscoped",
+      "function": "get_claim_graph_edge_votes",
+      "line": 2738,
+      "method": "GET",
+      "path": "/graph/edge/{edge_id}/votes",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "global-read"
+    },
+    {
+      "args": [
+        {
+          "name": "edge_id",
+          "required": true
+        },
+        {
+          "name": "payload",
+          "required": true
+        },
+        {
+          "name": "reviewer_uid",
+          "required": false
+        }
+      ],
+      "current_scope_class": "reviewer-scoped",
+      "function": "put_claim_graph_edge_vote",
+      "line": 2758,
+      "method": "PUT",
+      "path": "/graph/edge/{edge_id}/vote",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": true,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "payload",
+          "required": true
+        },
+        {
+          "name": "reviewer_uid",
+          "required": false
+        }
+      ],
+      "current_scope_class": "reviewer-scoped",
+      "function": "post_claim_link",
+      "line": 2794,
+      "method": "POST",
+      "path": "/graph/claim-link",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": true,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "edge_id",
+          "required": true
+        },
+        {
+          "name": "reviewer_uid",
+          "required": false
+        }
+      ],
+      "current_scope_class": "reviewer-scoped",
+      "function": "delete_claim_link",
+      "line": 2834,
+      "method": "DELETE",
+      "path": "/graph/claim-link/{edge_id}",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": true,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "center_claim_id",
+          "required": true
+        },
+        {
+          "name": "hops",
+          "required": false
+        },
+        {
+          "name": "edge_cap",
+          "required": false
+        },
+        {
+          "name": "min_votes",
+          "required": false
+        },
+        {
+          "name": "sources",
+          "required": false
+        }
+      ],
+      "current_scope_class": "unscoped",
+      "function": "get_claim_subgraph",
+      "line": 2848,
+      "method": "GET",
+      "path": "/graph/claim-subgraph",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "global-read"
+    },
+    {
+      "args": [
+        {
+          "name": "claim_id",
+          "required": true
+        },
+        {
+          "name": "limit",
+          "required": false
+        }
+      ],
+      "current_scope_class": "unscoped",
+      "function": "get_claim_candidates",
+      "line": 2933,
+      "method": "GET",
+      "path": "/graph/claim/{claim_id}/candidates",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "global-read"
+    },
+    {
+      "args": [
+        {
+          "name": "payload",
+          "required": true
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "upsert_span",
+      "line": 2985,
+      "method": "POST",
+      "path": "/spans/upsert",
+      "scope_signals": {
+        "fallback_signals": [
+          "default_project_fallback"
+        ],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "span_id",
+          "required": true
+        },
+        {
+          "name": "payload",
+          "required": true
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "upsert_span_cites",
+      "line": 3005,
+      "method": "POST",
+      "path": "/spans/{span_id}/cites",
+      "scope_signals": {
+        "fallback_signals": [
+          "default_project_fallback"
+        ],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "span_id",
+          "required": true
+        },
+        {
+          "name": "cited_work_id",
+          "required": true
+        },
+        {
+          "name": "payload",
+          "required": true
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "set_span_cite_role",
+      "line": 3023,
+      "method": "PUT",
+      "path": "/spans/{span_id}/cites/{cited_work_id:path}/role",
+      "scope_signals": {
+        "fallback_signals": [
+          "default_project_fallback"
+        ],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "span_id",
+          "required": true
+        },
+        {
+          "name": "payload",
+          "required": true
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "upsert_claim_spans",
+      "line": 3044,
+      "method": "POST",
+      "path": "/spans/{span_id}/claim-spans",
+      "scope_signals": {
+        "fallback_signals": [
+          "default_project_fallback"
+        ],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "payload",
+          "required": true
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "create_claim_atom",
+      "line": 3077,
+      "method": "POST",
+      "path": "/claim-atoms",
+      "scope_signals": {
+        "fallback_signals": [
+          "reviewer_default_fallback"
+        ],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "claim_atom_id",
+          "required": true
+        }
+      ],
+      "current_scope_class": "unscoped",
+      "function": "get_claim_atom",
+      "line": 3093,
+      "method": "GET",
+      "path": "/claim-atoms/{claim_atom_id}",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "global-read"
+    },
+    {
+      "args": [
+        {
+          "name": "claim_span_id",
+          "required": true
+        },
+        {
+          "name": "payload",
+          "required": true
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "link_claim_span_atom",
+      "line": 3101,
+      "method": "POST",
+      "path": "/claim-spans/{claim_span_id}/atoms",
+      "scope_signals": {
+        "fallback_signals": [
+          "reviewer_default_fallback"
+        ],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "claim_span_id",
+          "required": true
+        }
+      ],
+      "current_scope_class": "unscoped",
+      "function": "list_claim_span_atoms",
+      "line": 3127,
+      "method": "GET",
+      "path": "/claim-spans/{claim_span_id}/atoms",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "global-read"
+    },
+    {
+      "args": [
+        {
+          "name": "claim_atom_id",
+          "required": true
+        },
+        {
+          "name": "payload",
+          "required": true
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "align_claim_atom_to_claim",
+      "line": 3148,
+      "method": "POST",
+      "path": "/claim-atoms/{claim_atom_id}/align",
+      "scope_signals": {
+        "fallback_signals": [
+          "reviewer_default_fallback"
+        ],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "payload",
+          "required": true
+        }
+      ],
+      "current_scope_class": "unscoped",
+      "function": "topology_settle",
+      "line": 3172,
+      "method": "POST",
+      "path": "/topology/settle",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "payload",
+          "required": true
+        }
+      ],
+      "current_scope_class": "unscoped",
+      "function": "create_assertion",
+      "line": 3255,
+      "method": "POST",
+      "path": "/assertions",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "claim_span_id",
+          "required": true
+        },
+        {
+          "name": "reviewer_uid",
+          "required": false
+        }
+      ],
+      "current_scope_class": "reviewer-scoped",
+      "function": "list_claim_span_assertions",
+      "line": 3264,
+      "method": "GET",
+      "path": "/claim-spans/{claim_span_id}/assertions",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": true,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "claim_span_id",
+          "required": true
+        },
+        {
+          "name": "reviewer_uid",
+          "required": false
+        }
+      ],
+      "current_scope_class": "reviewer-scoped",
+      "function": "get_claim_span_status",
+      "line": 3276,
+      "method": "GET",
+      "path": "/claim-spans/{claim_span_id}/status",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": true,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "span_id",
+          "required": true
+        },
+        {
+          "name": "reviewer_uid",
+          "required": false
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "get_span_status",
+      "line": 3287,
+      "method": "GET",
+      "path": "/spans/{span_id}/status",
+      "scope_signals": {
+        "fallback_signals": [
+          "default_project_fallback"
+        ],
+        "has_user_scope_arg": true,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "span_id",
+          "required": true
+        },
+        {
+          "name": "reviewer_uid",
+          "required": false
+        },
+        {
+          "name": "include_history",
+          "required": false
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "get_span_bundle",
+      "line": 3303,
+      "method": "GET",
+      "path": "/spans/{span_id}/bundle",
+      "scope_signals": {
+        "fallback_signals": [
+          "default_project_fallback"
+        ],
+        "has_user_scope_arg": true,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "payload",
+          "required": true
+        },
+        {
+          "name": "reviewer_uid",
+          "required": false
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        },
+        {
+          "name": "x_reviewer_uid",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "append_opinion_event",
+      "line": 3361,
+      "method": "POST",
+      "path": "/opinions/events",
+      "scope_signals": {
+        "fallback_signals": [
+          "default_user_fallback",
+          "reviewer_default_fallback"
+        ],
+        "has_user_scope_arg": true,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "doc_id",
+          "required": true
+        },
+        {
+          "name": "reviewer_uid",
+          "required": false
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "list_follows_by_doc",
+      "line": 3428,
+      "method": "GET",
+      "path": "/opinions/follow/by-doc",
+      "scope_signals": {
+        "fallback_signals": [
+          "reviewer_default_fallback"
+        ],
+        "has_user_scope_arg": true,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "target_key",
+          "required": true
+        },
+        {
+          "name": "reviewer_uid",
+          "required": false
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "get_follow_for_target",
+      "line": 3447,
+      "method": "GET",
+      "path": "/opinions/follow/target",
+      "scope_signals": {
+        "fallback_signals": [
+          "reviewer_default_fallback"
+        ],
+        "has_user_scope_arg": true,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "reviewer_uid",
+          "required": false
+        },
+        {
+          "name": "target_key",
+          "required": false
+        },
+        {
+          "name": "kind",
+          "required": false
+        },
+        {
+          "name": "limit",
+          "required": false
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "list_opinion_events",
+      "line": 3469,
+      "method": "GET",
+      "path": "/opinions/events",
+      "scope_signals": {
+        "fallback_signals": [
+          "reviewer_default_fallback"
+        ],
+        "has_user_scope_arg": true,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "payload",
+          "required": true
+        }
+      ],
+      "current_scope_class": "admin-dev",
+      "function": "compact_span_graph",
+      "line": 3492,
+      "method": "POST",
+      "path": "/maintenance/span-graph/compact",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "admin/dev"
+    },
+    {
+      "args": [
+        {
+          "name": "payload",
+          "required": true
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "neighborhood_search",
+      "line": 3513,
+      "method": "POST",
+      "path": "/neighborhood/search",
+      "scope_signals": {
+        "fallback_signals": [
+          "reviewer_default_fallback"
+        ],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "run_id",
+          "required": true
+        },
+        {
+          "name": "limit",
+          "required": false
+        }
+      ],
+      "current_scope_class": "unscoped",
+      "function": "get_neighborhood_run",
+      "line": 3633,
+      "method": "GET",
+      "path": "/neighborhood/{run_id}",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "global-read"
+    },
+    {
+      "args": [
+        {
+          "name": "claim_id",
+          "required": true
+        },
+        {
+          "name": "target_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "unscoped",
+      "function": "get_claim_span_context",
+      "line": 3661,
+      "method": "GET",
+      "path": "/claims/{claim_id}/span-context",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "global-read"
+    },
+    {
+      "args": [
+        {
+          "name": "claim_id",
+          "required": true
+        },
+        {
+          "name": "target_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "unscoped",
+      "function": "get_claim_status",
+      "line": 3729,
+      "method": "GET",
+      "path": "/claims/{claim_id}/status",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "global-read"
+    },
+    {
+      "args": [
+        {
+          "name": "doc_id",
+          "required": true
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        },
+        {
+          "name": "force",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "extract_ingested_document",
+      "line": 3752,
+      "method": "POST",
+      "path": "/ingest/{doc_id}/extract",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [
+          {
+            "allow_dev_project_default": null,
+            "endpoint": "/ingest/{doc_id}/extract",
+            "include_user": true,
+            "line": 3761,
+            "require_project": null
+          }
+        ],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "doc_id",
+          "required": true
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "fallback_extract_ingested_document",
+      "line": 3820,
+      "method": "POST",
+      "path": "/ingest/{doc_id}/fallback-extract",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [
+          {
+            "allow_dev_project_default": null,
+            "endpoint": "/ingest/{doc_id}/fallback-extract",
+            "include_user": true,
+            "line": 3826,
+            "require_project": null
+          }
+        ],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "doc_id",
+          "required": true
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "cancel_extraction",
+      "line": 3850,
+      "method": "POST",
+      "path": "/ingest/{doc_id}/extract/cancel",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [
+          {
+            "allow_dev_project_default": null,
+            "endpoint": "/ingest/{doc_id}/extract/cancel",
+            "include_user": false,
+            "line": 3855,
+            "require_project": null
+          }
+        ],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "doc_id",
+          "required": true
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "get_ingested_extraction",
+      "line": 3880,
+      "method": "GET",
+      "path": "/ingest/{doc_id}/extraction",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [
+          {
+            "allow_dev_project_default": null,
+            "endpoint": "/ingest/{doc_id}/extraction",
+            "include_user": false,
+            "line": 3885,
+            "require_project": null
+          }
+        ],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "doc_id",
+          "required": true
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "get_ingest_spine_debug",
+      "line": 3905,
+      "method": "GET",
+      "path": "/ingest/{doc_id}/spine",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [
+          {
+            "allow_dev_project_default": null,
+            "endpoint": "/ingest/{doc_id}/spine",
+            "include_user": false,
+            "line": 3915,
+            "require_project": null
+          }
+        ],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "doc_id",
+          "required": true
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "get_ingested_body",
+      "line": 3956,
+      "method": "GET",
+      "path": "/ingest/{doc_id}/body",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [
+          {
+            "allow_dev_project_default": null,
+            "endpoint": "/ingest/{doc_id}/body",
+            "include_user": false,
+            "line": 3961,
+            "require_project": null
+          }
+        ],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "doc_id",
+          "required": true
+        },
+        {
+          "name": "force",
+          "required": false
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "resolve_ingested_references",
+      "line": 4012,
+      "method": "POST",
+      "path": "/ingest/{doc_id}/resolve",
+      "scope_signals": {
+        "fallback_signals": [
+          "default_project_fallback"
+        ],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [
+          {
+            "allow_dev_project_default": null,
+            "endpoint": "/ingest/{doc_id}/resolve",
+            "include_user": true,
+            "line": 4018,
+            "require_project": null
+          }
+        ],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "doc_id",
+          "required": true
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "get_ingested_resolution",
+      "line": 4162,
+      "method": "GET",
+      "path": "/ingest/{doc_id}/resolution",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [
+          {
+            "allow_dev_project_default": null,
+            "endpoint": "/ingest/{doc_id}/resolution",
+            "include_user": false,
+            "line": 4167,
+            "require_project": null
+          }
+        ],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "doc_id",
+          "required": true
+        },
+        {
+          "name": "reference_id",
+          "required": true
+        },
+        {
+          "name": "payload",
+          "required": true
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "select_resolution_source",
+      "line": 4186,
+      "method": "POST",
+      "path": "/ingest/{doc_id}/resolution/{reference_id}/select",
+      "scope_signals": {
+        "fallback_signals": [
+          "default_user_fallback"
+        ],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "claim_id",
+          "required": true
+        },
+        {
+          "name": "payload",
+          "required": true
+        },
+        {
+          "name": "background_tasks",
+          "required": true
+        }
+      ],
+      "current_scope_class": "unscoped",
+      "function": "create_claim_attachment",
+      "line": 4285,
+      "method": "POST",
+      "path": "/claims/{claim_id}/attachments",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "background_tasks",
+          "required": true
+        },
+        {
+          "name": "file",
+          "required": false
+        },
+        {
+          "name": "claim_text",
+          "required": false
+        },
+        {
+          "name": "reference_hint",
+          "required": false
+        },
+        {
+          "name": "doc_id",
+          "required": false
+        },
+        {
+          "name": "citation_index",
+          "required": false
+        },
+        {
+          "name": "target_id",
+          "required": false
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "upload_source_attachment",
+      "line": 4320,
+      "method": "POST",
+      "path": "/attachments/upload",
+      "scope_signals": {
+        "fallback_signals": [
+          "default_user_fallback"
+        ],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "payload",
+          "required": true
+        },
+        {
+          "name": "background_tasks",
+          "required": true
+        }
+      ],
+      "current_scope_class": "unscoped",
+      "function": "create_global_attachment",
+      "line": 4417,
+      "method": "POST",
+      "path": "/attachments",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "archived",
+          "required": false
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "list_global_attachments",
+      "line": 4453,
+      "method": "GET",
+      "path": "/attachments",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "attachment_id",
+          "required": true
+        },
+        {
+          "name": "payload",
+          "required": true
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "patch_attachment_status",
+      "line": 4476,
+      "method": "PATCH",
+      "path": "/attachments/{attachment_id}",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "attachment_id",
+          "required": true
+        },
+        {
+          "name": "payload",
+          "required": true
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "clone_global_attachment",
+      "line": 4592,
+      "method": "POST",
+      "path": "/attachments/{attachment_id}/clone",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "attachment_id",
+          "required": true
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "promote_attachment_ingest",
+      "line": 4651,
+      "method": "POST",
+      "path": "/attachments/{attachment_id}/promote-ingest",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "claim_id",
+          "required": true
+        }
+      ],
+      "current_scope_class": "unscoped",
+      "function": "claim_attachment_status",
+      "line": 4675,
+      "method": "GET",
+      "path": "/claims/{claim_id}/attachments/status",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "global-read"
+    },
+    {
+      "args": [
+        {
+          "name": "attachment_id",
+          "required": true
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "get_attachment_status",
+      "line": 4686,
+      "method": "GET",
+      "path": "/attachments/{attachment_id}",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "attachment_id",
+          "required": true
+        },
+        {
+          "name": "span_id",
+          "required": true
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "get_attachment_span_jump",
+      "line": 4699,
+      "method": "GET",
+      "path": "/attachments/{attachment_id}/spans/{span_id}/jump",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "attachment_id",
+          "required": true
+        },
+        {
+          "name": "span_id",
+          "required": true
+        },
+        {
+          "name": "before",
+          "required": false
+        },
+        {
+          "name": "after",
+          "required": false
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "get_attachment_span_excerpt",
+      "line": 4732,
+      "method": "GET",
+      "path": "/attachments/{attachment_id}/spans/{span_id}/excerpt",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "attachment_id",
+          "required": true
+        },
+        {
+          "name": "background_tasks",
+          "required": true
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "retry_attachment",
+      "line": 4775,
+      "method": "POST",
+      "path": "/attachments/{attachment_id}/retry",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "doc_id",
+          "required": true
+        },
+        {
+          "name": "reference_id",
+          "required": true
+        }
+      ],
+      "current_scope_class": "unscoped",
+      "function": "get_reference_retrieval",
+      "line": 4802,
+      "method": "GET",
+      "path": "/references/{doc_id}/{reference_id}/retrieval",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "global-read"
+    },
+    {
+      "args": [
+        {
+          "name": "doc_id",
+          "required": true
+        },
+        {
+          "name": "citation_index",
+          "required": false
+        },
+        {
+          "name": "target_id",
+          "required": false
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "get_citation_context",
+      "line": 4813,
+      "method": "GET",
+      "path": "/ingest/{doc_id}/citation-context",
+      "scope_signals": {
+        "fallback_signals": [
+          "default_project_fallback"
+        ],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "doc_id",
+          "required": true
+        },
+        {
+          "name": "target_id",
+          "required": false
+        },
+        {
+          "name": "doi",
+          "required": false
+        },
+        {
+          "name": "depth",
+          "required": false
+        },
+        {
+          "name": "max_nodes",
+          "required": false
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "get_citation_graph",
+      "line": 4877,
+      "method": "GET",
+      "path": "/ingest/{doc_id}/citation-graph",
+      "scope_signals": {
+        "fallback_signals": [
+          "default_project_fallback"
+        ],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "payload",
+          "required": true
+        }
+      ],
+      "current_scope_class": "unscoped",
+      "function": "confirm_claims",
+      "line": 4942,
+      "method": "POST",
+      "path": "/claims/confirm",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "claim_id",
+          "required": true
+        },
+        {
+          "name": "reviewer_uid",
+          "required": false
+        },
+        {
+          "name": "label",
+          "required": false
+        },
+        {
+          "name": "offset",
+          "required": false
+        },
+        {
+          "name": "limit",
+          "required": false
+        },
+        {
+          "name": "include_neutral",
+          "required": false
+        },
+        {
+          "name": "pinned_only",
+          "required": false
+        },
+        {
+          "name": "claim_text",
+          "required": false
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "list_claim_evidence",
+      "line": 4956,
+      "method": "GET",
+      "path": "/claims/{claim_id}/evidence",
+      "scope_signals": {
+        "fallback_signals": [
+          "default_project_fallback"
+        ],
+        "has_user_scope_arg": true,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "claim_id",
+          "required": true
+        },
+        {
+          "name": "reviewer_uid",
+          "required": false
+        },
+        {
+          "name": "events_limit",
+          "required": false
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "get_evidence_decisions",
+      "line": 5118,
+      "method": "GET",
+      "path": "/claims/{claim_id}/evidence/decisions",
+      "scope_signals": {
+        "fallback_signals": [
+          "default_project_fallback"
+        ],
+        "has_user_scope_arg": true,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "claim_id",
+          "required": true
+        },
+        {
+          "name": "payload",
+          "required": true
+        },
+        {
+          "name": "reviewer_uid",
+          "required": false
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "fallback",
+      "function": "post_evidence_decision_event",
+      "line": 5202,
+      "method": "POST",
+      "path": "/claims/{claim_id}/evidence/decisions/events",
+      "scope_signals": {
+        "fallback_signals": [
+          "default_project_fallback",
+          "default_user_fallback"
+        ],
+        "has_user_scope_arg": true,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "claim_id",
+          "required": true
+        },
+        {
+          "name": "payload",
+          "required": true
+        }
+      ],
+      "current_scope_class": "unscoped",
+      "function": "request_evidence_rerun",
+      "line": 5245,
+      "method": "POST",
+      "path": "/claims/{claim_id}/evidence/rerun",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "claim_id",
+          "required": true
+        },
+        {
+          "name": "limit",
+          "required": false
+        }
+      ],
+      "current_scope_class": "unscoped",
+      "function": "list_evidence_history",
+      "line": 5261,
+      "method": "GET",
+      "path": "/claims/{claim_id}/evidence/history",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "global-read"
+    },
+    {
+      "args": [
+        {
+          "name": "claim_id",
+          "required": true
+        }
+      ],
+      "current_scope_class": "unscoped",
+      "function": "get_evidence_selection",
+      "line": 5283,
+      "method": "GET",
+      "path": "/claims/{claim_id}/evidence/selection",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "global-read"
+    },
+    {
+      "args": [
+        {
+          "name": "claim_id",
+          "required": true
+        },
+        {
+          "name": "payload",
+          "required": true
+        }
+      ],
+      "current_scope_class": "unscoped",
+      "function": "put_evidence_selection",
+      "line": 5297,
+      "method": "PUT",
+      "path": "/claims/{claim_id}/evidence/selection",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "claim_id",
+          "required": true
+        },
+        {
+          "name": "reviewer_uid",
+          "required": false
+        }
+      ],
+      "current_scope_class": "reviewer-scoped",
+      "function": "get_claim_judgment",
+      "line": 5374,
+      "method": "GET",
+      "path": "/claims/{claim_id}/judgment",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": true,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "claim_id",
+          "required": true
+        },
+        {
+          "name": "payload",
+          "required": true
+        },
+        {
+          "name": "reviewer_uid",
+          "required": false
+        }
+      ],
+      "current_scope_class": "reviewer-scoped",
+      "function": "put_claim_judgment",
+      "line": 5391,
+      "method": "PUT",
+      "path": "/claims/{claim_id}/judgment",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": true,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "claim_id",
+          "required": true
+        }
+      ],
+      "current_scope_class": "unscoped",
+      "function": "list_claim_judgments",
+      "line": 5409,
+      "method": "GET",
+      "path": "/claims/{claim_id}/judgments",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "global-read"
+    },
+    {
+      "args": [
+        {
+          "name": "doc_id",
+          "required": false
+        },
+        {
+          "name": "include_drafts",
+          "required": false
+        },
+        {
+          "name": "status",
+          "required": false
+        }
+      ],
+      "current_scope_class": "unscoped",
+      "function": "list_judgments",
+      "line": 5418,
+      "method": "GET",
+      "path": "/judgments",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "global-read"
+    },
+    {
+      "args": [
+        {
+          "name": "shape",
+          "required": true
+        },
+        {
+          "name": "format",
+          "required": false
+        },
+        {
+          "name": "include_drafts",
+          "required": false
+        },
+        {
+          "name": "mode",
+          "required": false
+        }
+      ],
+      "current_scope_class": "unscoped",
+      "function": "export_judgments",
+      "line": 5434,
+      "method": "GET",
+      "path": "/judgments/export",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "global-read"
+    },
+    {
+      "args": [
+        {
+          "name": "req",
+          "required": true
+        }
+      ],
+      "current_scope_class": "unscoped",
+      "function": "segment",
+      "line": 5462,
+      "method": "POST",
+      "path": "/segment",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "req",
+          "required": true
+        }
+      ],
+      "current_scope_class": "unscoped",
+      "function": "prebuild",
+      "line": 5714,
+      "method": "POST",
+      "path": "/prebuild",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": false,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    }
+  ],
+  "source_file": "backend/main.py",
+  "totals": {
+    "by_current_scope_class": {
+      "admin-dev": 5,
+      "fallback": 64,
+      "reviewer-scoped": 9,
+      "unscoped": 35
+    },
+    "by_method": {
+      "DELETE": 1,
+      "GET": 55,
+      "PATCH": 4,
+      "POST": 47,
+      "PUT": 6
+    },
+    "by_target_policy": {
+      "admin/dev": 5,
+      "global-read": 20,
+      "scoped-required": 88
+    }
+  }
+}

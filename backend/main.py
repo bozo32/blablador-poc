@@ -172,15 +172,19 @@ def _reset_scope_observability_for_tests() -> None:
         _SCOPE_FALLBACK_COUNTERS.clear()
 
 
-def _resolve_scope_observability(
+def _resolve_scope_guard(
     *,
-    endpoint: str,
     x_project_id: Optional[str] = None,
     x_user_id: Optional[str] = None,
     require_project: bool = False,
     allow_dev_project_default: bool = False,
     include_user: bool = True,
-) -> tuple[str, Optional[str], str]:
+) -> tuple[str, Optional[str], dict[str, str]]:
+    """Canonical scope guard primitive used by scoped route wrappers.
+
+    This helper centralizes scope resolution/validation while preserving the
+    current fallback behavior for non-strict callers.
+    """
     project_id = str(x_project_id or "").strip()
     project_source = "header"
     if not project_id:
@@ -215,6 +219,26 @@ def _resolve_scope_observability(
     sources: dict[str, str] = {"project": project_source}
     if include_user:
         sources["user"] = user_source
+
+    return project_id, user_id, sources
+
+
+def _resolve_scope_observability(
+    *,
+    endpoint: str,
+    x_project_id: Optional[str] = None,
+    x_user_id: Optional[str] = None,
+    require_project: bool = False,
+    allow_dev_project_default: bool = False,
+    include_user: bool = True,
+) -> tuple[str, Optional[str], str]:
+    project_id, user_id, sources = _resolve_scope_guard(
+        x_project_id=x_project_id,
+        x_user_id=x_user_id,
+        require_project=require_project,
+        allow_dev_project_default=allow_dev_project_default,
+        include_user=include_user,
+    )
 
     payload = {
         "endpoint": str(endpoint or "").strip() or "unknown",
@@ -1230,6 +1254,20 @@ def _require_project_id_for_upload(
     return project_id
 
 
+def _require_scope_for_upload(
+    *, x_project_id: Optional[str], endpoint: str = "unknown"
+) -> tuple[str, str]:
+    project_id, user_id, _scope_source = _resolve_scope_observability(
+        endpoint=endpoint,
+        x_project_id=x_project_id,
+        require_project=True,
+        allow_dev_project_default=True,
+        include_user=True,
+    )
+    assert user_id is not None
+    return project_id, user_id
+
+
 def _allow_local_path_upload_for_dev() -> bool:
     return str(
         os.environ.get("ALLOW_LOCAL_PATH_UPLOAD_FOR_DEV", "") or ""
@@ -1252,14 +1290,10 @@ async def ingest_document(
 
     file_bytes = await file.read()
 
-    project_id, user_id, _scope_source = _resolve_scope_observability(
-        endpoint="/ingest",
+    project_id, user_id = _require_scope_for_upload(
         x_project_id=x_project_id,
-        require_project=True,
-        allow_dev_project_default=True,
-        include_user=True,
+        endpoint="/ingest",
     )
-    assert user_id is not None
     filename = str(file.filename or "").strip() or "document.pdf"
 
     sha256 = hashlib.sha256(file_bytes).hexdigest().lower()

@@ -9,6 +9,8 @@ import hashlib
 import io
 import tempfile
 import zipfile
+from collections import defaultdict
+from threading import Lock
 from uuid import uuid4
 
 # Transformers v5 removes TRANSFORMERS_CACHE; use HF_HOME.
@@ -150,6 +152,88 @@ for _logger_name in (
 logger = logging.getLogger(__name__)
 
 
+_SCOPE_FALLBACK_COUNTERS: dict[str, int] = defaultdict(int)
+_SCOPE_FALLBACK_LOCK = Lock()
+
+
+def _record_scope_fallback(endpoint: str) -> None:
+    key = str(endpoint or "").strip() or "unknown"
+    with _SCOPE_FALLBACK_LOCK:
+        _SCOPE_FALLBACK_COUNTERS[key] = int(_SCOPE_FALLBACK_COUNTERS.get(key) or 0) + 1
+
+
+def _scope_fallback_snapshot() -> dict[str, int]:
+    with _SCOPE_FALLBACK_LOCK:
+        return {k: int(v) for k, v in sorted(_SCOPE_FALLBACK_COUNTERS.items())}
+
+
+def _reset_scope_observability_for_tests() -> None:
+    with _SCOPE_FALLBACK_LOCK:
+        _SCOPE_FALLBACK_COUNTERS.clear()
+
+
+def _resolve_scope_observability(
+    *,
+    endpoint: str,
+    x_project_id: Optional[str] = None,
+    x_user_id: Optional[str] = None,
+    require_project: bool = False,
+    allow_dev_project_default: bool = False,
+    include_user: bool = True,
+) -> tuple[str, Optional[str], str]:
+    project_id = str(x_project_id or "").strip()
+    project_source = "header"
+    if not project_id:
+        if require_project:
+            allow_default = bool(allow_dev_project_default) and (
+                str(os.environ.get("ALLOW_DEFAULT_PROJECT_ID_FOR_DEV", "") or "")
+                .strip()
+                .lower()
+                in {"1", "true", "yes"}
+            )
+            if not allow_default:
+                raise HTTPException(
+                    status_code=400,
+                    detail="X-Project-Id header is required",
+                )
+            project_id = str(app_settings.DEFAULT_PROJECT_ID)
+            project_source = "dev-default-project"
+        else:
+            project_id = str(app_settings.DEFAULT_PROJECT_ID)
+            project_source = "default-project"
+
+    user_id: Optional[str] = None
+    user_source = "not-set"
+    if include_user:
+        user_id = str(x_user_id or "").strip()
+        if user_id:
+            user_source = "header"
+        else:
+            user_id = str(app_settings.DEFAULT_USER_ID)
+            user_source = "default-user"
+
+    sources: dict[str, str] = {"project": project_source}
+    if include_user:
+        sources["user"] = user_source
+
+    payload = {
+        "endpoint": str(endpoint or "").strip() or "unknown",
+        "resolved_user_id": user_id,
+        "resolved_project_id": project_id,
+        "scope_source": sources,
+    }
+    logger.info("scope.observability %s", json.dumps(payload, sort_keys=True))
+
+    fallback_used = any(source != "header" for source in sources.values())
+    if fallback_used:
+        _record_scope_fallback(payload["endpoint"])
+        logger.warning(
+            "scope.observability.fallback %s", json.dumps(payload, sort_keys=True)
+        )
+
+    return project_id, user_id, json.dumps(sources, sort_keys=True)
+
+
 graph_store = GraphStore(settings=app_settings)
 span_graph_store = SpanGraphStore(settings=app_settings)
 
@@ -221,6 +305,15 @@ def get_background_state():
 @app.post("/background/pause")
 def set_background_pause(payload: BackgroundPauseRequest):
     return background_state.set_paused(payload.paused, reason=payload.reason)
+
+
+@app.get("/scope/observability/fallbacks")
+def get_scope_observability_fallbacks():
+    counts = _scope_fallback_snapshot()
+    return {
+        "fallback_counts_by_endpoint": counts,
+        "total_fallbacks": int(sum(counts.values())),
+    }
 
 
 app.add_middleware(
@@ -1124,16 +1217,17 @@ def _serialize_attachment(record: Optional[dict]) -> schemas.AttachmentStatus:
     return schemas.AttachmentStatus(**data)
 
 
-def _require_project_id_for_upload(x_project_id: Optional[str]) -> str:
-    pid = str(x_project_id or "").strip()
-    if pid:
-        return pid
-    allow_default = str(
-        os.environ.get("ALLOW_DEFAULT_PROJECT_ID_FOR_DEV", "") or ""
-    ).strip().lower() in {"1", "true", "yes"}
-    if allow_default:
-        return str(app_settings.DEFAULT_PROJECT_ID)
-    raise HTTPException(status_code=400, detail="X-Project-Id header is required")
+def _require_project_id_for_upload(
+    x_project_id: Optional[str], *, endpoint: str = "unknown"
+) -> str:
+    project_id, _user_id, _scope_source = _resolve_scope_observability(
+        endpoint=endpoint,
+        x_project_id=x_project_id,
+        require_project=True,
+        allow_dev_project_default=True,
+        include_user=False,
+    )
+    return project_id
 
 
 def _allow_local_path_upload_for_dev() -> bool:
@@ -1158,8 +1252,14 @@ async def ingest_document(
 
     file_bytes = await file.read()
 
-    project_id = _require_project_id_for_upload(x_project_id)
-    user_id = str(app_settings.DEFAULT_USER_ID)
+    project_id, user_id, _scope_source = _resolve_scope_observability(
+        endpoint="/ingest",
+        x_project_id=x_project_id,
+        require_project=True,
+        allow_dev_project_default=True,
+        include_user=True,
+    )
+    assert user_id is not None
     filename = str(file.filename or "").strip() or "document.pdf"
 
     sha256 = hashlib.sha256(file_bytes).hexdigest().lower()
@@ -1251,7 +1351,7 @@ async def ingest_document(
 def list_ingest_documents(
     x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
 ):
-    project_id = _require_project_id_for_upload(x_project_id)
+    project_id = _require_project_id_for_upload(x_project_id, endpoint="/ingest")
 
     try:
         out = list_ingests_from_spine(project_id=project_id, limit=200)
@@ -1269,7 +1369,7 @@ def get_ingest_document(
     doc_id: str,
     x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
 ):
-    project_id = _require_project_id_for_upload(x_project_id)
+    project_id = _require_project_id_for_upload(x_project_id, endpoint="/ingest/{doc_id}")
     try:
         doc = build_ingested_document_from_spine(
             work_id=str(doc_id),
@@ -1289,7 +1389,7 @@ def get_ingest_document(
 def get_document_ledger(
     x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
 ):
-    project_id = _require_project_id_for_upload(x_project_id)
+    project_id = _require_project_id_for_upload(x_project_id, endpoint="/ledger")
     scoped_store = GraphStore(settings=SimpleNamespace(DEFAULT_PROJECT_ID=project_id))
     rows = scoped_store.ledger_rows()
     options = scoped_store.ledger_options()
@@ -1334,8 +1434,12 @@ def get_document_ledger(
 def get_project_meta(
     x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
 ):
-    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
-    user_id = str(app_settings.DEFAULT_USER_ID)
+    project_id, user_id, _scope_source = _resolve_scope_observability(
+        endpoint="/project",
+        x_project_id=x_project_id,
+        include_user=True,
+    )
+    assert user_id is not None
     return get_or_create_project_meta(project_id=project_id, user_id=user_id)
 
 
@@ -1354,8 +1458,12 @@ def put_project_meta(
     x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
 ):
     patch = payload.model_dump(exclude_unset=True)
-    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
-    user_id = str(app_settings.DEFAULT_USER_ID)
+    project_id, user_id, _scope_source = _resolve_scope_observability(
+        endpoint="/project",
+        x_project_id=x_project_id,
+        include_user=True,
+    )
+    assert user_id is not None
     try:
         return update_project_meta(project_id=project_id, user_id=user_id, patch=patch)
     except Exception as exc:
@@ -1377,8 +1485,12 @@ class SpineSettingsUpsertRequest(BaseModel):
 def spine_get_settings(
     x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
 ):
-    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
-    user_id = str(app_settings.DEFAULT_USER_ID)
+    project_id, user_id, _scope_source = _resolve_scope_observability(
+        endpoint="/spine/settings",
+        x_project_id=x_project_id,
+        include_user=True,
+    )
+    assert user_id is not None
     bundle = get_or_create_settings_bundle(
         project_id=project_id,
         name="default",
@@ -1396,8 +1508,12 @@ def spine_post_settings(
     payload: SpineSettingsUpsertRequest,
     x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
 ):
-    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
-    user_id = str(app_settings.DEFAULT_USER_ID)
+    project_id, user_id, _scope_source = _resolve_scope_observability(
+        endpoint="/spine/settings",
+        x_project_id=x_project_id,
+        include_user=True,
+    )
+    assert user_id is not None
     name = str(payload.name or "default").strip() or "default"
     bundle = get_or_create_settings_bundle(
         project_id=project_id,
@@ -1427,7 +1543,11 @@ class SpineWorkflowVersionRequest(BaseModel):
 def spine_list_workflows(
     x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
 ):
-    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
+    project_id, _user_id, _scope_source = _resolve_scope_observability(
+        endpoint="/spine/workflows",
+        x_project_id=x_project_id,
+        include_user=False,
+    )
     return {"workflows": list_workflows(project_id=project_id)}
 
 
@@ -1436,8 +1556,12 @@ def spine_create_workflow(
     payload: SpineWorkflowCreateRequest,
     x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
 ):
-    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
-    user_id = str(app_settings.DEFAULT_USER_ID)
+    project_id, user_id, _scope_source = _resolve_scope_observability(
+        endpoint="/spine/workflows",
+        x_project_id=x_project_id,
+        include_user=True,
+    )
+    assert user_id is not None
     wf = create_workflow_definition(
         project_id=project_id,
         name=str(payload.name or "").strip(),
@@ -1458,8 +1582,12 @@ def spine_append_workflow_version(
     payload: SpineWorkflowVersionRequest,
     x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
 ):
-    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
-    user_id = str(app_settings.DEFAULT_USER_ID)
+    project_id, user_id, _scope_source = _resolve_scope_observability(
+        endpoint="/spine/workflows/{workflow_id}/versions",
+        x_project_id=x_project_id,
+        include_user=True,
+    )
+    assert user_id is not None
     ver = append_workflow_version(
         workflow_id=str(workflow_id),
         project_id=project_id,
@@ -1483,8 +1611,12 @@ def spine_create_locator(
     payload: SpineLocatorCreateRequest,
     x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
 ):
-    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
-    user_id = str(app_settings.DEFAULT_USER_ID)
+    project_id, user_id, _scope_source = _resolve_scope_observability(
+        endpoint="/spine/locators",
+        x_project_id=x_project_id,
+        include_user=True,
+    )
+    assert user_id is not None
     loc = create_locator(
         project_id=project_id,
         created_by_user_id=user_id,
@@ -1500,7 +1632,11 @@ def spine_get_locator(
     locator_id: str,
     x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
 ):
-    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
+    project_id, _user_id, _scope_source = _resolve_scope_observability(
+        endpoint="/spine/locators/{locator_id}",
+        x_project_id=x_project_id,
+        include_user=False,
+    )
     loc = get_locator(locator_id=str(locator_id), project_id=project_id)
     if loc is None:
         raise HTTPException(status_code=404, detail="Locator not found")
@@ -1513,7 +1649,11 @@ def spine_list_locators_for_document_version(
     limit: int = 200,
     x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
 ):
-    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
+    project_id, _user_id, _scope_source = _resolve_scope_observability(
+        endpoint="/spine/document-versions/{document_version_id}/locators",
+        x_project_id=x_project_id,
+        include_user=False,
+    )
     locs = list_locators_for_document_version(
         project_id=project_id,
         document_version_id=str(document_version_id),
@@ -1862,6 +2002,64 @@ def update_ledger_assigned(
     return get_document_ledger()
 
 
+@app.post("/ledger/place", response_model=schemas.LedgerResponse)
+def place_ledger_relation(
+    payload: schemas.LedgerPlaceRequest,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
+    try:
+        project_id = _require_project_id_for_upload(x_project_id)
+        scoped_store = GraphStore(
+            settings=SimpleNamespace(DEFAULT_PROJECT_ID=project_id)
+        )
+        scoped_store.place_relation(
+            source_num=int(payload.source_num),
+            target_num=int(payload.target_num),
+            relation=str(payload.relation),
+            canonical=bool(payload.canonical),
+            reviewer_uid=str(payload.reviewer_uid or "").strip() or None,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return get_document_ledger()
+
+
+@app.post("/ledger/place-reference", response_model=schemas.LedgerResponse)
+def place_ledger_reference(
+    payload: schemas.LedgerPlaceReferenceRequest,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
+    citing_doc_id = str(payload.citing_doc_id or "").strip()
+    reference_id = str(payload.reference_id or "").strip()
+    cited_ingest_id = str(payload.cited_ingest_id or "").strip()
+    if not citing_doc_id or not reference_id or not cited_ingest_id:
+        raise HTTPException(
+            status_code=422,
+            detail="citing_doc_id, reference_id, cited_ingest_id are required",
+        )
+    try:
+        project_id = _require_project_id_for_upload(x_project_id)
+        scoped_store = GraphStore(
+            settings=SimpleNamespace(DEFAULT_PROJECT_ID=project_id)
+        )
+        linked = scoped_store.link_reference_to_ingest(
+            citing_doc_id=citing_doc_id,
+            reference_id=reference_id,
+            cited_ingest_id=cited_ingest_id,
+        )
+        if not linked:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    "Reference node not found for "
+                    f"ref:{citing_doc_id}:{reference_id}"
+                ),
+            )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return get_document_ledger()
+
+
 # --- Claim graph (Phase 09) -------------------------------------------------
 
 _WORD_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
@@ -1955,7 +2153,16 @@ def list_claim_graph_nodes(
 
 
 @app.post("/graph/resolve-references", response_model=schemas.ReferenceResolveResponse)
-def resolve_graph_references(payload: schemas.ReferenceResolveRequest):
+def resolve_graph_references(
+    payload: schemas.ReferenceResolveRequest,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
+    project_id, _user_id, _scope_source = _resolve_scope_observability(
+        endpoint="/graph/resolve-references",
+        x_project_id=x_project_id,
+        include_user=False,
+    )
+    scoped_store = GraphStore(settings=SimpleNamespace(DEFAULT_PROJECT_ID=project_id))
     citing = str(payload.citing_doc_id or "").strip()
     mapping: dict[str, Optional[str]] = {}
     for ref_id in payload.reference_ids or []:
@@ -1963,7 +2170,7 @@ def resolve_graph_references(payload: schemas.ReferenceResolveRequest):
         if not rid:
             continue
         try:
-            ingest_id = graph_store.resolve_reference_to_ingest_id(
+            ingest_id = scoped_store.resolve_reference_to_ingest_id(
                 citing_doc_id=citing,
                 reference_id=rid,
             )
@@ -3205,7 +3412,11 @@ def append_opinion_event(
     
     return OpinionEventResponse(
         event_id=event["event_id"],
-        created_at=event["created_at"],
+        created_at=(
+            event["created_at"].isoformat().replace("+00:00", "Z")
+            if hasattr(event.get("created_at"), "isoformat")
+            else str(event.get("created_at") or "")
+        ),
         owner_uid=event["owner_uid"],
         kind=event["kind"],
         target_key=event["target_key"],
@@ -3547,8 +3758,12 @@ def extract_ingested_document(
         description="Force a new extraction job even if extraction is already complete",
     ),
 ):
-    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
-    user_id = str(app_settings.DEFAULT_USER_ID)
+    project_id, user_id, _scope_source = _resolve_scope_observability(
+        endpoint="/ingest/{doc_id}/extract",
+        x_project_id=x_project_id,
+        include_user=True,
+    )
+    assert user_id is not None
 
     try:
         document = build_ingested_document_from_spine(
@@ -3608,8 +3823,12 @@ def fallback_extract_ingested_document(
     x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
 ):
     """Force a fallback extraction attempt (spine mode only)."""
-    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
-    user_id = str(app_settings.DEFAULT_USER_ID)
+    project_id, user_id, _scope_source = _resolve_scope_observability(
+        endpoint="/ingest/{doc_id}/fallback-extract",
+        x_project_id=x_project_id,
+        include_user=True,
+    )
+    assert user_id is not None
 
     work_id = str(doc_id or "").strip()
     if not work_id:
@@ -3633,7 +3852,11 @@ def cancel_extraction(
     doc_id: str,
     x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
 ):
-    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
+    project_id, _user_id, _scope_source = _resolve_scope_observability(
+        endpoint="/ingest/{doc_id}/extract/cancel",
+        x_project_id=x_project_id,
+        include_user=False,
+    )
     wid = str(doc_id or "").strip()
     if not wid:
         raise HTTPException(status_code=400, detail="doc_id is required")
@@ -3659,7 +3882,11 @@ def get_ingested_extraction(
     doc_id: str,
     x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
 ):
-    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
+    project_id, _user_id, _scope_source = _resolve_scope_observability(
+        endpoint="/ingest/{doc_id}/extraction",
+        x_project_id=x_project_id,
+        include_user=False,
+    )
     try:
         doc = build_ingested_document_from_spine(
             work_id=str(doc_id),
@@ -3685,7 +3912,11 @@ def get_ingest_spine_debug(
     This is intentionally separate from schemas.IngestedDocument to keep the
     UI payload stable while we iterate on robustness + fallback contracts.
     """
-    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
+    project_id, _user_id, _scope_source = _resolve_scope_observability(
+        endpoint="/ingest/{doc_id}/spine",
+        x_project_id=x_project_id,
+        include_user=False,
+    )
     wid = str(doc_id or "").strip()
     if not wid:
         raise HTTPException(status_code=400, detail="doc_id is required")
@@ -3727,7 +3958,11 @@ def get_ingested_body(
     doc_id: str,
     x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
 ):
-    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
+    project_id, _user_id, _scope_source = _resolve_scope_observability(
+        endpoint="/ingest/{doc_id}/body",
+        x_project_id=x_project_id,
+        include_user=False,
+    )
 
     tei_xml: Optional[str] = get_tei_xml_from_spine(
         work_id=str(doc_id), project_id=project_id
@@ -3780,8 +4015,12 @@ def resolve_ingested_references(
     force: bool = Query(False),
     x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
 ):
-    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
-    user_id = str(app_settings.DEFAULT_USER_ID)
+    project_id, user_id, _scope_source = _resolve_scope_observability(
+        endpoint="/ingest/{doc_id}/resolve",
+        x_project_id=x_project_id,
+        include_user=True,
+    )
+    assert user_id is not None
 
     try:
         document = build_ingested_document_from_spine(
@@ -3925,7 +4164,11 @@ def get_ingested_resolution(
     doc_id: str,
     x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
 ):
-    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
+    project_id, _user_id, _scope_source = _resolve_scope_observability(
+        endpoint="/ingest/{doc_id}/resolution",
+        x_project_id=x_project_id,
+        include_user=False,
+    )
 
     try:
         data = get_resolution_from_spine(work_id=str(doc_id), project_id=project_id)

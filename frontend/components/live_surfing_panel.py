@@ -6,7 +6,7 @@ from typing import Any, Optional
 
 import streamlit as st
 
-from frontend import graph_api, ledger_api, nav_api, project_api
+from frontend import graph_api, ledger_api, nav_api, project_api, scope_lock
 from frontend.ingestion_api import (
     get_document_body,
     get_span_bundle,
@@ -109,18 +109,13 @@ def _safe_rerun() -> None:
     st.rerun()
 
 
-def _active_reviewer_uid() -> str:
-    meta = st.session_state.get("project_meta")
-    if isinstance(meta, dict):
-        value = str(meta.get("active_reviewer_uid") or "").strip()
-        if value:
-            return value
-    value2 = str(st.session_state.get("active_reviewer_uid") or "").strip()
-    return value2 or "default"
+def _active_reviewer_uid() -> Optional[str]:
+    value = scope_lock.get_applied_uid()
+    return value or None
 
 
 def _active_project_id() -> Optional[str]:
-    value = str(st.session_state.get("project_id") or "").strip()
+    value = scope_lock.get_applied_project_id()
     return value or None
 
 
@@ -160,7 +155,7 @@ def _get_span_bundle_cached(
         bundle = get_span_bundle(
             api_url,
             str(span_id),
-            reviewer_uid=str(reviewer_uid or "default"),
+            reviewer_uid=str(reviewer_uid),
             include_history=False,
         )
     except Exception:
@@ -267,9 +262,12 @@ def _resolve_reference_targets(
 
 def _ledger_work_graph(api_url: str) -> tuple[dict[str, dict], list[tuple[str, str]]]:
     """Return ingest-id keyed works and directed cite edges between ingested docs."""
+    project_id = _active_project_id()
+    if not project_id:
+        raise RuntimeError("applied scope required for ledger graph")
     payload = ledger_api.get_ledger(
         api_url,
-        project_id=str(st.session_state.get("project_id") or "").strip() or "default",
+        project_id=project_id,
     )
     rows = payload.get("rows") or []
 
@@ -509,6 +507,10 @@ def _persist_graph_settings(
 
 def _render_nav_surfing(*, api_url: str, seed_doc_id: str) -> None:
     reviewer_uid = _active_reviewer_uid()
+    project_id = _active_project_id()
+    if not reviewer_uid or not project_id:
+        st.info("Apply scope (user + project) to unlock Surfing.")
+        return
     show_claimspans = bool(st.session_state.get("graph_nav_show_claimspans"))
     follow_active = bool(st.session_state.get("graph_nav_follow_active"))
 
@@ -2540,7 +2542,7 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
                             trigger_resolution(
                                 api_url,
                                 doc_id,
-                                project_id=str(st.session_state.get("project_id") or "").strip() or None,
+                                project_id=_active_project_id(),
                                 user_id=_active_reviewer_uid(),
                             )
                         except Exception:
@@ -2580,13 +2582,7 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
                             bundle_cache = _as_dict(
                                 st.session_state.get("surf_live_bundle_cache")
                             )
-                            reviewer_uid = (
-                                str(
-                                    st.session_state.get("active_reviewer_uid")
-                                    or "default"
-                                ).strip()
-                                or "default"
-                            )
+                            reviewer_uid = str(_active_reviewer_uid() or "").strip()
                             bundle_cache.pop(f"{span_id}::{reviewer_uid}", None)
                             st.session_state["surf_live_bundle_cache"] = bundle_cache
                             expanded_cites.add(sel_id)

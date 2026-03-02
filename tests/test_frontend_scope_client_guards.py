@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from frontend import graph_api, ingestion_api, ledger_api, opinion_api
+from frontend import graph_api, ingestion_api, ledger_api, opinion_api, project_api
 
 
 class _FakeResponse:
@@ -178,3 +178,8 @@ def test_graph_reindex_sends_scope_identity_headers(
         "X-Project-Id": "proj-a",
         "X-User-Id": "reviewer-a",
     }
+
+
+def test_project_api_fails_fast_without_project_scope() -> None:
+    with pytest.raises(project_api.ProjectApiError, match="project_id"):
+        project_api.get_meta(project_id=None)

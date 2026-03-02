@@ -2161,7 +2161,10 @@ def _project_fetch_meta(api_url: str, *, force: bool = False) -> dict:
         meta = None
     if meta is None or force:
         try:
-            meta = project_api.get_meta()
+            meta = project_api.get_meta(
+                project_id=get_project_id(),
+                user_id=_active_reviewer_uid(),
+            )
         except project_api.ProjectApiError as exc:
             meta = {"name": "default", "error": str(exc)}
         st.session_state["project_meta"] = meta
@@ -2263,7 +2266,9 @@ def render_project_panel() -> None:
         if st.button("Save", key="project-name-save", use_container_width=True):
             try:
                 st.session_state["project_meta"] = project_api.put_meta(
-                    st.session_state.get(name_key)
+                    st.session_state.get(name_key),
+                    project_id=get_project_id(),
+                    user_id=_active_reviewer_uid(),
                 )
             except project_api.ProjectApiError as exc:
                 st.error(str(exc))
@@ -2297,7 +2302,9 @@ def render_project_panel() -> None:
             return
         try:
             st.session_state["project_meta"] = project_api.put_meta(
-                {"active_reviewer_uid": chosen_value}
+                {"active_reviewer_uid": chosen_value},
+                project_id=get_project_id(),
+                user_id=_active_reviewer_uid(),
             )
         except project_api.ProjectApiError as exc:
             st.error(str(exc))
@@ -2337,7 +2344,9 @@ def render_project_panel() -> None:
 
         try:
             st.session_state["project_meta"] = project_api.put_meta(
-                {"reviewers": updated, "active_reviewer_uid": chosen}
+                {"reviewers": updated, "active_reviewer_uid": chosen},
+                project_id=get_project_id(),
+                user_id=_active_reviewer_uid(),
             )
         except project_api.ProjectApiError as exc:
             st.session_state["project_add_reviewer_error"] = str(exc)
@@ -2571,7 +2580,10 @@ def render_project_panel() -> None:
             use_container_width=True,
         ):
             try:
-                st.session_state["project_export_blob"] = project_api.export_zip()
+                st.session_state["project_export_blob"] = project_api.export_zip(
+                    project_id=get_project_id(),
+                    user_id=_active_reviewer_uid(),
+                )
             except project_api.ProjectApiError as exc:
                 st.error(str(exc))
     with export_cols[1]:
@@ -2616,7 +2628,12 @@ def render_project_panel() -> None:
     ):
         try:
             data = uploaded.getvalue() if uploaded else b""
-            result = project_api.import_zip(data, overwrite=True)
+            result = project_api.import_zip(
+                data,
+                overwrite=True,
+                project_id=get_project_id(),
+                user_id=_active_reviewer_uid(),
+            )
         except project_api.ProjectApiError as exc:
             st.error(str(exc))
         else:

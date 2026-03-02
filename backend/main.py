@@ -1494,10 +1494,12 @@ def get_document_ledger(
 @app.get("/project", response_model=schemas.ProjectMeta)
 def get_project_meta(
     x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
 ):
     project_id, user_id, _scope_source = _resolve_scope_observability(
         endpoint="/project",
         x_project_id=x_project_id,
+        x_user_id=x_user_id,
         include_user=True,
     )
     assert user_id is not None
@@ -1517,11 +1519,13 @@ class ProjectMetaUpdate(BaseModel):
 def put_project_meta(
     payload: ProjectMetaUpdate,
     x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
 ):
     patch = payload.model_dump(exclude_unset=True)
     project_id, user_id, _scope_source = _resolve_scope_observability(
         endpoint="/project",
         x_project_id=x_project_id,
+        x_user_id=x_user_id,
         include_user=True,
     )
     assert user_id is not None
@@ -1726,10 +1730,19 @@ def spine_list_locators_for_document_version(
 @app.get("/project/export")
 def export_project(
     x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
     x_reviewer_uid: Optional[str] = Header(None, alias="X-Reviewer-Uid"),
 ):
-    project_id = _require_project_id_for_upload(x_project_id)
-    meta = get_or_create_project_meta(project_id=project_id)
+    project_id, user_id, _scope_source = _resolve_scope_observability(
+        endpoint="/project/export",
+        x_project_id=x_project_id,
+        x_user_id=x_user_id,
+        require_project=True,
+        allow_dev_project_default=True,
+        include_user=True,
+    )
+    assert user_id is not None
+    meta = get_or_create_project_meta(project_id=project_id, user_id=user_id)
     name = (meta.get("name") or "project").strip() or "project"
     safe = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in name)
     filename = f"{safe}.zip"
@@ -1774,10 +1787,19 @@ async def import_project(
     file: UploadFile = File(...),
     overwrite: bool = False,
     x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
 ):
-    project_id = _require_project_id_for_upload(x_project_id)
+    project_id, resolved_user_id, _scope_source = _resolve_scope_observability(
+        endpoint="/project/import",
+        x_project_id=x_project_id,
+        x_user_id=x_user_id,
+        require_project=True,
+        allow_dev_project_default=True,
+        include_user=True,
+    )
+    assert resolved_user_id is not None
     blob = await file.read()
-    user_id = str(app_settings.DEFAULT_USER_ID)
+    user_id = str(resolved_user_id)
     try:
         with zipfile.ZipFile(io.BytesIO(blob), "r") as zf:
             meta_raw = json.loads(zf.read("project.json").decode("utf-8"))

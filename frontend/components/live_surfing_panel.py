@@ -119,6 +119,11 @@ def _active_reviewer_uid() -> str:
     return value2 or "default"
 
 
+def _active_project_id() -> Optional[str]:
+    value = str(st.session_state.get("project_id") or "").strip()
+    return value or None
+
+
 def _get_span_id(
     *, api_url: str, ingest_id: str, citation_index: int, target_id: str
 ) -> str:
@@ -470,7 +475,10 @@ def _persist_graph_settings(
     cap: int = 500,
 ) -> None:
     try:
-        meta = project_api.get_meta()
+        meta = project_api.get_meta(
+            project_id=_active_project_id(),
+            user_id=_active_reviewer_uid(),
+        )
     except Exception as exc:
         st.error(f"Project meta unavailable: {exc}")
         return
@@ -487,7 +495,11 @@ def _persist_graph_settings(
         gs["requested_work_ids"] = cleaned[: int(cap)]
 
     try:
-        updated = project_api.put_meta({"graph_settings": gs})
+        updated = project_api.put_meta(
+            {"graph_settings": gs},
+            project_id=_active_project_id(),
+            user_id=_active_reviewer_uid(),
+        )
     except Exception as exc:
         st.error(f"Failed to persist graph settings: {exc}")
         return
@@ -978,7 +990,10 @@ def _render_nav_surfing(*, api_url: str, seed_doc_id: str) -> None:
         ):
             meta = {}
             try:
-                meta = project_api.get_meta()
+                meta = project_api.get_meta(
+                    project_id=_active_project_id(),
+                    user_id=_active_reviewer_uid(),
+                )
             except Exception:
                 meta = {}
             gs = _as_dict((meta or {}).get("graph_settings"))
@@ -998,7 +1013,10 @@ def _render_nav_surfing(*, api_url: str, seed_doc_id: str) -> None:
         if can_request:
             meta = {}
             try:
-                meta = project_api.get_meta()
+                meta = project_api.get_meta(
+                    project_id=_active_project_id(),
+                    user_id=_active_reviewer_uid(),
+                )
             except Exception:
                 meta = {}
             gs = _as_dict((meta or {}).get("graph_settings"))

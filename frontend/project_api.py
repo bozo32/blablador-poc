@@ -13,23 +13,41 @@ class ProjectApiError(RuntimeError):
     pass
 
 
+def _require_project_headers(
+    *, project_id: Optional[str], user_id: Optional[str] = None
+) -> Dict[str, str]:
+    pid = str(project_id or "").strip()
+    if not pid:
+        raise ProjectApiError("project API request requires project_id")
+
+    headers = {"X-Project-Id": pid}
+    uid = str(user_id or "").strip()
+    if uid:
+        headers["X-User-Id"] = uid
+    return headers
+
+
 def _api_root() -> str:
     value = st.session_state.get("api_url") or "http://localhost:8000"
     return str(value).rstrip("/")
 
 
-def get_meta() -> Dict[str, Any]:
+def get_meta(*, project_id: Optional[str], user_id: Optional[str] = None) -> Dict[str, Any]:
     url = f"{_api_root()}/project"
+    headers = _require_project_headers(project_id=project_id, user_id=user_id)
     try:
-        resp = requests.get(url, timeout=DEFAULT_TIMEOUT)
+        resp = requests.get(url, headers=headers, timeout=DEFAULT_TIMEOUT)
         resp.raise_for_status()
         return resp.json() if resp.text else {}
     except requests.RequestException as exc:
         raise ProjectApiError(str(exc)) from exc
 
 
-def put_meta(payload: Any) -> Dict[str, Any]:
+def put_meta(
+    payload: Any, *, project_id: Optional[str], user_id: Optional[str] = None
+) -> Dict[str, Any]:
     url = f"{_api_root()}/project"
+    headers = _require_project_headers(project_id=project_id, user_id=user_id)
     json_payload: Dict[str, Any]
 
     if isinstance(payload, Mapping):
@@ -41,30 +59,49 @@ def put_meta(payload: Any) -> Dict[str, Any]:
         json_payload = {"name": name}
 
     try:
-        resp = requests.put(url, json=json_payload, timeout=DEFAULT_TIMEOUT)
+        resp = requests.put(
+            url,
+            json=json_payload,
+            headers=headers,
+            timeout=DEFAULT_TIMEOUT,
+        )
         resp.raise_for_status()
         return resp.json() if resp.text else {}
     except requests.RequestException as exc:
         raise ProjectApiError(str(exc)) from exc
 
 
-def export_zip() -> bytes:
+def export_zip(*, project_id: Optional[str], user_id: Optional[str] = None) -> bytes:
     url = f"{_api_root()}/project/export"
+    headers = _require_project_headers(project_id=project_id, user_id=user_id)
     try:
-        resp = requests.get(url, timeout=DEFAULT_TIMEOUT)
+        resp = requests.get(url, headers=headers, timeout=DEFAULT_TIMEOUT)
         resp.raise_for_status()
         return resp.content
     except requests.RequestException as exc:
         raise ProjectApiError(str(exc)) from exc
 
 
-def import_zip(zip_bytes: bytes, *, overwrite: bool) -> Dict[str, Any]:
+def import_zip(
+    zip_bytes: bytes,
+    *,
+    overwrite: bool,
+    project_id: Optional[str],
+    user_id: Optional[str] = None,
+) -> Dict[str, Any]:
     url = f"{_api_root()}/project/import"
+    headers = _require_project_headers(project_id=project_id, user_id=user_id)
     params = {"overwrite": "true" if overwrite else "false"}
     files = {"file": ("project.zip", zip_bytes, "application/zip")}
     resp: Optional[requests.Response] = None
     try:
-        resp = requests.post(url, params=params, files=files, timeout=DEFAULT_TIMEOUT)
+        resp = requests.post(
+            url,
+            params=params,
+            files=files,
+            headers=headers,
+            timeout=DEFAULT_TIMEOUT,
+        )
         resp.raise_for_status()
         return resp.json() if resp.text else {}
     except requests.RequestException as exc:

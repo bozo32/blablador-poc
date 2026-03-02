@@ -302,6 +302,68 @@ _DDL_STATEMENTS: list[str] = [
     );
     """,
     """
+    CREATE TABLE IF NOT EXISTS user_project_memberships (
+      user_id text NOT NULL,
+      project_id text NOT NULL,
+      role text NOT NULL DEFAULT 'owner',
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      created_by_user_id text NOT NULL DEFAULT 'local',
+      PRIMARY KEY(user_id, project_id)
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS user_project_memberships_project_id_idx
+      ON user_project_memberships(project_id);
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS user_active_projects (
+      user_id text PRIMARY KEY,
+      project_id text NOT NULL,
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      updated_by_user_id text NOT NULL DEFAULT 'local'
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS user_active_projects_project_id_idx
+      ON user_active_projects(project_id);
+    """,
+    """
+    INSERT INTO user_project_memberships(user_id, project_id, role, created_by_user_id)
+    VALUES ('default', 'default', 'owner', 'local')
+    ON CONFLICT(user_id, project_id) DO NOTHING;
+    """,
+    """
+    INSERT INTO user_project_memberships(user_id, project_id, role, created_by_user_id)
+    SELECT DISTINCT
+      COALESCE(NULLIF(updated_by_user_id, ''), 'local') AS user_id,
+      project_id,
+      'owner' AS role,
+      COALESCE(NULLIF(updated_by_user_id, ''), 'local') AS created_by_user_id
+    FROM project_meta
+    ON CONFLICT(user_id, project_id) DO NOTHING;
+    """,
+    """
+    INSERT INTO user_project_memberships(user_id, project_id, role, created_by_user_id)
+    SELECT DISTINCT
+      COALESCE(NULLIF(created_by_user_id, ''), 'local') AS user_id,
+      COALESCE(NULLIF(project_id, ''), 'default') AS project_id,
+      'owner' AS role,
+      COALESCE(NULLIF(created_by_user_id, ''), 'local') AS created_by_user_id
+    FROM works
+    ON CONFLICT(user_id, project_id) DO NOTHING;
+    """,
+    """
+    INSERT INTO user_active_projects(user_id, project_id, updated_by_user_id)
+    SELECT DISTINCT ON (m.user_id)
+      m.user_id,
+      m.project_id,
+      m.created_by_user_id
+    FROM user_project_memberships m
+    ORDER BY m.user_id, m.updated_at DESC, m.created_at DESC
+    ON CONFLICT(user_id) DO NOTHING;
+    """,
+    """
     CREATE TABLE IF NOT EXISTS background_state (
       project_id text PRIMARY KEY,
       paused boolean NOT NULL DEFAULT false,

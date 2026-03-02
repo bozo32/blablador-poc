@@ -88,3 +88,33 @@ def test_opinion_write_requires_actor_and_owner_match(monkeypatch: pytest.Monkey
     )
     assert resp.status_code == 403
     assert resp.json()["detail"] == "X-User-Id must match X-Reviewer-Uid for opinion writes"
+
+
+def test_selectable_visibility_is_fail_closed_without_group_acl_context() -> None:
+    assert (
+        opinion_events._can_view_event(  # type: ignore[attr-defined]
+            owner_uid="owner-a",
+            visibility="selectable",
+            group_id="group-a",
+            mode=0o640,
+            viewer_uid="member-b",
+            viewer_is_project_member=True,
+            selectable_group_ids=None,
+        )
+        is False
+    )
+
+
+def test_selectable_visibility_allows_group_member_with_group_read_mode() -> None:
+    assert (
+        opinion_events._can_view_event(  # type: ignore[attr-defined]
+            owner_uid="owner-a",
+            visibility="selectable",
+            group_id="group-a",
+            mode=0o640,
+            viewer_uid="member-b",
+            viewer_is_project_member=True,
+            selectable_group_ids=["group-a"],
+        )
+        is True
+    )

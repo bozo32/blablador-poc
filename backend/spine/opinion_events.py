@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from backend.db.pg import connect
 
@@ -39,6 +39,41 @@ def _acl_clause_for_owner_stream(*, include_selectable: bool) -> str:
     if include_selectable:
         return "(owner_uid = %s OR visibility IN ('public', 'selectable'))"
     return "(owner_uid = %s OR visibility = 'public')"
+
+
+def _can_view_event(
+    *,
+    owner_uid: str,
+    visibility: str,
+    group_id: Optional[str],
+    mode: Optional[int],
+    viewer_uid: str,
+    viewer_is_project_member: bool,
+    selectable_group_ids: Optional[Sequence[str]],
+) -> bool:
+    normalized_visibility = normalize_visibility(visibility)
+    if str(viewer_uid or "").strip() == str(owner_uid or "").strip():
+        return True
+    if normalized_visibility == "public":
+        return True
+    if normalized_visibility != "selectable":
+        return False
+
+    # Fail-closed policy: selectable visibility is group-scoped only when we have
+    # explicit group ACL context. If ACL context is absent, do not leak events.
+    if not viewer_is_project_member:
+        return False
+    groups = {str(g or "").strip() for g in (selectable_group_ids or []) if str(g or "").strip()}
+    required_group = str(group_id or "").strip()
+    if not groups or not required_group or required_group not in groups:
+        return False
+
+    # Group readability via POSIX-style mode bit: 0o040 => group-read.
+    try:
+        parsed_mode = int(mode if mode is not None else 0)
+    except Exception:
+        parsed_mode = 0
+    return bool(parsed_mode & 0o040)
 
 
 def append_event(
@@ -112,12 +147,13 @@ def list_recent_events(
     owner_uid: str,
     viewer_uid: str,
     viewer_is_project_member: bool,
+    selectable_group_ids: Optional[Sequence[str]] = None,
     target_key: Optional[str] = None,
     kind: Optional[str] = None,
     limit: int = 20,
 ) -> List[Dict[str, Any]]:
     """List recent opinion events for a reviewer."""
-    include_selectable = bool(viewer_is_project_member)
+    include_selectable = bool(selectable_group_ids)
     with connect() as conn:
         with conn.cursor() as cur:
             query = """
@@ -146,7 +182,7 @@ def list_recent_events(
             cur.execute(query, params)
             rows = cur.fetchall()
     
-    return [
+    events = [
         {
             "event_id": row[0],
             "created_at": row[1].isoformat().replace("+00:00", "Z") if row[1] else None,
@@ -165,6 +201,19 @@ def list_recent_events(
         }
         for row in rows
     ]
+    return [
+        ev
+        for ev in events
+        if _can_view_event(
+            owner_uid=str(ev.get("owner_uid") or ""),
+            visibility=str(ev.get("visibility") or "private"),
+            group_id=ev.get("group_id"),
+            mode=ev.get("mode") if isinstance(ev.get("mode"), int) else None,
+            viewer_uid=viewer_uid,
+            viewer_is_project_member=viewer_is_project_member,
+            selectable_group_ids=selectable_group_ids,
+        )
+    ]
 
 
 def get_follow_status(
@@ -173,18 +222,19 @@ def get_follow_status(
     viewer_uid: str,
     viewer_is_project_member: bool,
     target_key: str,
+    selectable_group_ids: Optional[Sequence[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Get the latest follow status for a target key.
     
     Returns the most recent follow/ignore/complete event for the given target.
     """
-    include_selectable = bool(viewer_is_project_member)
+    include_selectable = bool(selectable_group_ids)
     with connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 SELECT event_id, created_at, actor_uid, owner_uid, kind,
-                       target_key, visibility, payload_json
+                       target_key, visibility, group_id, mode, payload_json
                 FROM opinion_events
                 WHERE project_id = %s 
                   AND owner_uid = %s 
@@ -205,7 +255,18 @@ def get_follow_status(
     if not row:
         return None
     
-    payload = json.loads(row[7]) if row[7] else {}
+    if not _can_view_event(
+        owner_uid=str(row[3] or ""),
+        visibility=str(row[6] or "private"),
+        group_id=row[7],
+        mode=row[8],
+        viewer_uid=viewer_uid,
+        viewer_is_project_member=viewer_is_project_member,
+        selectable_group_ids=selectable_group_ids,
+    ):
+        return None
+
+    payload = json.loads(row[9]) if row[9] else {}
 
     return {
         "event_id": row[0],
@@ -226,12 +287,13 @@ def list_follow_by_doc(
     viewer_is_project_member: bool,
     doc_id: str,
     limit: int = 500,
+    selectable_group_ids: Optional[Sequence[str]] = None,
 ) -> List[Dict[str, Any]]:
     """List projected follow entries for a document.
     
     Returns one row per span_id with current_status and sort_key (min citation_index).
     """
-    include_selectable = bool(viewer_is_project_member)
+    include_selectable = bool(selectable_group_ids)
     with connect() as conn:
         with conn.cursor() as cur:
             # Get latest follow status per span_id
@@ -242,7 +304,11 @@ def list_follow_by_doc(
                     target_key,
                     payload_json,
                     citation_index,
-                    target_id
+                    target_id,
+                    visibility,
+                    group_id,
+                    mode,
+                    owner_uid
                 FROM opinion_events
                 WHERE project_id = %s
                   AND owner_uid = %s
@@ -270,6 +336,16 @@ def list_follow_by_doc(
             payload = json.loads(raw_payload)
         else:
             payload = {}
+        if not _can_view_event(
+            owner_uid=str(row[8] or ""),
+            visibility=str(row[5] or "private"),
+            group_id=row[6],
+            mode=row[7],
+            viewer_uid=viewer_uid,
+            viewer_is_project_member=viewer_is_project_member,
+            selectable_group_ids=selectable_group_ids,
+        ):
+            continue
         result.append({
             "span_id": row[0],
             "target_key": row[1],

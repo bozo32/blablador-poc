@@ -22,6 +22,13 @@ WORKSPACE_TAB_LABELS = {
 }
 
 
+# Phase 10-04.5 PR-07: explicit draft/applied scope lock.
+SCOPE_DRAFT_UID = "scope_draft_uid"
+SCOPE_DRAFT_PROJECT_ID = "scope_draft_project_id"
+SCOPE_APPLIED_UID = "scope_applied_uid"
+SCOPE_APPLIED_PROJECT_ID = "scope_applied_project_id"
+
+
 def canonical_context_edit_key(*, doc_id: str, citation_index: int) -> str:
     return f"context-edit::{doc_id}::{int(citation_index)}"
 

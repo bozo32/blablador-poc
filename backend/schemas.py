@@ -847,6 +847,8 @@ class LedgerRow(BaseModel):
     outgoing: List[int] = Field(default_factory=list)
     incoming_live: List[int] = Field(default_factory=list)
     outgoing_live: List[int] = Field(default_factory=list)
+    incoming_suggested_live: List[int] = Field(default_factory=list)
+    outgoing_suggested_live: List[int] = Field(default_factory=list)
     assigned: bool = False
     anchored: bool = False
     extracted: bool = False
@@ -865,6 +867,22 @@ class LedgerLinksUpdateRequest(BaseModel):
 
 class LedgerAssignRequest(BaseModel):
     assigned: bool
+
+
+class LedgerPlaceRequest(BaseModel):
+    source_num: int
+    target_num: int
+    relation: Literal["cites", "is cited by"] = "is cited by"
+    canonical: bool = False
+    reviewer_uid: Optional[str] = None
+
+
+class LedgerPlaceReferenceRequest(BaseModel):
+    citing_doc_id: str
+    reference_id: str
+    cited_ingest_id: str
+    canonical: bool = False
+    reviewer_uid: Optional[str] = None
 
 
 class ProjectMeta(BaseModel):
@@ -929,6 +947,42 @@ class ProjectImportResponse(BaseModel):
     ok: bool
     backup_zip: str
     project: ProjectMeta
+
+
+class ProjectMembershipSummary(BaseModel):
+    project_id: str
+    role: str = "member"
+    joined_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    is_active: bool = False
+
+
+class ProjectMembershipListResponse(BaseModel):
+    projects: List[ProjectMembershipSummary] = Field(default_factory=list)
+    active_project_id: Optional[str] = None
+
+
+class ProjectMembershipCreateRequest(BaseModel):
+    project_id: Optional[str] = None
+    name: Optional[str] = None
+
+
+class ProjectMembershipCreateResponse(BaseModel):
+    project: ProjectMembershipSummary
+    active_project_id: str
+
+
+class ProjectMembershipSelectRequest(BaseModel):
+    project_id: str
+
+
+class ProjectMembershipSelectResponse(BaseModel):
+    ok: bool = True
+    active_project_id: str
+
+
+class ProjectMembershipActiveResponse(BaseModel):
+    active_project_id: Optional[str] = None
 
 
 class AutoPlaceRequest(BaseModel):

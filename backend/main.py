@@ -133,6 +133,12 @@ from backend.spine.project_meta import (
     import_project_meta_json,
     update_project_meta,
 )
+from backend.spine.project_membership import (
+    create_project_for_user,
+    get_active_project_for_user,
+    list_projects_for_user,
+    set_active_project_for_user,
+)
 
 # Configure logging.
 # Default to INFO to avoid extremely noisy dependency logs (urllib3/HF).
@@ -1295,6 +1301,15 @@ def _require_scope_for_write_pilot(
     return project_id, user_id
 
 
+def _require_projects_user_id(
+    *, x_user_id: Optional[str], endpoint: str = "/projects"
+) -> str:
+    user_id = str(x_user_id or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=400, detail="X-User-Id header is required")
+    return user_id
+
+
 def _allow_local_path_upload_for_dev() -> bool:
     return str(
         os.environ.get("ALLOW_LOCAL_PATH_UPLOAD_FOR_DEV", "") or ""
@@ -1489,6 +1504,99 @@ def get_document_ledger(
             row["resolution_error"] = resolution.get("error")
 
     return {"rows": rows, "options": options}
+
+
+@app.get("/projects", response_model=schemas.ProjectMembershipListResponse)
+def list_projects(
+    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
+):
+    user_id = _require_projects_user_id(x_user_id=x_user_id, endpoint="/projects")
+    projects = list_projects_for_user(user_id=user_id)
+    active_project_id = get_active_project_for_user(user_id=user_id)
+    return {
+        "projects": projects,
+        "active_project_id": active_project_id,
+    }
+
+
+@app.post("/projects", response_model=schemas.ProjectMembershipCreateResponse)
+def create_project(
+    payload: schemas.ProjectMembershipCreateRequest,
+    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
+):
+    user_id = _require_projects_user_id(x_user_id=x_user_id, endpoint="/projects")
+    requested_project_id = str(payload.project_id or "").strip() or None
+    display_name = str(payload.name or "").strip() or None
+
+    project = create_project_for_user(
+        user_id=user_id,
+        actor_user_id=user_id,
+        project_id=requested_project_id,
+        role="owner",
+    )
+    project_id = str(project.get("project_id") or "").strip()
+    if not project_id:
+        raise HTTPException(status_code=500, detail="project creation failed")
+
+    # Keep project_meta behavior compatible while making membership authoritative.
+    meta = get_or_create_project_meta(project_id=project_id, user_id=user_id)
+    if display_name and display_name != str(meta.get("name") or "").strip():
+        update_project_meta(
+            project_id=project_id,
+            user_id=user_id,
+            patch={"name": display_name},
+        )
+
+    set_active_project_for_user(
+        user_id=user_id,
+        project_id=project_id,
+        actor_user_id=user_id,
+    )
+    return {
+        "project": {
+            "project_id": project_id,
+            "role": str(project.get("role") or "owner"),
+            "joined_at": project.get("joined_at"),
+            "updated_at": project.get("updated_at"),
+            "is_active": True,
+        },
+        "active_project_id": project_id,
+    }
+
+
+@app.post("/projects/select", response_model=schemas.ProjectMembershipSelectResponse)
+def select_project(
+    payload: schemas.ProjectMembershipSelectRequest,
+    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
+):
+    user_id = _require_projects_user_id(
+        x_user_id=x_user_id,
+        endpoint="/projects/select",
+    )
+    project_id = str(payload.project_id or "").strip()
+    if not project_id:
+        raise HTTPException(status_code=422, detail="project_id is required")
+    if not set_active_project_for_user(
+        user_id=user_id,
+        project_id=project_id,
+        actor_user_id=user_id,
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="User is not a member of this project",
+        )
+    return {"ok": True, "active_project_id": project_id}
+
+
+@app.get("/projects/active", response_model=schemas.ProjectMembershipActiveResponse)
+def get_active_project(
+    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
+):
+    user_id = _require_projects_user_id(
+        x_user_id=x_user_id,
+        endpoint="/projects/active",
+    )
+    return {"active_project_id": get_active_project_for_user(user_id=user_id)}
 
 
 @app.get("/project", response_model=schemas.ProjectMeta)

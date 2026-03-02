@@ -312,4 +312,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 9.1. Ingestion replumbing + solid spine | 15/15 | Complete | 2026-02-16 |
 | 9.2. Ingestion automation robustness + fallback extraction | 7/7 | Complete | 2026-02-17 |
 | 9.3. Spine Everywhere + Legacy Removal | 6/6 | Complete | 2026-02-20 |
-| 10. Contracts + Core Workflow Simplification | 12/15 | In Progress|  |
+| 10. Contracts + Core Workflow Simplification | 13/16 | In Progress|  |

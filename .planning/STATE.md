@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-03-02T11:18:57.854Z"
+last_updated: "2026-03-02T18:20:58.178Z"
 progress:
   total_phases: 3
   completed_phases: 0
-  total_plans: 16
-  completed_plans: 12
+  total_plans: 17
+  completed_plans: 13
 ---
 
 # Project State
@@ -25,9 +25,9 @@ Planning index: `.planning/PRIORITIES.md`
 ## Current Position
 
 Phase: 10 of 12 (Contracts + core workflow simplification)
-Plan: 6 of 7 (10-04.5 Opinion layer)
-Status: In progress (10-04.5-03 complete; next 10-05)
-Last activity: 2026-03-02 — Completed 10-04.5-03; fixed rail/tab queue key collisions and enabled non-blocking unknown-upload auto-routing
+Plan: 7 of 7 (10-04.5 Opinion layer)
+Status: In progress (10-04.5-04 complete; next 10-05)
+Last activity: 2026-03-02 — Completed 10-04.5-04; removed intake route-choice prompts and auto-routed unclear uploads to Stray/source flow
 
 Progress: ██████████░ 80%
 
@@ -52,6 +52,7 @@ Progress: ██████████░ 80%
 - Last 5 plans: 10-04.5-01-04 (20 min), 10-04.5-01-03 (9 min), 05-04 (23 min), 05-03 (15 min), 05-02 (22 min)
 - Trend: Building
 | Phase 10-contracts-core-workflow-simplification P10-04.5-03 | 326 | 2 tasks | 4 files |
+| Phase 10-contracts-core-workflow-simplification P10-04.5-04 | 5min | 1 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -120,6 +121,8 @@ Recent decisions affecting current work:
 - Prefer GROBID consolidation when resolver sources disagree; warn that OpenAlex may return citing articles (02-06).
 - [Phase 10-contracts-core-workflow-simplification]: Unknown intake intent now auto-routes to citing while keeping explicit non-blocking overrides.
 - [Phase 10-contracts-core-workflow-simplification]: Requested-works widget scope now prefixes parent panel scope to prevent rail/tab duplicate Streamlit keys.
+- [Phase 10-contracts-core-workflow-simplification]: Unknown intake intent now auto-routes to source/Stray without manual route-choice controls in Drop PDFs.
+- [Phase 10-contracts-core-workflow-simplification]: Retained override_available as inert metadata for unknown rows; full field removal deferred to schema cleanup.
 
 ### Roadmap Evolution
 
@@ -146,6 +149,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-03-02T11:18:13Z
-Stopped at: Completed 10-04.5-03-PLAN.md
+Last session: 2026-03-02T18:20:25Z
+Stopped at: Completed 10-04.5-04-PLAN.md
 Resume file: None

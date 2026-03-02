@@ -44,6 +44,8 @@ from frontend.components import chase_queue as chase_queue_component
 from frontend.components import chasing_panel
 from frontend.components import live_surfing_panel
 from frontend.state_keys import (
+    SCOPE_DRAFT_PROJECT_ID,
+    SCOPE_DRAFT_UID,
     WORKSPACE_ACTIVE_TAB,
     WORKSPACE_DENSE_MODE,
     WORKSPACE_SETTINGS_OPEN,
@@ -89,6 +91,7 @@ from frontend.opinion_api import (
 )
 from frontend import ledger_api
 from frontend import project_api
+from frontend import scope_lock
 from typing import Any, Dict, List, Optional
 
 
@@ -180,7 +183,9 @@ def init_session_state():
         "project_export_blob": None,
         "project_import_confirm": False,
         # Scope plumbing (Phase 10-04.5): /ingest endpoints are project-scoped.
-        "project_id": str(getattr(settings, "DEFAULT_PROJECT_ID", "default")),
+        "project_id": "",
+        SCOPE_DRAFT_UID: "",
+        SCOPE_DRAFT_PROJECT_ID: "",
         # Phase 10-04.5: unified Intake drop + inbox.
         "intake_inbox": [],
         "intake_blobs": {},
@@ -192,10 +197,7 @@ def init_session_state():
 
 def get_project_id() -> str:
     """Return current project scope for X-Project-Id."""
-    pid = str(st.session_state.get("project_id") or "").strip()
-    if pid:
-        return pid
-    return str(getattr(settings, "DEFAULT_PROJECT_ID", "default"))
+    return scope_lock.get_applied_project_id()
 
 
 # === Helpers ===
@@ -2156,6 +2158,8 @@ def render_documents_panel(*, max_rows: Optional[int] = None) -> None:
 
 
 def _project_fetch_meta(api_url: str, *, force: bool = False) -> dict:
+    if not scope_lock.has_applied_scope():
+        return {}
     meta = st.session_state.get("project_meta")
     if force or not isinstance(meta, dict):
         meta = None
@@ -2192,10 +2196,8 @@ def _project_active_reviewer_uid(meta: dict) -> Optional[str]:
 
 
 def _active_reviewer_uid() -> Optional[str]:
-    meta = st.session_state.get("project_meta")
-    if not isinstance(meta, dict):
-        return None
-    return _project_active_reviewer_uid(meta)
+    value = scope_lock.get_applied_uid()
+    return value or None
 
 
 def _reviewer_state_suffix(reviewer_uid: Optional[str]) -> str:
@@ -2239,6 +2241,64 @@ def _maybe_attach_citation_anchor(provenance: dict) -> dict:
     )
 
 
+def _applied_scope_badge() -> str:
+    uid = scope_lock.get_applied_uid()
+    project_id = scope_lock.get_applied_project_id()
+    if uid and project_id:
+        return f"Scope: uid={uid} • project={project_id}"
+    return "Scope: unapplied"
+
+
+def render_scope_selector_block() -> None:
+    scope_lock.ensure_seeded()
+    st.markdown("**Scope selector**")
+    st.caption("Set draft scope and click Apply/Switch to unlock activity.")
+
+    st.text_input(
+        "User ID",
+        key=SCOPE_DRAFT_UID,
+        placeholder="reviewer-a",
+        help="Draft only until Apply/Switch.",
+    )
+    st.text_input(
+        "Project ID",
+        key=SCOPE_DRAFT_PROJECT_ID,
+        placeholder="project-a",
+        help="Draft only until Apply/Switch.",
+    )
+
+    draft_uid = scope_lock.get_draft_uid()
+    draft_project_id = scope_lock.get_draft_project_id()
+    applied_uid = scope_lock.get_applied_uid()
+    applied_project_id = scope_lock.get_applied_project_id()
+    has_applied = scope_lock.has_applied_scope()
+    is_changed = (draft_uid, draft_project_id) != (applied_uid, applied_project_id)
+
+    action_label = "Switch" if has_applied else "Apply"
+    if st.button(
+        action_label,
+        key="scope-apply-switch",
+        disabled=not bool(draft_uid and draft_project_id and is_changed),
+        use_container_width=True,
+    ):
+        try:
+            scope_lock.apply_draft_scope()
+        except ValueError as exc:
+            st.warning(str(exc))
+        else:
+            # Scope switched: invalidate loaded scope-cached resources.
+            st.session_state["project_meta"] = None
+            st.session_state["ingested_docs"] = None
+            st.session_state["_ingested_docs_loaded"] = False
+            st.session_state["selected_doc_id"] = ""
+            st.session_state["active_document"] = None
+            st.session_state.pop("_followed_citations_cache", None)
+            st.session_state.pop("graph_nav_contexts_cache", None)
+            _rerun()
+
+    st.caption(_applied_scope_badge())
+
+
 def render_project_panel() -> None:
     """Project-level controls (export/import) shown in left pane."""
     api_url = get_api_url()
@@ -2273,13 +2333,8 @@ def render_project_panel() -> None:
             except project_api.ProjectApiError as exc:
                 st.error(str(exc))
 
-    st.markdown("**Project scope**")
-    st.caption("Used for ingest scoping via X-Project-Id.")
-    st.text_input(
-        "Project ID",
-        key="project_id",
-        help="Sent as X-Project-Id on all /ingest* requests.",
-    )
+    st.markdown("**Current applied scope**")
+    st.caption(_applied_scope_badge())
 
     st.divider()
     st.markdown("**Current user**")
@@ -2848,7 +2903,10 @@ def render_evidence_panel() -> None:
     polling = existing_status in {"queued", "running"} or bool(
         existing_lock.get("locked")
     )
-    reviewer_uid = str(_active_reviewer_uid() or "default").strip() or "default"
+    reviewer_uid = str(_active_reviewer_uid() or "").strip()
+    if not reviewer_uid:
+        st.info("Apply scope (user + project) to load evidence activity.")
+        return
     state = store.sync_for_claim(
         selected_claim,
         claim_text=initial_claim_text,
@@ -5609,6 +5667,11 @@ def render_workspace_left_pane() -> None:
         unsafe_allow_html=True,
     )
 
+    render_scope_selector_block()
+    if not scope_lock.has_applied_scope():
+        st.info("Apply a user + project scope to unlock workspace activity.")
+        return
+
     with st.expander("Upload documents", expanded=True):
         render_intake_panel(max_rows=None)
 
@@ -5682,8 +5745,11 @@ def render_activity_console_strip() -> None:
 
 
 def draw_workspace() -> None:
+    scope_lock.ensure_seeded()
+
     # Top banner - outside columns
     st.markdown('<div class="app-banner">os-ERIN</div>', unsafe_allow_html=True)
+    st.caption(_applied_scope_badge())
     
     # CSS for all panes
     st.markdown("""
@@ -5782,8 +5848,14 @@ def draw_workspace() -> None:
         center_pane = st.container(height=1200, border=False)
     with right:
         right_pane = st.container(height=1200, border=False)
-    draw_ingestion_panel(center=center_pane, right=right_pane)
-    render_activity_console_strip()
+    if scope_lock.has_applied_scope():
+        draw_ingestion_panel(center=center_pane, right=right_pane)
+        render_activity_console_strip()
+    else:
+        with center_pane:
+            st.info("Select draft scope on the left and click Apply to unlock activity.")
+        with right_pane:
+            st.info("Activity is gated until scope is applied.")
 
 
 def draw_ingestion_panel(*, center, right) -> None:
@@ -6391,7 +6463,9 @@ def draw_ingestion_panel(*, center, right) -> None:
         
         # Try server-backed approach first
         try:
-            reviewer_uid = _active_reviewer_uid() or "default"
+            reviewer_uid = _active_reviewer_uid()
+            if not reviewer_uid:
+                return
             current_project_id = get_project_id()
             if api_url and current_project_id:
                 # Prefer per-occurrence sid when available so multi-citation
@@ -6677,7 +6751,9 @@ def draw_ingestion_panel(*, center, right) -> None:
         # Build rail from durable server follows + local UI follows.
         followed: List[Dict[str, Any]] = []
         try:
-            reviewer_uid = _active_reviewer_uid() or "default"
+            reviewer_uid = _active_reviewer_uid()
+            if not reviewer_uid:
+                return
             current_project_id = get_project_id()
             if api_url and current_project_id:
                 server_follows = list_follows_by_doc(

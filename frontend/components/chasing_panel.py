@@ -658,7 +658,7 @@ def render(
                 claim_id=str(selected_claim_id),
                 citing_doc_id=str(doc_id),
                 reviewer_uid=reviewer_label,
-                scope=f"workflow::{selected_claim_id}",
+                scope=f"{scope}::workflow::{selected_claim_id}",
             )
 
     def _suggest_filename(reference: dict, resolution: dict) -> str:

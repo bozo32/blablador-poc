@@ -66,18 +66,24 @@ def test_scope_guard_preserves_non_strict_default_behavior() -> None:
     assert sources == {"project": "default-project", "user": "default-user"}
 
 
-def test_require_scope_for_upload_returns_project_and_user(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("ALLOW_DEFAULT_PROJECT_ID_FOR_DEV", "true")
+def test_require_scope_for_upload_requires_project_and_user_headers() -> None:
+    with pytest.raises(HTTPException) as missing_project:
+        backend_main._require_scope_for_upload(
+            x_project_id=None,
+            x_user_id="user-1",
+            endpoint="/ingest",
+        )
+    assert missing_project.value.status_code == 400
+    assert missing_project.value.detail == "X-Project-Id header is required"
 
-    project_id, user_id = backend_main._require_scope_for_upload(
-        x_project_id=None,
-        endpoint="/ingest",
-    )
-
-    assert project_id == str(backend_main.app_settings.DEFAULT_PROJECT_ID)
-    assert user_id == str(backend_main.app_settings.DEFAULT_USER_ID)
+    with pytest.raises(HTTPException) as missing_user:
+        backend_main._require_scope_for_upload(
+            x_project_id="proj-1",
+            x_user_id=None,
+            endpoint="/ingest",
+        )
+    assert missing_user.value.status_code == 400
+    assert missing_user.value.detail == "X-User-Id header is required"
 
 
 def test_scope_guard_rejects_missing_required_user() -> None:

@@ -468,8 +468,18 @@ def _nav_bool(value: Optional[bool]) -> bool:
 
 
 @app.get("/nav/works/{work_id}/contexts")
-def nav_work_contexts(work_id: str, reviewer_uid: str = Query("default")):
-    reviewer = str(reviewer_uid or "").strip() or "default"
+def nav_work_contexts(
+    work_id: str,
+    reviewer_uid: Optional[str] = Query(None),
+    x_project_id: str = Header(..., alias="X-Project-Id"),
+    x_reviewer_uid: str = Header(..., alias="X-Reviewer-Uid"),
+):
+    _require_project_id_for_upload(x_project_id, endpoint="/nav/works/{work_id}/contexts")
+    reviewer = _require_reviewer_identity(
+        reviewer_uid=reviewer_uid,
+        x_reviewer_uid=x_reviewer_uid,
+        endpoint="/nav/works/{work_id}/contexts",
+    )
     try:
         contexts = span_graph_store.list_citing_contexts_for_work(
             work_id=str(work_id), reviewer_uid=reviewer
@@ -497,19 +507,26 @@ def nav_work_contexts(work_id: str, reviewer_uid: str = Query("default")):
 
 @app.get("/nav/graph")
 def nav_graph(
-    reviewer_uid: str = Query("default"),
+    reviewer_uid: Optional[str] = Query(None),
     focus_type: Optional[str] = None,
     focus_id: Optional[str] = None,
     show_claimspans: bool = Query(True),
+    x_project_id: str = Header(..., alias="X-Project-Id"),
+    x_reviewer_uid: str = Header(..., alias="X-Reviewer-Uid"),
 ):
-    reviewer = str(reviewer_uid or "").strip() or "default"
+    project_id = _require_project_id_for_upload(x_project_id, endpoint="/nav/graph")
+    reviewer = _require_reviewer_identity(
+        reviewer_uid=reviewer_uid,
+        x_reviewer_uid=x_reviewer_uid,
+        endpoint="/nav/graph",
+    )
     f_type = str(focus_type or "").strip().lower() or None
     f_id = str(focus_id or "").strip() or None
 
     # Settings (persisted via /project read-modify-write; no /nav POST yet).
     try:
         meta = get_or_create_project_meta(
-            project_id=str(app_settings.DEFAULT_PROJECT_ID)
+            project_id=project_id
         )
     except Exception:
         meta = {}
@@ -1269,17 +1286,40 @@ def _require_project_id_for_upload(
 
 
 def _require_scope_for_upload(
-    *, x_project_id: Optional[str], endpoint: str = "unknown"
+    *,
+    x_project_id: Optional[str],
+    x_user_id: Optional[str],
+    endpoint: str = "unknown",
 ) -> tuple[str, str]:
     project_id, user_id, _scope_source = _resolve_scope_observability(
         endpoint=endpoint,
         x_project_id=x_project_id,
+        x_user_id=x_user_id,
         require_project=True,
-        allow_dev_project_default=True,
+        require_user=True,
+        allow_dev_project_default=False,
         include_user=True,
     )
     assert user_id is not None
     return project_id, user_id
+
+
+def _require_reviewer_identity(
+    *,
+    reviewer_uid: Optional[str],
+    x_reviewer_uid: Optional[str],
+    endpoint: str,
+) -> str:
+    reviewer_header = str(x_reviewer_uid or "").strip()
+    if not reviewer_header:
+        raise HTTPException(status_code=400, detail="X-Reviewer-Uid header is required")
+    reviewer_param = str(reviewer_uid or "").strip()
+    if reviewer_param and reviewer_param != reviewer_header:
+        raise HTTPException(
+            status_code=403,
+            detail="X-Reviewer-Uid must match reviewer_uid parameter",
+        )
+    return reviewer_header
 
 
 def _require_scope_for_write_pilot(
@@ -1325,7 +1365,8 @@ async def ingest_document(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     auto_process: bool = Query(True),
-    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+    x_project_id: str = Header(..., alias="X-Project-Id"),
+    x_user_id: str = Header(..., alias="X-User-Id"),
 ):
     if not _is_pdf_upload(file):
         raise HTTPException(status_code=400, detail="Only PDF uploads are supported")
@@ -1334,6 +1375,7 @@ async def ingest_document(
 
     project_id, user_id = _require_scope_for_upload(
         x_project_id=x_project_id,
+        x_user_id=x_user_id,
         endpoint="/ingest",
     )
     filename = str(file.filename or "").strip() or "document.pdf"
@@ -1425,7 +1467,7 @@ async def ingest_document(
 
 @app.get("/ingest", response_model=schemas.IngestListResponse)
 def list_ingest_documents(
-    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+    x_project_id: str = Header(..., alias="X-Project-Id"),
 ):
     project_id = _require_project_id_for_upload(x_project_id, endpoint="/ingest")
 
@@ -1443,7 +1485,7 @@ def list_ingest_documents(
 @app.get("/ingest/{doc_id}", response_model=schemas.IngestedDocument)
 def get_ingest_document(
     doc_id: str,
-    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+    x_project_id: str = Header(..., alias="X-Project-Id"),
 ):
     project_id = _require_project_id_for_upload(x_project_id, endpoint="/ingest/{doc_id}")
     try:
@@ -1601,13 +1643,16 @@ def get_active_project(
 
 @app.get("/project", response_model=schemas.ProjectMeta)
 def get_project_meta(
-    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
-    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
+    x_project_id: str = Header(..., alias="X-Project-Id"),
+    x_user_id: str = Header(..., alias="X-User-Id"),
 ):
     project_id, user_id, _scope_source = _resolve_scope_observability(
         endpoint="/project",
         x_project_id=x_project_id,
         x_user_id=x_user_id,
+        require_project=True,
+        require_user=True,
+        allow_dev_project_default=False,
         include_user=True,
     )
     assert user_id is not None
@@ -1626,14 +1671,17 @@ class ProjectMetaUpdate(BaseModel):
 @app.put("/project", response_model=schemas.ProjectMeta)
 def put_project_meta(
     payload: ProjectMetaUpdate,
-    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
-    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
+    x_project_id: str = Header(..., alias="X-Project-Id"),
+    x_user_id: str = Header(..., alias="X-User-Id"),
 ):
     patch = payload.model_dump(exclude_unset=True)
     project_id, user_id, _scope_source = _resolve_scope_observability(
         endpoint="/project",
         x_project_id=x_project_id,
         x_user_id=x_user_id,
+        require_project=True,
+        require_user=True,
+        allow_dev_project_default=False,
         include_user=True,
     )
     assert user_id is not None
@@ -1837,8 +1885,8 @@ def spine_list_locators_for_document_version(
 
 @app.get("/project/export")
 def export_project(
-    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
-    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
+    x_project_id: str = Header(..., alias="X-Project-Id"),
+    x_user_id: str = Header(..., alias="X-User-Id"),
     x_reviewer_uid: Optional[str] = Header(None, alias="X-Reviewer-Uid"),
 ):
     project_id, user_id, _scope_source = _resolve_scope_observability(
@@ -1846,7 +1894,8 @@ def export_project(
         x_project_id=x_project_id,
         x_user_id=x_user_id,
         require_project=True,
-        allow_dev_project_default=True,
+        require_user=True,
+        allow_dev_project_default=False,
         include_user=True,
     )
     assert user_id is not None
@@ -1894,15 +1943,16 @@ def export_project(
 async def import_project(
     file: UploadFile = File(...),
     overwrite: bool = False,
-    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
-    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
+    x_project_id: str = Header(..., alias="X-Project-Id"),
+    x_user_id: str = Header(..., alias="X-User-Id"),
 ):
     project_id, resolved_user_id, _scope_source = _resolve_scope_observability(
         endpoint="/project/import",
         x_project_id=x_project_id,
         x_user_id=x_user_id,
         require_project=True,
-        allow_dev_project_default=True,
+        require_user=True,
+        allow_dev_project_default=False,
         include_user=True,
     )
     assert resolved_user_id is not None
@@ -2371,12 +2421,17 @@ def list_claim_graph_nodes(
 @app.post("/graph/resolve-references", response_model=schemas.ReferenceResolveResponse)
 def resolve_graph_references(
     payload: schemas.ReferenceResolveRequest,
-    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+    x_project_id: str = Header(..., alias="X-Project-Id"),
+    x_user_id: str = Header(..., alias="X-User-Id"),
 ):
     project_id, _user_id, _scope_source = _resolve_scope_observability(
         endpoint="/graph/resolve-references",
         x_project_id=x_project_id,
-        include_user=False,
+        x_user_id=x_user_id,
+        require_project=True,
+        require_user=True,
+        allow_dev_project_default=False,
+        include_user=True,
     )
     scoped_store = GraphStore(settings=SimpleNamespace(DEFAULT_PROJECT_ID=project_id))
     citing = str(payload.citing_doc_id or "").strip()
@@ -2397,13 +2452,24 @@ def resolve_graph_references(
 
 
 @app.post("/graph/reindex-docs")
-def reindex_graph_documents():
+def reindex_graph_documents(
+    x_project_id: str = Header(..., alias="X-Project-Id"),
+    x_user_id: str = Header(..., alias="X-User-Id"),
+):
     """Best-effort reindex of document-level graph state from ingestion store.
 
     This is safe to run after code changes that affect document/alias inference
     (eg. DOI/bib aliasing). It does not touch span graph tables.
     """
-    project_id = str(app_settings.DEFAULT_PROJECT_ID)
+    project_id, _user_id, _scope_source = _resolve_scope_observability(
+        endpoint="/graph/reindex-docs",
+        x_project_id=x_project_id,
+        x_user_id=x_user_id,
+        require_project=True,
+        require_user=True,
+        allow_dev_project_default=False,
+        include_user=True,
+    )
     docs: list[dict] = []
     try:
         for brief in list_ingests_from_spine(project_id=project_id, limit=2000):
@@ -2452,13 +2518,23 @@ def reindex_graph_documents():
 def reextract_all_ingested_documents(
     background_tasks: BackgroundTasks,
     limit: int = Query(0, ge=0, le=5000),
+    x_project_id: str = Header(..., alias="X-Project-Id"),
+    x_user_id: str = Header(..., alias="X-User-Id"),
 ):
     """Re-run extraction+resolution for all ingested documents.
 
     Use this after changing extraction/graph indexing logic (eg. DOI/bib aliasing)
     so all stored docs get re-indexed consistently.
     """
-    project_id = str(app_settings.DEFAULT_PROJECT_ID)
+    project_id, _user_id, _scope_source = _resolve_scope_observability(
+        endpoint="/ingest/reextract-all",
+        x_project_id=x_project_id,
+        x_user_id=x_user_id,
+        require_project=True,
+        require_user=True,
+        allow_dev_project_default=False,
+        include_user=True,
+    )
     docs: list[dict] = []
 
     try:
@@ -3651,12 +3727,17 @@ def append_opinion_event(
 @app.get("/opinions/follow/by-doc")
 def list_follows_by_doc(
     doc_id: str,
-    reviewer_uid: str = Query("default"),
-    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+    reviewer_uid: Optional[str] = Query(None),
+    x_project_id: str = Header(..., alias="X-Project-Id"),
+    x_reviewer_uid: str = Header(..., alias="X-Reviewer-Uid"),
 ):
     """List projected follow entries for a document."""
     project_id = _require_project_id_for_upload(x_project_id)
-    owner_uid = str(reviewer_uid or "default").strip() or "default"
+    owner_uid = _require_reviewer_identity(
+        reviewer_uid=reviewer_uid,
+        x_reviewer_uid=x_reviewer_uid,
+        endpoint="/opinions/follow/by-doc",
+    )
     
     follows = opinion_events.list_follow_by_doc(
         project_id=project_id,
@@ -3670,12 +3751,17 @@ def list_follows_by_doc(
 @app.get("/opinions/follow/target")
 def get_follow_for_target(
     target_key: str,
-    reviewer_uid: str = Query("default"),
-    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+    reviewer_uid: Optional[str] = Query(None),
+    x_project_id: str = Header(..., alias="X-Project-Id"),
+    x_reviewer_uid: str = Header(..., alias="X-Reviewer-Uid"),
 ):
     """Get projected follow status for a target key."""
     project_id = _require_project_id_for_upload(x_project_id)
-    owner_uid = str(reviewer_uid or "default").strip() or "default"
+    owner_uid = _require_reviewer_identity(
+        reviewer_uid=reviewer_uid,
+        x_reviewer_uid=x_reviewer_uid,
+        endpoint="/opinions/follow/target",
+    )
     
     status = opinion_events.get_follow_status(
         project_id=project_id,
@@ -3691,15 +3777,20 @@ def get_follow_for_target(
 
 @app.get("/opinions/events")
 def list_opinion_events(
-    reviewer_uid: str = Query("default"),
+    reviewer_uid: Optional[str] = Query(None),
     target_key: Optional[str] = None,
     kind: Optional[str] = None,
     limit: int = Query(20, ge=1, le=100),
-    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+    x_project_id: str = Header(..., alias="X-Project-Id"),
+    x_reviewer_uid: str = Header(..., alias="X-Reviewer-Uid"),
 ):
     """List recent opinion events."""
     project_id = _require_project_id_for_upload(x_project_id)
-    owner_uid = str(reviewer_uid or "default").strip() or "default"
+    owner_uid = _require_reviewer_identity(
+        reviewer_uid=reviewer_uid,
+        x_reviewer_uid=x_reviewer_uid,
+        endpoint="/opinions/events",
+    )
     
     events = opinion_events.list_recent_events(
         project_id=project_id,
@@ -3975,7 +4066,8 @@ def get_claim_status(
 @app.post("/ingest/{doc_id}/extract", response_model=schemas.ExtractionResponse)
 def extract_ingested_document(
     doc_id: str,
-    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+    x_project_id: str = Header(..., alias="X-Project-Id"),
+    x_user_id: str = Header(..., alias="X-User-Id"),
     force: bool = Query(
         False,
         description="Force a new extraction job even if extraction is already complete",
@@ -3984,6 +4076,10 @@ def extract_ingested_document(
     project_id, user_id, _scope_source = _resolve_scope_observability(
         endpoint="/ingest/{doc_id}/extract",
         x_project_id=x_project_id,
+        x_user_id=x_user_id,
+        require_project=True,
+        require_user=True,
+        allow_dev_project_default=False,
         include_user=True,
     )
     assert user_id is not None
@@ -4043,12 +4139,17 @@ def extract_ingested_document(
 @app.post("/ingest/{doc_id}/fallback-extract")
 def fallback_extract_ingested_document(
     doc_id: str,
-    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+    x_project_id: str = Header(..., alias="X-Project-Id"),
+    x_user_id: str = Header(..., alias="X-User-Id"),
 ):
     """Force a fallback extraction attempt (spine mode only)."""
     project_id, user_id, _scope_source = _resolve_scope_observability(
         endpoint="/ingest/{doc_id}/fallback-extract",
         x_project_id=x_project_id,
+        x_user_id=x_user_id,
+        require_project=True,
+        require_user=True,
+        allow_dev_project_default=False,
         include_user=True,
     )
     assert user_id is not None
@@ -4073,12 +4174,17 @@ def fallback_extract_ingested_document(
 @app.post("/ingest/{doc_id}/extract/cancel")
 def cancel_extraction(
     doc_id: str,
-    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+    x_project_id: str = Header(..., alias="X-Project-Id"),
+    x_user_id: str = Header(..., alias="X-User-Id"),
 ):
     project_id, _user_id, _scope_source = _resolve_scope_observability(
         endpoint="/ingest/{doc_id}/extract/cancel",
         x_project_id=x_project_id,
-        include_user=False,
+        x_user_id=x_user_id,
+        require_project=True,
+        require_user=True,
+        allow_dev_project_default=False,
+        include_user=True,
     )
     wid = str(doc_id or "").strip()
     if not wid:
@@ -4103,11 +4209,13 @@ def cancel_extraction(
 @app.get("/ingest/{doc_id}/extraction", response_model=schemas.ExtractionResult)
 def get_ingested_extraction(
     doc_id: str,
-    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+    x_project_id: str = Header(..., alias="X-Project-Id"),
 ):
     project_id, _user_id, _scope_source = _resolve_scope_observability(
         endpoint="/ingest/{doc_id}/extraction",
         x_project_id=x_project_id,
+        require_project=True,
+        allow_dev_project_default=False,
         include_user=False,
     )
     try:
@@ -4128,7 +4236,7 @@ def get_ingested_extraction(
 @app.get("/ingest/{doc_id}/spine")
 def get_ingest_spine_debug(
     doc_id: str,
-    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+    x_project_id: str = Header(..., alias="X-Project-Id"),
 ):
     """Debug/verification view of spine attempt + artifacts.
 
@@ -4138,6 +4246,8 @@ def get_ingest_spine_debug(
     project_id, _user_id, _scope_source = _resolve_scope_observability(
         endpoint="/ingest/{doc_id}/spine",
         x_project_id=x_project_id,
+        require_project=True,
+        allow_dev_project_default=False,
         include_user=False,
     )
     wid = str(doc_id or "").strip()
@@ -4179,11 +4289,13 @@ def get_ingest_spine_debug(
 @app.get("/ingest/{doc_id}/body", response_model=schemas.DocumentBodyResponse)
 def get_ingested_body(
     doc_id: str,
-    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+    x_project_id: str = Header(..., alias="X-Project-Id"),
 ):
     project_id, _user_id, _scope_source = _resolve_scope_observability(
         endpoint="/ingest/{doc_id}/body",
         x_project_id=x_project_id,
+        require_project=True,
+        allow_dev_project_default=False,
         include_user=False,
     )
 
@@ -4236,11 +4348,16 @@ def get_ingested_body(
 def resolve_ingested_references(
     doc_id: str,
     force: bool = Query(False),
-    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+    x_project_id: str = Header(..., alias="X-Project-Id"),
+    x_user_id: str = Header(..., alias="X-User-Id"),
 ):
     project_id, user_id, _scope_source = _resolve_scope_observability(
         endpoint="/ingest/{doc_id}/resolve",
         x_project_id=x_project_id,
+        x_user_id=x_user_id,
+        require_project=True,
+        require_user=True,
+        allow_dev_project_default=False,
         include_user=True,
     )
     assert user_id is not None
@@ -4385,11 +4502,13 @@ def resolve_ingested_references(
 @app.get("/ingest/{doc_id}/resolution", response_model=schemas.ResolutionResult)
 def get_ingested_resolution(
     doc_id: str,
-    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+    x_project_id: str = Header(..., alias="X-Project-Id"),
 ):
     project_id, _user_id, _scope_source = _resolve_scope_observability(
         endpoint="/ingest/{doc_id}/resolution",
         x_project_id=x_project_id,
+        require_project=True,
+        allow_dev_project_default=False,
         include_user=False,
     )
 
@@ -4414,10 +4533,14 @@ def select_resolution_source(
     doc_id: str,
     reference_id: str,
     payload: schemas.ResolutionSelectionRequest,
-    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+    x_project_id: str = Header(..., alias="X-Project-Id"),
+    x_user_id: str = Header(..., alias="X-User-Id"),
 ):
-    project_id = _require_project_id_for_upload(x_project_id)
-    user_id = str(app_settings.DEFAULT_USER_ID)
+    project_id, user_id = _require_scope_for_upload(
+        x_project_id=x_project_id,
+        x_user_id=x_user_id,
+        endpoint="/ingest/{doc_id}/resolution/{reference_id}/select",
+    )
 
     resolution: dict = {}
     try:

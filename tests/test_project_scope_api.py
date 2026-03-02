@@ -60,7 +60,7 @@ def test_project_get_and_put_thread_x_user_id(monkeypatch) -> None:
     assert captured["patch"] == '{"name": "renamed"}'
 
 
-def test_project_export_and_import_keep_user_fallback_compat(monkeypatch) -> None:
+def test_project_export_and_import_require_user_scope(monkeypatch) -> None:
     captured: dict[str, str] = {}
 
     def _fake_get_or_create(*, project_id: str, user_id: str = "local") -> dict:
@@ -121,8 +121,8 @@ def test_project_export_and_import_keep_user_fallback_compat(monkeypatch) -> Non
 
     import_resp = client.post(
         "/project/import?overwrite=true",
-        headers={"X-Project-Id": "proj-a"},
+        headers={"X-Project-Id": "proj-a", "X-User-Id": "reviewer-a"},
         files={"file": ("project.zip", buf.getvalue(), "application/zip")},
     )
     assert import_resp.status_code == 200
-    assert captured["import_user_id"] == str(backend_main.app_settings.DEFAULT_USER_ID)
+    assert captured["import_user_id"] == "reviewer-a"

@@ -7,6 +7,7 @@ from backend.span_graph_store import SpanGraphStore
 
 # Test project ID constant
 PROJECT_ID = "default"
+REVIEWER_ID = "alice"
 
 
 def _seed_one_citing_span(*, client: TestClient) -> dict:
@@ -48,7 +49,9 @@ def test_nav_work_contexts_and_graph(tmp_path, monkeypatch):
     assert span_id.startswith("span:")
 
     contexts = client.get(
-        "/nav/works/ref:doc-1:b4/contexts", params={"reviewer_uid": "alice"}
+        "/nav/works/ref:doc-1:b4/contexts",
+        params={"reviewer_uid": REVIEWER_ID},
+        headers={"X-Project-Id": PROJECT_ID, "X-Reviewer-Uid": REVIEWER_ID},
     )
     assert contexts.status_code == 200
     payload = contexts.json()
@@ -65,11 +68,12 @@ def test_nav_work_contexts_and_graph(tmp_path, monkeypatch):
     graph = client.get(
         "/nav/graph",
         params={
-            "reviewer_uid": "alice",
+            "reviewer_uid": REVIEWER_ID,
             "focus_type": "citespan",
             "focus_id": span_id,
             "show_claimspans": "true",
         },
+        headers={"X-Project-Id": PROJECT_ID, "X-Reviewer-Uid": REVIEWER_ID},
     )
     assert graph.status_code == 200
     graph_payload = graph.json()
@@ -91,7 +95,9 @@ def test_nav_contexts_missing_optional_data_never_500(tmp_path, monkeypatch):
     client = TestClient(backend_main.app)
 
     resp = client.get(
-        "/nav/works/unknown-work/contexts", params={"reviewer_uid": "alice"}
+        "/nav/works/unknown-work/contexts",
+        params={"reviewer_uid": REVIEWER_ID},
+        headers={"X-Project-Id": PROJECT_ID, "X-Reviewer-Uid": REVIEWER_ID},
     )
     assert resp.status_code == 200
     payload = resp.json()
@@ -108,11 +114,12 @@ def test_nav_graph_work_focus_show_claimspans_toggle(tmp_path, monkeypatch):
     with_claims = client.get(
         "/nav/graph",
         params={
-            "reviewer_uid": "alice",
+            "reviewer_uid": REVIEWER_ID,
             "focus_type": "work",
             "focus_id": "doc-1",
             "show_claimspans": "true",
         },
+        headers={"X-Project-Id": PROJECT_ID, "X-Reviewer-Uid": REVIEWER_ID},
     )
     assert with_claims.status_code == 200
     elements = (with_claims.json() or {}).get("elements") or []
@@ -126,11 +133,12 @@ def test_nav_graph_work_focus_show_claimspans_toggle(tmp_path, monkeypatch):
     without_claims = client.get(
         "/nav/graph",
         params={
-            "reviewer_uid": "alice",
+            "reviewer_uid": REVIEWER_ID,
             "focus_type": "work",
             "focus_id": "doc-1",
             "show_claimspans": "false",
         },
+        headers={"X-Project-Id": PROJECT_ID, "X-Reviewer-Uid": REVIEWER_ID},
     )
     assert without_claims.status_code == 200
     elements2 = (without_claims.json() or {}).get("elements") or []

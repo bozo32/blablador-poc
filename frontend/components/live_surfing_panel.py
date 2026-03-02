@@ -596,6 +596,7 @@ def _render_nav_surfing(*, api_url: str, seed_doc_id: str) -> None:
     try:
         payload = nav_api.get_nav_graph(
             api_url,
+            project_id=project_id,
             reviewer_uid=reviewer_uid,
             focus_type=focus_type,
             focus_id=focus_id,
@@ -815,7 +816,10 @@ def _render_nav_surfing(*, api_url: str, seed_doc_id: str) -> None:
             if cache_key not in cache:
                 try:
                     cache[cache_key] = nav_api.get_work_contexts(
-                        api_url, work_id=work_id, reviewer_uid=reviewer_uid
+                        api_url,
+                        work_id=work_id,
+                        project_id=project_id,
+                        reviewer_uid=reviewer_uid,
                     )
                 except Exception:
                     cache[cache_key] = {}

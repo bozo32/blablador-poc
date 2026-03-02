@@ -128,13 +128,17 @@ def list_follows_by_doc(
         List of follow entries with current_status and sort_key
     """
     url = f"{api_url.rstrip('/')}/opinions/follow/by-doc"
+    reviewer = str(reviewer_uid or "").strip()
+    if not reviewer:
+        raise RuntimeError("opinion read requires reviewer_uid")
     
     response = _request(
         "GET",
         url,
         project_id=project_id,
+        headers={"X-Reviewer-Uid": reviewer},
         params={
-            "reviewer_uid": reviewer_uid,
+            "reviewer_uid": reviewer,
             "doc_id": doc_id,
         },
     )
@@ -161,14 +165,18 @@ def get_follow_for_target(
         Follow status dict or None if not found
     """
     url = f"{api_url.rstrip('/')}/opinions/follow/target"
+    reviewer = str(reviewer_uid or "").strip()
+    if not reviewer:
+        raise RuntimeError("opinion read requires reviewer_uid")
     
     try:
         response = _request(
             "GET",
             url,
             project_id=project_id,
+            headers={"X-Reviewer-Uid": reviewer},
             params={
-                "reviewer_uid": reviewer_uid,
+                "reviewer_uid": reviewer,
                 "target_key": target_key,
             },
         )

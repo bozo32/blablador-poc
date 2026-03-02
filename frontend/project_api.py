@@ -14,7 +14,10 @@ class ProjectApiError(RuntimeError):
 
 
 def _require_project_headers(
-    *, project_id: Optional[str], user_id: Optional[str] = None
+    *,
+    project_id: Optional[str],
+    user_id: Optional[str] = None,
+    require_user: bool = False,
 ) -> Dict[str, str]:
     pid = str(project_id or "").strip()
     if not pid:
@@ -22,6 +25,8 @@ def _require_project_headers(
 
     headers = {"X-Project-Id": pid}
     uid = str(user_id or "").strip()
+    if require_user and not uid:
+        raise ProjectApiError("project API request requires user_id")
     if uid:
         headers["X-User-Id"] = uid
     return headers
@@ -34,7 +39,11 @@ def _api_root() -> str:
 
 def get_meta(*, project_id: Optional[str], user_id: Optional[str] = None) -> Dict[str, Any]:
     url = f"{_api_root()}/project"
-    headers = _require_project_headers(project_id=project_id, user_id=user_id)
+    headers = _require_project_headers(
+        project_id=project_id,
+        user_id=user_id,
+        require_user=True,
+    )
     try:
         resp = requests.get(url, headers=headers, timeout=DEFAULT_TIMEOUT)
         resp.raise_for_status()
@@ -47,7 +56,11 @@ def put_meta(
     payload: Any, *, project_id: Optional[str], user_id: Optional[str] = None
 ) -> Dict[str, Any]:
     url = f"{_api_root()}/project"
-    headers = _require_project_headers(project_id=project_id, user_id=user_id)
+    headers = _require_project_headers(
+        project_id=project_id,
+        user_id=user_id,
+        require_user=True,
+    )
     json_payload: Dict[str, Any]
 
     if isinstance(payload, Mapping):
@@ -73,7 +86,11 @@ def put_meta(
 
 def export_zip(*, project_id: Optional[str], user_id: Optional[str] = None) -> bytes:
     url = f"{_api_root()}/project/export"
-    headers = _require_project_headers(project_id=project_id, user_id=user_id)
+    headers = _require_project_headers(
+        project_id=project_id,
+        user_id=user_id,
+        require_user=True,
+    )
     try:
         resp = requests.get(url, headers=headers, timeout=DEFAULT_TIMEOUT)
         resp.raise_for_status()
@@ -90,7 +107,11 @@ def import_zip(
     user_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     url = f"{_api_root()}/project/import"
-    headers = _require_project_headers(project_id=project_id, user_id=user_id)
+    headers = _require_project_headers(
+        project_id=project_id,
+        user_id=user_id,
+        require_user=True,
+    )
     params = {"overwrite": "true" if overwrite else "false"}
     files = {"file": ("project.zip", zip_bytes, "application/zip")}
     resp: Optional[requests.Response] = None

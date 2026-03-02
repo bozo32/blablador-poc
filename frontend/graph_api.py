@@ -237,6 +237,7 @@ def resolve_references(
     citing_doc_id: str,
     reference_ids: list[str],
     project_id: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     url = f"{_api_root()}/graph/resolve-references"
     payload = {
@@ -249,7 +250,11 @@ def resolve_references(
         resp = requests.post(
             url,
             json=payload,
-            headers=_project_headers(project_id),
+            headers=_require_mutation_headers(
+                project_id=project_id,
+                user_id=user_id,
+                operation="graph resolve references",
+            ),
             timeout=DEFAULT_TIMEOUT,
         )
         resp.raise_for_status()

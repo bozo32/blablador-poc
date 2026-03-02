@@ -183,3 +183,8 @@ def test_graph_reindex_sends_scope_identity_headers(
 def test_project_api_fails_fast_without_project_scope() -> None:
     with pytest.raises(project_api.ProjectApiError, match="project_id"):
         project_api.get_meta(project_id=None)
+
+
+def test_project_api_fails_fast_without_user_scope() -> None:
+    with pytest.raises(project_api.ProjectApiError, match="user_id"):
+        project_api.get_meta(project_id="proj-a", user_id=None)

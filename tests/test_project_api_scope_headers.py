@@ -87,20 +87,9 @@ def test_project_api_headers_include_project_and_optional_user(
 
 def test_project_api_headers_require_project_id() -> None:
     with pytest.raises(project_api.ProjectApiError, match="project_id"):
-        project_api.put_meta({"name": "x"}, project_id=None)
+        project_api.put_meta({"name": "x"}, project_id=None, user_id="user-a")
 
 
-def test_project_api_headers_omit_user_when_not_provided(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured: dict[str, Any] = {}
-
-    def _fake_get(url: str, **kwargs):
-        captured.update(kwargs)
-        return _FakeResponse({"name": "proj"})
-
-    monkeypatch.setattr(project_api, "_api_root", lambda: "http://api")
-    monkeypatch.setattr(project_api.requests, "get", _fake_get)
-
-    project_api.get_meta(project_id="proj-a", user_id=None)
-    assert captured["headers"] == {"X-Project-Id": "proj-a"}
+def test_project_api_headers_require_user_for_scoped_endpoints() -> None:
+    with pytest.raises(project_api.ProjectApiError, match="user_id"):
+        project_api.get_meta(project_id="proj-a", user_id=None)

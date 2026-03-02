@@ -1,12 +1,12 @@
 {
-  "generated_at_utc": "2026-03-01T21:33:40+00:00",
-  "route_total": 113,
+  "generated_at_utc": "2026-03-02T07:57:18+00:00",
+  "route_total": 117,
   "routes": [
     {
       "args": [],
       "current_scope_class": "admin-dev",
       "function": "get_background_state",
-      "line": 300,
+      "line": 338,
       "method": "GET",
       "path": "/background/state",
       "scope_signals": {
@@ -27,7 +27,7 @@
       ],
       "current_scope_class": "admin-dev",
       "function": "set_background_pause",
-      "line": 305,
+      "line": 343,
       "method": "POST",
       "path": "/background/pause",
       "scope_signals": {
@@ -43,7 +43,7 @@
       "args": [],
       "current_scope_class": "admin-dev",
       "function": "get_scope_observability_fallbacks",
-      "line": 310,
+      "line": 348,
       "method": "GET",
       "path": "/scope/observability/fallbacks",
       "scope_signals": {
@@ -64,17 +64,25 @@
         {
           "name": "reviewer_uid",
           "required": false
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        },
+        {
+          "name": "x_reviewer_uid",
+          "required": false
         }
       ],
-      "current_scope_class": "reviewer-scoped",
+      "current_scope_class": "fallback",
       "function": "nav_work_contexts",
-      "line": 432,
+      "line": 470,
       "method": "GET",
       "path": "/nav/works/{work_id}/contexts",
       "scope_signals": {
         "fallback_signals": [],
         "has_user_scope_arg": true,
-        "has_x_project_id_arg": false,
+        "has_x_project_id_arg": true,
         "resolve_scope_calls": [],
         "x_project_id_required": false
       },
@@ -97,19 +105,25 @@
         {
           "name": "show_claimspans",
           "required": false
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        },
+        {
+          "name": "x_reviewer_uid",
+          "required": false
         }
       ],
       "current_scope_class": "fallback",
       "function": "nav_graph",
-      "line": 460,
+      "line": 508,
       "method": "GET",
       "path": "/nav/graph",
       "scope_signals": {
-        "fallback_signals": [
-          "default_project_fallback"
-        ],
+        "fallback_signals": [],
         "has_user_scope_arg": true,
-        "has_x_project_id_arg": false,
+        "has_x_project_id_arg": true,
         "resolve_scope_calls": [],
         "x_project_id_required": false
       },
@@ -132,26 +146,22 @@
         {
           "name": "x_project_id",
           "required": false
+        },
+        {
+          "name": "x_user_id",
+          "required": false
         }
       ],
       "current_scope_class": "fallback",
       "function": "ingest_document",
-      "line": 1243,
+      "line": 1363,
       "method": "POST",
       "path": "/ingest",
       "scope_signals": {
         "fallback_signals": [],
-        "has_user_scope_arg": false,
+        "has_user_scope_arg": true,
         "has_x_project_id_arg": true,
-        "resolve_scope_calls": [
-          {
-            "allow_dev_project_default": true,
-            "endpoint": "/ingest",
-            "include_user": true,
-            "line": 1255,
-            "require_project": true
-          }
-        ],
+        "resolve_scope_calls": [],
         "x_project_id_required": false
       },
       "target_policy": "scoped-required"
@@ -165,7 +175,7 @@
       ],
       "current_scope_class": "fallback",
       "function": "list_ingest_documents",
-      "line": 1350,
+      "line": 1468,
       "method": "GET",
       "path": "/ingest",
       "scope_signals": {
@@ -190,7 +200,7 @@
       ],
       "current_scope_class": "fallback",
       "function": "get_ingest_document",
-      "line": 1367,
+      "line": 1485,
       "method": "GET",
       "path": "/ingest/{doc_id}",
       "scope_signals": {
@@ -211,7 +221,7 @@
       ],
       "current_scope_class": "fallback",
       "function": "get_document_ledger",
-      "line": 1388,
+      "line": 1506,
       "method": "GET",
       "path": "/ledger",
       "scope_signals": {
@@ -228,26 +238,122 @@
     {
       "args": [
         {
-          "name": "x_project_id",
+          "name": "x_user_id",
           "required": false
         }
       ],
-      "current_scope_class": "fallback",
+      "current_scope_class": "reviewer-scoped",
+      "function": "list_projects",
+      "line": 1551,
+      "method": "GET",
+      "path": "/projects",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": true,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "payload",
+          "required": true
+        },
+        {
+          "name": "x_user_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "reviewer-scoped",
+      "function": "create_project",
+      "line": 1564,
+      "method": "POST",
+      "path": "/projects",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": true,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "payload",
+          "required": true
+        },
+        {
+          "name": "x_user_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "reviewer-scoped",
+      "function": "select_project",
+      "line": 1609,
+      "method": "POST",
+      "path": "/projects/select",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": true,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "x_user_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "reviewer-scoped",
+      "function": "get_active_project",
+      "line": 1633,
+      "method": "GET",
+      "path": "/projects/active",
+      "scope_signals": {
+        "fallback_signals": [],
+        "has_user_scope_arg": true,
+        "has_x_project_id_arg": false,
+        "resolve_scope_calls": [],
+        "x_project_id_required": false
+      },
+      "target_policy": "scoped-required"
+    },
+    {
+      "args": [
+        {
+          "name": "x_project_id",
+          "required": false
+        },
+        {
+          "name": "x_user_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "strict",
       "function": "get_project_meta",
-      "line": 1433,
+      "line": 1644,
       "method": "GET",
       "path": "/project",
       "scope_signals": {
         "fallback_signals": [],
-        "has_user_scope_arg": false,
+        "has_user_scope_arg": true,
         "has_x_project_id_arg": true,
         "resolve_scope_calls": [
           {
-            "allow_dev_project_default": null,
+            "allow_dev_project_default": false,
             "endpoint": "/project",
             "include_user": true,
-            "line": 1437,
-            "require_project": null
+            "line": 1649,
+            "require_project": true
           }
         ],
         "x_project_id_required": false
@@ -263,24 +369,28 @@
         {
           "name": "x_project_id",
           "required": false
+        },
+        {
+          "name": "x_user_id",
+          "required": false
         }
       ],
-      "current_scope_class": "fallback",
+      "current_scope_class": "strict",
       "function": "put_project_meta",
-      "line": 1455,
+      "line": 1671,
       "method": "PUT",
       "path": "/project",
       "scope_signals": {
         "fallback_signals": [],
-        "has_user_scope_arg": false,
+        "has_user_scope_arg": true,
         "has_x_project_id_arg": true,
         "resolve_scope_calls": [
           {
-            "allow_dev_project_default": null,
+            "allow_dev_project_default": false,
             "endpoint": "/project",
             "include_user": true,
-            "line": 1461,
-            "require_project": null
+            "line": 1678,
+            "require_project": true
           }
         ],
         "x_project_id_required": false
@@ -296,7 +406,7 @@
       ],
       "current_scope_class": "fallback",
       "function": "spine_get_settings",
-      "line": 1484,
+      "line": 1705,
       "method": "GET",
       "path": "/spine/settings",
       "scope_signals": {
@@ -308,7 +418,7 @@
             "allow_dev_project_default": null,
             "endpoint": "/spine/settings",
             "include_user": true,
-            "line": 1488,
+            "line": 1709,
             "require_project": null
           }
         ],
@@ -329,7 +439,7 @@
       ],
       "current_scope_class": "fallback",
       "function": "spine_post_settings",
-      "line": 1506,
+      "line": 1727,
       "method": "POST",
       "path": "/spine/settings",
       "scope_signals": {
@@ -341,7 +451,7 @@
             "allow_dev_project_default": null,
             "endpoint": "/spine/settings",
             "include_user": true,
-            "line": 1511,
+            "line": 1732,
             "require_project": null
           }
         ],
@@ -358,7 +468,7 @@
       ],
       "current_scope_class": "fallback",
       "function": "spine_list_workflows",
-      "line": 1542,
+      "line": 1763,
       "method": "GET",
       "path": "/spine/workflows",
       "scope_signals": {
@@ -370,7 +480,7 @@
             "allow_dev_project_default": null,
             "endpoint": "/spine/workflows",
             "include_user": false,
-            "line": 1546,
+            "line": 1767,
             "require_project": null
           }
         ],
@@ -391,7 +501,7 @@
       ],
       "current_scope_class": "fallback",
       "function": "spine_create_workflow",
-      "line": 1554,
+      "line": 1775,
       "method": "POST",
       "path": "/spine/workflows",
       "scope_signals": {
@@ -403,7 +513,7 @@
             "allow_dev_project_default": null,
             "endpoint": "/spine/workflows",
             "include_user": true,
-            "line": 1559,
+            "line": 1780,
             "require_project": null
           }
         ],
@@ -428,7 +538,7 @@
       ],
       "current_scope_class": "fallback",
       "function": "spine_append_workflow_version",
-      "line": 1579,
+      "line": 1800,
       "method": "POST",
       "path": "/spine/workflows/{workflow_id}/versions",
       "scope_signals": {
@@ -440,7 +550,7 @@
             "allow_dev_project_default": null,
             "endpoint": "/spine/workflows/{workflow_id}/versions",
             "include_user": true,
-            "line": 1585,
+            "line": 1806,
             "require_project": null
           }
         ],
@@ -461,7 +571,7 @@
       ],
       "current_scope_class": "fallback",
       "function": "spine_create_locator",
-      "line": 1609,
+      "line": 1830,
       "method": "POST",
       "path": "/spine/locators",
       "scope_signals": {
@@ -473,7 +583,7 @@
             "allow_dev_project_default": null,
             "endpoint": "/spine/locators",
             "include_user": true,
-            "line": 1614,
+            "line": 1835,
             "require_project": null
           }
         ],
@@ -494,7 +604,7 @@
       ],
       "current_scope_class": "fallback",
       "function": "spine_get_locator",
-      "line": 1630,
+      "line": 1851,
       "method": "GET",
       "path": "/spine/locators/{locator_id}",
       "scope_signals": {
@@ -506,7 +616,7 @@
             "allow_dev_project_default": null,
             "endpoint": "/spine/locators/{locator_id}",
             "include_user": false,
-            "line": 1635,
+            "line": 1856,
             "require_project": null
           }
         ],
@@ -531,7 +641,7 @@
       ],
       "current_scope_class": "fallback",
       "function": "spine_list_locators_for_document_version",
-      "line": 1646,
+      "line": 1867,
       "method": "GET",
       "path": "/spine/document-versions/{document_version_id}/locators",
       "scope_signals": {
@@ -543,7 +653,7 @@
             "allow_dev_project_default": null,
             "endpoint": "/spine/document-versions/{document_version_id}/locators",
             "include_user": false,
-            "line": 1652,
+            "line": 1873,
             "require_project": null
           }
         ],
@@ -558,20 +668,32 @@
           "required": false
         },
         {
+          "name": "x_user_id",
+          "required": false
+        },
+        {
           "name": "x_reviewer_uid",
           "required": false
         }
       ],
-      "current_scope_class": "fallback",
+      "current_scope_class": "strict",
       "function": "export_project",
-      "line": 1665,
+      "line": 1886,
       "method": "GET",
       "path": "/project/export",
       "scope_signals": {
         "fallback_signals": [],
         "has_user_scope_arg": true,
         "has_x_project_id_arg": true,
-        "resolve_scope_calls": [],
+        "resolve_scope_calls": [
+          {
+            "allow_dev_project_default": false,
+            "endpoint": "/project/export",
+            "include_user": true,
+            "line": 1892,
+            "require_project": true
+          }
+        ],
         "x_project_id_required": false
       },
       "target_policy": "scoped-required"
@@ -589,20 +711,30 @@
         {
           "name": "x_project_id",
           "required": false
+        },
+        {
+          "name": "x_user_id",
+          "required": false
         }
       ],
-      "current_scope_class": "fallback",
+      "current_scope_class": "strict",
       "function": "import_project",
-      "line": 1711,
+      "line": 1942,
       "method": "POST",
       "path": "/project/import",
       "scope_signals": {
-        "fallback_signals": [
-          "default_user_fallback"
-        ],
-        "has_user_scope_arg": false,
+        "fallback_signals": [],
+        "has_user_scope_arg": true,
         "has_x_project_id_arg": true,
-        "resolve_scope_calls": [],
+        "resolve_scope_calls": [
+          {
+            "allow_dev_project_default": false,
+            "endpoint": "/project/import",
+            "include_user": true,
+            "line": 1949,
+            "require_project": true
+          }
+        ],
         "x_project_id_required": false
       },
       "target_policy": "scoped-required"
@@ -624,7 +756,7 @@
       ],
       "current_scope_class": "fallback",
       "function": "auto_place_claim_source",
-      "line": 1765,
+      "line": 2006,
       "method": "POST",
       "path": "/claims/{claim_id}/auto-place",
       "scope_signals": {
@@ -651,18 +783,22 @@
         {
           "name": "x_project_id",
           "required": false
+        },
+        {
+          "name": "x_user_id",
+          "required": false
         }
       ],
       "current_scope_class": "fallback",
       "function": "update_ledger_outgoing",
-      "line": 1954,
+      "line": 2195,
       "method": "PATCH",
       "path": "/ledger/{doc_num}/outgoing",
       "scope_signals": {
         "fallback_signals": [
           "default_project_fallback"
         ],
-        "has_user_scope_arg": false,
+        "has_user_scope_arg": true,
         "has_x_project_id_arg": true,
         "resolve_scope_calls": [],
         "x_project_id_required": false
@@ -682,18 +818,22 @@
         {
           "name": "x_project_id",
           "required": false
+        },
+        {
+          "name": "x_user_id",
+          "required": false
         }
       ],
       "current_scope_class": "fallback",
       "function": "update_ledger_incoming",
-      "line": 1971,
+      "line": 2217,
       "method": "PATCH",
       "path": "/ledger/{doc_num}/incoming",
       "scope_signals": {
         "fallback_signals": [
           "default_project_fallback"
         ],
-        "has_user_scope_arg": false,
+        "has_user_scope_arg": true,
         "has_x_project_id_arg": true,
         "resolve_scope_calls": [],
         "x_project_id_required": false
@@ -713,18 +853,22 @@
         {
           "name": "x_project_id",
           "required": false
+        },
+        {
+          "name": "x_user_id",
+          "required": false
         }
       ],
       "current_scope_class": "fallback",
       "function": "update_ledger_assigned",
-      "line": 1988,
+      "line": 2239,
       "method": "PATCH",
       "path": "/ledger/{doc_num}/assign",
       "scope_signals": {
         "fallback_signals": [
           "default_project_fallback"
         ],
-        "has_user_scope_arg": false,
+        "has_user_scope_arg": true,
         "has_x_project_id_arg": true,
         "resolve_scope_calls": [],
         "x_project_id_required": false
@@ -740,18 +884,22 @@
         {
           "name": "x_project_id",
           "required": false
+        },
+        {
+          "name": "x_user_id",
+          "required": false
         }
       ],
       "current_scope_class": "fallback",
       "function": "place_ledger_relation",
-      "line": 2005,
+      "line": 2261,
       "method": "POST",
       "path": "/ledger/place",
       "scope_signals": {
         "fallback_signals": [
           "default_project_fallback"
         ],
-        "has_user_scope_arg": false,
+        "has_user_scope_arg": true,
         "has_x_project_id_arg": true,
         "resolve_scope_calls": [],
         "x_project_id_required": false
@@ -767,18 +915,22 @@
         {
           "name": "x_project_id",
           "required": false
+        },
+        {
+          "name": "x_user_id",
+          "required": false
         }
       ],
       "current_scope_class": "fallback",
       "function": "place_ledger_reference",
-      "line": 2027,
+      "line": 2288,
       "method": "POST",
       "path": "/ledger/place-reference",
       "scope_signals": {
         "fallback_signals": [
           "default_project_fallback"
         ],
-        "has_user_scope_arg": false,
+        "has_user_scope_arg": true,
         "has_x_project_id_arg": true,
         "resolve_scope_calls": [],
         "x_project_id_required": false
@@ -794,7 +946,7 @@
       ],
       "current_scope_class": "unscoped",
       "function": "get_claim_graph_node",
-      "line": 2123,
+      "line": 2389,
       "method": "GET",
       "path": "/graph/claim/{claim_id}",
       "scope_signals": {
@@ -819,7 +971,7 @@
       ],
       "current_scope_class": "unscoped",
       "function": "list_claim_graph_nodes",
-      "line": 2131,
+      "line": 2397,
       "method": "GET",
       "path": "/graph/claim-nodes",
       "scope_signals": {
@@ -840,26 +992,30 @@
         {
           "name": "x_project_id",
           "required": false
+        },
+        {
+          "name": "x_user_id",
+          "required": false
         }
       ],
       "current_scope_class": "fallback",
       "function": "resolve_graph_references",
-      "line": 2155,
+      "line": 2421,
       "method": "POST",
       "path": "/graph/resolve-references",
       "scope_signals": {
         "fallback_signals": [
           "default_project_fallback"
         ],
-        "has_user_scope_arg": false,
+        "has_user_scope_arg": true,
         "has_x_project_id_arg": true,
         "resolve_scope_calls": [
           {
-            "allow_dev_project_default": null,
+            "allow_dev_project_default": false,
             "endpoint": "/graph/resolve-references",
-            "include_user": false,
-            "line": 2160,
-            "require_project": null
+            "include_user": true,
+            "line": 2427,
+            "require_project": true
           }
         ],
         "x_project_id_required": false
@@ -867,19 +1023,34 @@
       "target_policy": "scoped-required"
     },
     {
-      "args": [],
-      "current_scope_class": "fallback",
+      "args": [
+        {
+          "name": "x_project_id",
+          "required": false
+        },
+        {
+          "name": "x_user_id",
+          "required": false
+        }
+      ],
+      "current_scope_class": "strict",
       "function": "reindex_graph_documents",
-      "line": 2183,
+      "line": 2454,
       "method": "POST",
       "path": "/graph/reindex-docs",
       "scope_signals": {
-        "fallback_signals": [
-          "default_project_fallback"
+        "fallback_signals": [],
+        "has_user_scope_arg": true,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [
+          {
+            "allow_dev_project_default": false,
+            "endpoint": "/graph/reindex-docs",
+            "include_user": true,
+            "line": 2464,
+            "require_project": true
+          }
         ],
-        "has_user_scope_arg": false,
-        "has_x_project_id_arg": false,
-        "resolve_scope_calls": [],
         "x_project_id_required": false
       },
       "target_policy": "scoped-required"
@@ -893,20 +1064,34 @@
         {
           "name": "limit",
           "required": false
+        },
+        {
+          "name": "x_project_id",
+          "required": false
+        },
+        {
+          "name": "x_user_id",
+          "required": false
         }
       ],
-      "current_scope_class": "fallback",
+      "current_scope_class": "strict",
       "function": "reextract_all_ingested_documents",
-      "line": 2235,
+      "line": 2517,
       "method": "POST",
       "path": "/ingest/reextract-all",
       "scope_signals": {
-        "fallback_signals": [
-          "default_project_fallback"
+        "fallback_signals": [],
+        "has_user_scope_arg": true,
+        "has_x_project_id_arg": true,
+        "resolve_scope_calls": [
+          {
+            "allow_dev_project_default": false,
+            "endpoint": "/ingest/reextract-all",
+            "include_user": true,
+            "line": 2529,
+            "require_project": true
+          }
         ],
-        "has_user_scope_arg": false,
-        "has_x_project_id_arg": false,
-        "resolve_scope_calls": [],
         "x_project_id_required": false
       },
       "target_policy": "scoped-required"
@@ -920,7 +1105,7 @@
       ],
       "current_scope_class": "admin-dev",
       "function": "dev_wipe",
-      "line": 2272,
+      "line": 2564,
       "method": "POST",
       "path": "/dev/wipe",
       "scope_signals": {
@@ -941,7 +1126,7 @@
       ],
       "current_scope_class": "unscoped",
       "function": "post_pipeline_run",
-      "line": 2401,
+      "line": 2693,
       "method": "POST",
       "path": "/pipeline/runs",
       "scope_signals": {
@@ -970,7 +1155,7 @@
       ],
       "current_scope_class": "unscoped",
       "function": "put_pipeline_stage",
-      "line": 2425,
+      "line": 2717,
       "method": "PUT",
       "path": "/pipeline/runs/{run_id}/stages/{stage}",
       "scope_signals": {
@@ -995,7 +1180,7 @@
       ],
       "current_scope_class": "unscoped",
       "function": "get_pipeline_stage",
-      "line": 2461,
+      "line": 2753,
       "method": "GET",
       "path": "/pipeline/runs/{run_id}/stages/{stage}",
       "scope_signals": {
@@ -1020,7 +1205,7 @@
       ],
       "current_scope_class": "unscoped",
       "function": "workflow_start_run",
-      "line": 2482,
+      "line": 2774,
       "method": "POST",
       "path": "/workflow/claimspans/{claim_id}/runs",
       "scope_signals": {
@@ -1045,7 +1230,7 @@
       ],
       "current_scope_class": "unscoped",
       "function": "workflow_finalize_assessment",
-      "line": 2506,
+      "line": 2798,
       "method": "POST",
       "path": "/workflow/claimspans/{claim_id}/assessment/finalize",
       "scope_signals": {
@@ -1066,7 +1251,7 @@
       ],
       "current_scope_class": "unscoped",
       "function": "workflow_resume_run",
-      "line": 2614,
+      "line": 2906,
       "method": "POST",
       "path": "/workflow/runs/{run_id}/resume",
       "scope_signals": {
@@ -1091,7 +1276,7 @@
       ],
       "current_scope_class": "reviewer-scoped",
       "function": "workflow_latest_run",
-      "line": 2624,
+      "line": 2916,
       "method": "GET",
       "path": "/workflow/claimspans/{claim_id}/runs/latest",
       "scope_signals": {
@@ -1112,7 +1297,7 @@
       ],
       "current_scope_class": "unscoped",
       "function": "workflow_get_run_status",
-      "line": 2637,
+      "line": 2929,
       "method": "GET",
       "path": "/workflow/runs/{run_id}/status",
       "scope_signals": {
@@ -1137,7 +1322,7 @@
       ],
       "current_scope_class": "unscoped",
       "function": "workflow_cancel_target",
-      "line": 2662,
+      "line": 2954,
       "method": "POST",
       "path": "/workflow/runs/{run_id}/targets/{target_id}/cancel",
       "scope_signals": {
@@ -1166,7 +1351,7 @@
       ],
       "current_scope_class": "unscoped",
       "function": "workflow_events_sse",
-      "line": 2672,
+      "line": 2964,
       "method": "GET",
       "path": "/workflow/runs/{run_id}/events",
       "scope_signals": {
@@ -1199,7 +1384,7 @@
       ],
       "current_scope_class": "fallback",
       "function": "lookup_citation_window_span",
-      "line": 2710,
+      "line": 3002,
       "method": "GET",
       "path": "/spans/lookup-citation-window",
       "scope_signals": {
@@ -1222,7 +1407,7 @@
       ],
       "current_scope_class": "unscoped",
       "function": "get_claim_graph_edge_votes",
-      "line": 2738,
+      "line": 3030,
       "method": "GET",
       "path": "/graph/edge/{edge_id}/votes",
       "scope_signals": {
@@ -1251,7 +1436,7 @@
       ],
       "current_scope_class": "reviewer-scoped",
       "function": "put_claim_graph_edge_vote",
-      "line": 2758,
+      "line": 3050,
       "method": "PUT",
       "path": "/graph/edge/{edge_id}/vote",
       "scope_signals": {
@@ -1276,7 +1461,7 @@
       ],
       "current_scope_class": "reviewer-scoped",
       "function": "post_claim_link",
-      "line": 2794,
+      "line": 3086,
       "method": "POST",
       "path": "/graph/claim-link",
       "scope_signals": {
@@ -1301,7 +1486,7 @@
       ],
       "current_scope_class": "reviewer-scoped",
       "function": "delete_claim_link",
-      "line": 2834,
+      "line": 3126,
       "method": "DELETE",
       "path": "/graph/claim-link/{edge_id}",
       "scope_signals": {
@@ -1338,7 +1523,7 @@
       ],
       "current_scope_class": "unscoped",
       "function": "get_claim_subgraph",
-      "line": 2848,
+      "line": 3140,
       "method": "GET",
       "path": "/graph/claim-subgraph",
       "scope_signals": {
@@ -1363,7 +1548,7 @@
       ],
       "current_scope_class": "unscoped",
       "function": "get_claim_candidates",
-      "line": 2933,
+      "line": 3225,
       "method": "GET",
       "path": "/graph/claim/{claim_id}/candidates",
       "scope_signals": {
@@ -1388,7 +1573,7 @@
       ],
       "current_scope_class": "fallback",
       "function": "upsert_span",
-      "line": 2985,
+      "line": 3277,
       "method": "POST",
       "path": "/spans/upsert",
       "scope_signals": {
@@ -1419,7 +1604,7 @@
       ],
       "current_scope_class": "fallback",
       "function": "upsert_span_cites",
-      "line": 3005,
+      "line": 3297,
       "method": "POST",
       "path": "/spans/{span_id}/cites",
       "scope_signals": {
@@ -1454,7 +1639,7 @@
       ],
       "current_scope_class": "fallback",
       "function": "set_span_cite_role",
-      "line": 3023,
+      "line": 3315,
       "method": "PUT",
       "path": "/spans/{span_id}/cites/{cited_work_id:path}/role",
       "scope_signals": {
@@ -1485,7 +1670,7 @@
       ],
       "current_scope_class": "fallback",
       "function": "upsert_claim_spans",
-      "line": 3044,
+      "line": 3336,
       "method": "POST",
       "path": "/spans/{span_id}/claim-spans",
       "scope_signals": {
@@ -1508,7 +1693,7 @@
       ],
       "current_scope_class": "fallback",
       "function": "create_claim_atom",
-      "line": 3077,
+      "line": 3369,
       "method": "POST",
       "path": "/claim-atoms",
       "scope_signals": {
@@ -1531,7 +1716,7 @@
       ],
       "current_scope_class": "unscoped",
       "function": "get_claim_atom",
-      "line": 3093,
+      "line": 3385,
       "method": "GET",
       "path": "/claim-atoms/{claim_atom_id}",
       "scope_signals": {
@@ -1556,7 +1741,7 @@
       ],
       "current_scope_class": "fallback",
       "function": "link_claim_span_atom",
-      "line": 3101,
+      "line": 3393,
       "method": "POST",
       "path": "/claim-spans/{claim_span_id}/atoms",
       "scope_signals": {
@@ -1579,7 +1764,7 @@
       ],
       "current_scope_class": "unscoped",
       "function": "list_claim_span_atoms",
-      "line": 3127,
+      "line": 3419,
       "method": "GET",
       "path": "/claim-spans/{claim_span_id}/atoms",
       "scope_signals": {
@@ -1604,7 +1789,7 @@
       ],
       "current_scope_class": "fallback",
       "function": "align_claim_atom_to_claim",
-      "line": 3148,
+      "line": 3440,
       "method": "POST",
       "path": "/claim-atoms/{claim_atom_id}/align",
       "scope_signals": {
@@ -1627,7 +1812,7 @@
       ],
       "current_scope_class": "unscoped",
       "function": "topology_settle",
-      "line": 3172,
+      "line": 3464,
       "method": "POST",
       "path": "/topology/settle",
       "scope_signals": {
@@ -1648,7 +1833,7 @@
       ],
       "current_scope_class": "unscoped",
       "function": "create_assertion",
-      "line": 3255,
+      "line": 3547,
       "method": "POST",
       "path": "/assertions",
       "scope_signals": {
@@ -1673,7 +1858,7 @@
       ],
       "current_scope_class": "reviewer-scoped",
       "function": "list_claim_span_assertions",
-      "line": 3264,
+      "line": 3556,
       "method": "GET",
       "path": "/claim-spans/{claim_span_id}/assertions",
       "scope_signals": {
@@ -1698,7 +1883,7 @@
       ],
       "current_scope_class": "reviewer-scoped",
       "function": "get_claim_span_status",
-      "line": 3276,
+      "line": 3568,
       "method": "GET",
       "path": "/claim-spans/{claim_span_id}/status",
       "scope_signals": {
@@ -1727,7 +1912,7 @@
       ],
       "current_scope_class": "fallback",
       "function": "get_span_status",
-      "line": 3287,
+      "line": 3579,
       "method": "GET",
       "path": "/spans/{span_id}/status",
       "scope_signals": {
@@ -1762,7 +1947,7 @@
       ],
       "current_scope_class": "fallback",
       "function": "get_span_bundle",
-      "line": 3303,
+      "line": 3595,
       "method": "GET",
       "path": "/spans/{span_id}/bundle",
       "scope_signals": {
@@ -1791,20 +1976,21 @@
           "required": false
         },
         {
+          "name": "x_user_id",
+          "required": false
+        },
+        {
           "name": "x_reviewer_uid",
           "required": false
         }
       ],
       "current_scope_class": "fallback",
       "function": "append_opinion_event",
-      "line": 3361,
+      "line": 3653,
       "method": "POST",
       "path": "/opinions/events",
       "scope_signals": {
-        "fallback_signals": [
-          "default_user_fallback",
-          "reviewer_default_fallback"
-        ],
+        "fallback_signals": [],
         "has_user_scope_arg": true,
         "has_x_project_id_arg": true,
         "resolve_scope_calls": [],
@@ -1825,17 +2011,19 @@
         {
           "name": "x_project_id",
           "required": false
+        },
+        {
+          "name": "x_reviewer_uid",
+          "required": false
         }
       ],
       "current_scope_class": "fallback",
       "function": "list_follows_by_doc",
-      "line": 3428,
+      "line": 3727,
       "method": "GET",
       "path": "/opinions/follow/by-doc",
       "scope_signals": {
-        "fallback_signals": [
-          "reviewer_default_fallback"
-        ],
+        "fallback_signals": [],
         "has_user_scope_arg": true,
         "has_x_project_id_arg": true,
         "resolve_scope_calls": [],
@@ -1856,17 +2044,19 @@
         {
           "name": "x_project_id",
           "required": false
+        },
+        {
+          "name": "x_reviewer_uid",
+          "required": false
         }
       ],
       "current_scope_class": "fallback",
       "function": "get_follow_for_target",
-      "line": 3447,
+      "line": 3751,
       "method": "GET",
       "path": "/opinions/follow/target",
       "scope_signals": {
-        "fallback_signals": [
-          "reviewer_default_fallback"
-        ],
+        "fallback_signals": [],
         "has_user_scope_arg": true,
         "has_x_project_id_arg": true,
         "resolve_scope_calls": [],
@@ -1895,17 +2085,19 @@
         {
           "name": "x_project_id",
           "required": false
+        },
+        {
+          "name": "x_reviewer_uid",
+          "required": false
         }
       ],
       "current_scope_class": "fallback",
       "function": "list_opinion_events",
-      "line": 3469,
+      "line": 3778,
       "method": "GET",
       "path": "/opinions/events",
       "scope_signals": {
-        "fallback_signals": [
-          "reviewer_default_fallback"
-        ],
+        "fallback_signals": [],
         "has_user_scope_arg": true,
         "has_x_project_id_arg": true,
         "resolve_scope_calls": [],
@@ -1922,7 +2114,7 @@
       ],
       "current_scope_class": "admin-dev",
       "function": "compact_span_graph",
-      "line": 3492,
+      "line": 3806,
       "method": "POST",
       "path": "/maintenance/span-graph/compact",
       "scope_signals": {
@@ -1943,7 +2135,7 @@
       ],
       "current_scope_class": "fallback",
       "function": "neighborhood_search",
-      "line": 3513,
+      "line": 3827,
       "method": "POST",
       "path": "/neighborhood/search",
       "scope_signals": {
@@ -1970,7 +2162,7 @@
       ],
       "current_scope_class": "unscoped",
       "function": "get_neighborhood_run",
-      "line": 3633,
+      "line": 3947,
       "method": "GET",
       "path": "/neighborhood/{run_id}",
       "scope_signals": {
@@ -1995,7 +2187,7 @@
       ],
       "current_scope_class": "unscoped",
       "function": "get_claim_span_context",
-      "line": 3661,
+      "line": 3975,
       "method": "GET",
       "path": "/claims/{claim_id}/span-context",
       "scope_signals": {
@@ -2020,7 +2212,7 @@
       ],
       "current_scope_class": "unscoped",
       "function": "get_claim_status",
-      "line": 3729,
+      "line": 4043,
       "method": "GET",
       "path": "/claims/{claim_id}/status",
       "scope_signals": {
@@ -2043,26 +2235,30 @@
           "required": false
         },
         {
+          "name": "x_user_id",
+          "required": false
+        },
+        {
           "name": "force",
           "required": false
         }
       ],
-      "current_scope_class": "fallback",
+      "current_scope_class": "strict",
       "function": "extract_ingested_document",
-      "line": 3752,
+      "line": 4066,
       "method": "POST",
       "path": "/ingest/{doc_id}/extract",
       "scope_signals": {
         "fallback_signals": [],
-        "has_user_scope_arg": false,
+        "has_user_scope_arg": true,
         "has_x_project_id_arg": true,
         "resolve_scope_calls": [
           {
-            "allow_dev_project_default": null,
+            "allow_dev_project_default": false,
             "endpoint": "/ingest/{doc_id}/extract",
             "include_user": true,
-            "line": 3761,
-            "require_project": null
+            "line": 4076,
+            "require_project": true
           }
         ],
         "x_project_id_required": false
@@ -2078,24 +2274,28 @@
         {
           "name": "x_project_id",
           "required": false
+        },
+        {
+          "name": "x_user_id",
+          "required": false
         }
       ],
-      "current_scope_class": "fallback",
+      "current_scope_class": "strict",
       "function": "fallback_extract_ingested_document",
-      "line": 3820,
+      "line": 4139,
       "method": "POST",
       "path": "/ingest/{doc_id}/fallback-extract",
       "scope_signals": {
         "fallback_signals": [],
-        "has_user_scope_arg": false,
+        "has_user_scope_arg": true,
         "has_x_project_id_arg": true,
         "resolve_scope_calls": [
           {
-            "allow_dev_project_default": null,
+            "allow_dev_project_default": false,
             "endpoint": "/ingest/{doc_id}/fallback-extract",
             "include_user": true,
-            "line": 3826,
-            "require_project": null
+            "line": 4146,
+            "require_project": true
           }
         ],
         "x_project_id_required": false
@@ -2111,24 +2311,28 @@
         {
           "name": "x_project_id",
           "required": false
+        },
+        {
+          "name": "x_user_id",
+          "required": false
         }
       ],
-      "current_scope_class": "fallback",
+      "current_scope_class": "strict",
       "function": "cancel_extraction",
-      "line": 3850,
+      "line": 4174,
       "method": "POST",
       "path": "/ingest/{doc_id}/extract/cancel",
       "scope_signals": {
         "fallback_signals": [],
-        "has_user_scope_arg": false,
+        "has_user_scope_arg": true,
         "has_x_project_id_arg": true,
         "resolve_scope_calls": [
           {
-            "allow_dev_project_default": null,
+            "allow_dev_project_default": false,
             "endpoint": "/ingest/{doc_id}/extract/cancel",
-            "include_user": false,
-            "line": 3855,
-            "require_project": null
+            "include_user": true,
+            "line": 4180,
+            "require_project": true
           }
         ],
         "x_project_id_required": false
@@ -2146,9 +2350,9 @@
           "required": false
         }
       ],
-      "current_scope_class": "fallback",
+      "current_scope_class": "strict",
       "function": "get_ingested_extraction",
-      "line": 3880,
+      "line": 4209,
       "method": "GET",
       "path": "/ingest/{doc_id}/extraction",
       "scope_signals": {
@@ -2157,11 +2361,11 @@
         "has_x_project_id_arg": true,
         "resolve_scope_calls": [
           {
-            "allow_dev_project_default": null,
+            "allow_dev_project_default": false,
             "endpoint": "/ingest/{doc_id}/extraction",
             "include_user": false,
-            "line": 3885,
-            "require_project": null
+            "line": 4214,
+            "require_project": true
           }
         ],
         "x_project_id_required": false
@@ -2179,9 +2383,9 @@
           "required": false
         }
       ],
-      "current_scope_class": "fallback",
+      "current_scope_class": "strict",
       "function": "get_ingest_spine_debug",
-      "line": 3905,
+      "line": 4236,
       "method": "GET",
       "path": "/ingest/{doc_id}/spine",
       "scope_signals": {
@@ -2190,11 +2394,11 @@
         "has_x_project_id_arg": true,
         "resolve_scope_calls": [
           {
-            "allow_dev_project_default": null,
+            "allow_dev_project_default": false,
             "endpoint": "/ingest/{doc_id}/spine",
             "include_user": false,
-            "line": 3915,
-            "require_project": null
+            "line": 4246,
+            "require_project": true
           }
         ],
         "x_project_id_required": false
@@ -2212,9 +2416,9 @@
           "required": false
         }
       ],
-      "current_scope_class": "fallback",
+      "current_scope_class": "strict",
       "function": "get_ingested_body",
-      "line": 3956,
+      "line": 4289,
       "method": "GET",
       "path": "/ingest/{doc_id}/body",
       "scope_signals": {
@@ -2223,11 +2427,11 @@
         "has_x_project_id_arg": true,
         "resolve_scope_calls": [
           {
-            "allow_dev_project_default": null,
+            "allow_dev_project_default": false,
             "endpoint": "/ingest/{doc_id}/body",
             "include_user": false,
-            "line": 3961,
-            "require_project": null
+            "line": 4294,
+            "require_project": true
           }
         ],
         "x_project_id_required": false
@@ -2247,26 +2451,30 @@
         {
           "name": "x_project_id",
           "required": false
+        },
+        {
+          "name": "x_user_id",
+          "required": false
         }
       ],
       "current_scope_class": "fallback",
       "function": "resolve_ingested_references",
-      "line": 4012,
+      "line": 4347,
       "method": "POST",
       "path": "/ingest/{doc_id}/resolve",
       "scope_signals": {
         "fallback_signals": [
           "default_project_fallback"
         ],
-        "has_user_scope_arg": false,
+        "has_user_scope_arg": true,
         "has_x_project_id_arg": true,
         "resolve_scope_calls": [
           {
-            "allow_dev_project_default": null,
+            "allow_dev_project_default": false,
             "endpoint": "/ingest/{doc_id}/resolve",
             "include_user": true,
-            "line": 4018,
-            "require_project": null
+            "line": 4354,
+            "require_project": true
           }
         ],
         "x_project_id_required": false
@@ -2284,9 +2492,9 @@
           "required": false
         }
       ],
-      "current_scope_class": "fallback",
+      "current_scope_class": "strict",
       "function": "get_ingested_resolution",
-      "line": 4162,
+      "line": 4502,
       "method": "GET",
       "path": "/ingest/{doc_id}/resolution",
       "scope_signals": {
@@ -2295,11 +2503,11 @@
         "has_x_project_id_arg": true,
         "resolve_scope_calls": [
           {
-            "allow_dev_project_default": null,
+            "allow_dev_project_default": false,
             "endpoint": "/ingest/{doc_id}/resolution",
             "include_user": false,
-            "line": 4167,
-            "require_project": null
+            "line": 4507,
+            "require_project": true
           }
         ],
         "x_project_id_required": false
@@ -2323,18 +2531,20 @@
         {
           "name": "x_project_id",
           "required": false
+        },
+        {
+          "name": "x_user_id",
+          "required": false
         }
       ],
       "current_scope_class": "fallback",
       "function": "select_resolution_source",
-      "line": 4186,
+      "line": 4528,
       "method": "POST",
       "path": "/ingest/{doc_id}/resolution/{reference_id}/select",
       "scope_signals": {
-        "fallback_signals": [
-          "default_user_fallback"
-        ],
-        "has_user_scope_arg": false,
+        "fallback_signals": [],
+        "has_user_scope_arg": true,
         "has_x_project_id_arg": true,
         "resolve_scope_calls": [],
         "x_project_id_required": false
@@ -2358,7 +2568,7 @@
       ],
       "current_scope_class": "unscoped",
       "function": "create_claim_attachment",
-      "line": 4285,
+      "line": 4631,
       "method": "POST",
       "path": "/claims/{claim_id}/attachments",
       "scope_signals": {
@@ -2403,18 +2613,20 @@
         {
           "name": "x_project_id",
           "required": false
+        },
+        {
+          "name": "x_user_id",
+          "required": false
         }
       ],
       "current_scope_class": "fallback",
       "function": "upload_source_attachment",
-      "line": 4320,
+      "line": 4666,
       "method": "POST",
       "path": "/attachments/upload",
       "scope_signals": {
-        "fallback_signals": [
-          "default_user_fallback"
-        ],
-        "has_user_scope_arg": false,
+        "fallback_signals": [],
+        "has_user_scope_arg": true,
         "has_x_project_id_arg": true,
         "resolve_scope_calls": [],
         "x_project_id_required": false
@@ -2434,7 +2646,7 @@
       ],
       "current_scope_class": "unscoped",
       "function": "create_global_attachment",
-      "line": 4417,
+      "line": 4767,
       "method": "POST",
       "path": "/attachments",
       "scope_signals": {
@@ -2459,7 +2671,7 @@
       ],
       "current_scope_class": "fallback",
       "function": "list_global_attachments",
-      "line": 4453,
+      "line": 4803,
       "method": "GET",
       "path": "/attachments",
       "scope_signals": {
@@ -2484,16 +2696,20 @@
         {
           "name": "x_project_id",
           "required": false
+        },
+        {
+          "name": "x_user_id",
+          "required": false
         }
       ],
       "current_scope_class": "fallback",
       "function": "patch_attachment_status",
-      "line": 4476,
+      "line": 4826,
       "method": "PATCH",
       "path": "/attachments/{attachment_id}",
       "scope_signals": {
         "fallback_signals": [],
-        "has_user_scope_arg": false,
+        "has_user_scope_arg": true,
         "has_x_project_id_arg": true,
         "resolve_scope_calls": [],
         "x_project_id_required": false
@@ -2513,16 +2729,20 @@
         {
           "name": "x_project_id",
           "required": false
+        },
+        {
+          "name": "x_user_id",
+          "required": false
         }
       ],
       "current_scope_class": "fallback",
       "function": "clone_global_attachment",
-      "line": 4592,
+      "line": 4947,
       "method": "POST",
       "path": "/attachments/{attachment_id}/clone",
       "scope_signals": {
         "fallback_signals": [],
-        "has_user_scope_arg": false,
+        "has_user_scope_arg": true,
         "has_x_project_id_arg": true,
         "resolve_scope_calls": [],
         "x_project_id_required": false
@@ -2538,16 +2758,20 @@
         {
           "name": "x_project_id",
           "required": false
+        },
+        {
+          "name": "x_user_id",
+          "required": false
         }
       ],
       "current_scope_class": "fallback",
       "function": "promote_attachment_ingest",
-      "line": 4651,
+      "line": 5011,
       "method": "POST",
       "path": "/attachments/{attachment_id}/promote-ingest",
       "scope_signals": {
         "fallback_signals": [],
-        "has_user_scope_arg": false,
+        "has_user_scope_arg": true,
         "has_x_project_id_arg": true,
         "resolve_scope_calls": [],
         "x_project_id_required": false
@@ -2563,7 +2787,7 @@
       ],
       "current_scope_class": "unscoped",
       "function": "claim_attachment_status",
-      "line": 4675,
+      "line": 5040,
       "method": "GET",
       "path": "/claims/{claim_id}/attachments/status",
       "scope_signals": {
@@ -2588,7 +2812,7 @@
       ],
       "current_scope_class": "fallback",
       "function": "get_attachment_status",
-      "line": 4686,
+      "line": 5051,
       "method": "GET",
       "path": "/attachments/{attachment_id}",
       "scope_signals": {
@@ -2617,7 +2841,7 @@
       ],
       "current_scope_class": "fallback",
       "function": "get_attachment_span_jump",
-      "line": 4699,
+      "line": 5064,
       "method": "GET",
       "path": "/attachments/{attachment_id}/spans/{span_id}/jump",
       "scope_signals": {
@@ -2654,7 +2878,7 @@
       ],
       "current_scope_class": "fallback",
       "function": "get_attachment_span_excerpt",
-      "line": 4732,
+      "line": 5097,
       "method": "GET",
       "path": "/attachments/{attachment_id}/spans/{span_id}/excerpt",
       "scope_signals": {
@@ -2679,16 +2903,20 @@
         {
           "name": "x_project_id",
           "required": false
+        },
+        {
+          "name": "x_user_id",
+          "required": false
         }
       ],
       "current_scope_class": "fallback",
       "function": "retry_attachment",
-      "line": 4775,
+      "line": 5140,
       "method": "POST",
       "path": "/attachments/{attachment_id}/retry",
       "scope_signals": {
         "fallback_signals": [],
-        "has_user_scope_arg": false,
+        "has_user_scope_arg": true,
         "has_x_project_id_arg": true,
         "resolve_scope_calls": [],
         "x_project_id_required": false
@@ -2708,7 +2936,7 @@
       ],
       "current_scope_class": "unscoped",
       "function": "get_reference_retrieval",
-      "line": 4802,
+      "line": 5172,
       "method": "GET",
       "path": "/references/{doc_id}/{reference_id}/retrieval",
       "scope_signals": {
@@ -2741,7 +2969,7 @@
       ],
       "current_scope_class": "fallback",
       "function": "get_citation_context",
-      "line": 4813,
+      "line": 5183,
       "method": "GET",
       "path": "/ingest/{doc_id}/citation-context",
       "scope_signals": {
@@ -2784,7 +3012,7 @@
       ],
       "current_scope_class": "fallback",
       "function": "get_citation_graph",
-      "line": 4877,
+      "line": 5247,
       "method": "GET",
       "path": "/ingest/{doc_id}/citation-graph",
       "scope_signals": {
@@ -2807,7 +3035,7 @@
       ],
       "current_scope_class": "unscoped",
       "function": "confirm_claims",
-      "line": 4942,
+      "line": 5312,
       "method": "POST",
       "path": "/claims/confirm",
       "scope_signals": {
@@ -2860,7 +3088,7 @@
       ],
       "current_scope_class": "fallback",
       "function": "list_claim_evidence",
-      "line": 4956,
+      "line": 5326,
       "method": "GET",
       "path": "/claims/{claim_id}/evidence",
       "scope_signals": {
@@ -2895,7 +3123,7 @@
       ],
       "current_scope_class": "fallback",
       "function": "get_evidence_decisions",
-      "line": 5118,
+      "line": 5488,
       "method": "GET",
       "path": "/claims/{claim_id}/evidence/decisions",
       "scope_signals": {
@@ -2930,7 +3158,7 @@
       ],
       "current_scope_class": "fallback",
       "function": "post_evidence_decision_event",
-      "line": 5202,
+      "line": 5572,
       "method": "POST",
       "path": "/claims/{claim_id}/evidence/decisions/events",
       "scope_signals": {
@@ -2958,7 +3186,7 @@
       ],
       "current_scope_class": "unscoped",
       "function": "request_evidence_rerun",
-      "line": 5245,
+      "line": 5615,
       "method": "POST",
       "path": "/claims/{claim_id}/evidence/rerun",
       "scope_signals": {
@@ -2983,7 +3211,7 @@
       ],
       "current_scope_class": "unscoped",
       "function": "list_evidence_history",
-      "line": 5261,
+      "line": 5631,
       "method": "GET",
       "path": "/claims/{claim_id}/evidence/history",
       "scope_signals": {
@@ -3004,7 +3232,7 @@
       ],
       "current_scope_class": "unscoped",
       "function": "get_evidence_selection",
-      "line": 5283,
+      "line": 5653,
       "method": "GET",
       "path": "/claims/{claim_id}/evidence/selection",
       "scope_signals": {
@@ -3029,7 +3257,7 @@
       ],
       "current_scope_class": "unscoped",
       "function": "put_evidence_selection",
-      "line": 5297,
+      "line": 5667,
       "method": "PUT",
       "path": "/claims/{claim_id}/evidence/selection",
       "scope_signals": {
@@ -3054,7 +3282,7 @@
       ],
       "current_scope_class": "reviewer-scoped",
       "function": "get_claim_judgment",
-      "line": 5374,
+      "line": 5744,
       "method": "GET",
       "path": "/claims/{claim_id}/judgment",
       "scope_signals": {
@@ -3083,7 +3311,7 @@
       ],
       "current_scope_class": "reviewer-scoped",
       "function": "put_claim_judgment",
-      "line": 5391,
+      "line": 5761,
       "method": "PUT",
       "path": "/claims/{claim_id}/judgment",
       "scope_signals": {
@@ -3104,7 +3332,7 @@
       ],
       "current_scope_class": "unscoped",
       "function": "list_claim_judgments",
-      "line": 5409,
+      "line": 5779,
       "method": "GET",
       "path": "/claims/{claim_id}/judgments",
       "scope_signals": {
@@ -3133,7 +3361,7 @@
       ],
       "current_scope_class": "unscoped",
       "function": "list_judgments",
-      "line": 5418,
+      "line": 5788,
       "method": "GET",
       "path": "/judgments",
       "scope_signals": {
@@ -3166,7 +3394,7 @@
       ],
       "current_scope_class": "unscoped",
       "function": "export_judgments",
-      "line": 5434,
+      "line": 5804,
       "method": "GET",
       "path": "/judgments/export",
       "scope_signals": {
@@ -3187,7 +3415,7 @@
       ],
       "current_scope_class": "unscoped",
       "function": "segment",
-      "line": 5462,
+      "line": 5832,
       "method": "POST",
       "path": "/segment",
       "scope_signals": {
@@ -3208,7 +3436,7 @@
       ],
       "current_scope_class": "unscoped",
       "function": "prebuild",
-      "line": 5714,
+      "line": 6084,
       "method": "POST",
       "path": "/prebuild",
       "scope_signals": {
@@ -3225,21 +3453,22 @@
   "totals": {
     "by_current_scope_class": {
       "admin-dev": 5,
-      "fallback": 64,
-      "reviewer-scoped": 9,
+      "fallback": 52,
+      "reviewer-scoped": 12,
+      "strict": 13,
       "unscoped": 35
     },
     "by_method": {
       "DELETE": 1,
-      "GET": 55,
+      "GET": 57,
       "PATCH": 4,
-      "POST": 47,
+      "POST": 49,
       "PUT": 6
     },
     "by_target_policy": {
       "admin/dev": 5,
       "global-read": 20,
-      "scoped-required": 88
+      "scoped-required": 92
     }
   }
 }

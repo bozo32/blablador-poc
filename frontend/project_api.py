@@ -164,6 +164,39 @@ def wipe_everything(*, confirm: str) -> Dict[str, Any]:
         raise ProjectApiError(msg) from exc
 
 
+def wipe_selective(
+    *,
+    confirm: str,
+    spine_data: bool,
+    object_store: bool,
+    graph_caches: bool,
+    local_indexes: bool,
+) -> Dict[str, Any]:
+    url = f"{_api_root()}/dev/wipe-selective"
+    payload = {
+        "confirm": str(confirm or ""),
+        "spine_data": bool(spine_data),
+        "object_store": bool(object_store),
+        "graph_caches": bool(graph_caches),
+        "local_indexes": bool(local_indexes),
+    }
+    resp: Optional[requests.Response] = None
+    try:
+        resp = requests.post(url, json=payload, timeout=DEFAULT_TIMEOUT)
+        resp.raise_for_status()
+        return resp.json() if resp.text else {}
+    except requests.RequestException as exc:
+        detail = None
+        try:
+            detail = resp.text if resp is not None else None
+        except Exception:
+            detail = None
+        msg = str(exc)
+        if detail:
+            msg = f"{msg} ({detail})"
+        raise ProjectApiError(msg) from exc
+
+
 def list_projects(*, user_id: Optional[str]) -> Dict[str, Any]:
     url = f"{_api_root()}/projects"
     headers = _require_user_header(user_id=user_id)

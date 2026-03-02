@@ -5684,11 +5684,11 @@ def render_intake_panel(*, max_rows: Optional[int] = None) -> None:
             else:
                 item["auto_routed"] = True
                 item["override_available"] = False
-                item["routed_intent"] = "source"
+                item["routed_intent"] = "citing"
                 item["note"] = (
-                    "Intent unclear; routed to Stray documents for placement review."
+                    "Intent unclear; processing metadata first, then placement can be refined."
                 )
-                _intake_route_source(item_id, attach_now=False)
+                _intake_route_citing(item_id)
         st.session_state["intake_dropzone_nonce"] = (
             int(st.session_state.get("intake_dropzone_nonce") or 0) + 1
         )
@@ -5706,8 +5706,8 @@ def render_intake_panel(*, max_rows: Optional[int] = None) -> None:
     inbox = st.session_state.get("intake_inbox") or []
     if not inbox:
         st.caption(
-            "Drop one or more PDFs to start. Clear intent routes automatically; "
-            "unclear uploads route to Stray documents for placement review."
+            "Drop one or more PDFs to start. Intent classification is deferred "
+            "until metadata processing completes."
         )
         return
 
@@ -5746,7 +5746,7 @@ def render_intake_panel(*, max_rows: Optional[int] = None) -> None:
                     f"{routed_intent}) • Stage: {stage} • Size: {size_label}"
                 )
                 st.caption(
-                    "Intent unclear; this item was routed to Stray documents for placement."
+                    "Intent unclear; metadata processing runs first, then placement can be refined."
                 )
             else:
                 st.caption(f"Intent: {intent} • Stage: {stage} • Size: {size_label}")
@@ -5855,9 +5855,7 @@ def render_sources_panel(*, max_rows: Optional[int] = None) -> None:
 
     inbox = [it for it in items if _is_global_source(it)]
     if not inbox:
-        st.caption(
-            "No sources yet. Upload via Drop PDFs; unclear uploads route here as Stray documents."
-        )
+        st.caption("No sources yet. Upload via Drop PDFs.")
         return
 
     if max_rows is not None and len(inbox) > int(max_rows):

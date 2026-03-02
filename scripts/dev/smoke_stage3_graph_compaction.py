@@ -52,6 +52,11 @@ def main() -> int:
 
     dry_run = _post(api_url, "/maintenance/graph/compact/dry-run", {"project_id": "default"})
     apply_run = _post(api_url, "/maintenance/graph/compact/apply", {"project_id": "default"})
+    after_apply_dry_run = _post(
+        api_url,
+        "/maintenance/graph/compact/dry-run",
+        {"project_id": "default"},
+    )
     rollback = _post(
         api_url,
         "/maintenance/graph/compact/rollback",
@@ -65,6 +70,19 @@ def main() -> int:
     if str(rollback.get("mode")) != "rollback":
         raise RuntimeError("rollback mode mismatch")
 
+    dry_report = dry_run.get("report") or {}
+    apply_report = apply_run.get("report") or {}
+    after_report = after_apply_dry_run.get("report") or {}
+    if "ingest_id_dedup" not in dry_report or "ingest_id_dedup" not in apply_report:
+        raise RuntimeError("ingest-id dedup report missing")
+    dry_ingest = dry_report.get("ingest_id_dedup") or {}
+    apply_ingest = apply_report.get("ingest_id_dedup") or {}
+    after_ingest = after_report.get("ingest_id_dedup") or {}
+    if not isinstance(dry_ingest, dict) or not isinstance(apply_ingest, dict):
+        raise RuntimeError("ingest-id dedup report malformed")
+    if int(after_ingest.get("duplicate_nodes") or 0) != 0:
+        raise RuntimeError("post-apply dry-run still reports ingest-id duplicate nodes")
+
     print(
         json.dumps(
             {
@@ -72,6 +90,7 @@ def main() -> int:
                 "uploaded_doc_id": uploaded_doc_id,
                 "dry_run": dry_run,
                 "apply": apply_run,
+                "after_apply_dry_run": after_apply_dry_run,
                 "rollback": rollback,
             },
             indent=2,

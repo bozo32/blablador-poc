@@ -95,6 +95,12 @@
 **Barrel Files:**
 - Not applicable.
 
+## UX Conventions
+
+- For workspace UX changes, use `.planning/codebase/UX_STYLE_CONVENTIONS.md` as the source of truth.
+- If a UX decision increases coupling to Streamlit rerun/widget semantics, record it in:
+  - `.planning/phases/10-contracts-core-workflow-simplification/10-04.5-PRUNE-CANDIDATES.md`
+
 ---
 
 *Convention analysis: 2026-02-20*

@@ -281,6 +281,7 @@ def render_retrieval_instructions(
     doc_id: str,
     reference_id: str,
     *,
+    resolved_ingest_id: Optional[str] = None,
     key_prefix: str = "",
 ) -> None:
     dossier = _get_cached_dossier(api_url, doc_id, reference_id)
@@ -341,7 +342,11 @@ def render_retrieval_instructions(
 
     copied_at = (copy_result or {}).get("copied_at")
 
-    if manual:
+    resolved_ingest = str(resolved_ingest_id or "").strip() or None
+
+    if resolved_ingest:
+        st.success("Linked to uploaded source in this project.")
+    elif manual:
         st.code(manual.strip(), language="text")
         if copied_at:
             st.caption(f"Copied at {copied_at}")

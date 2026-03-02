@@ -20,9 +20,27 @@ def _json_dumps(value: Any) -> str:
 
 @dataclass
 class _DupGroup:
-    doc_key: str
+    group_key: str
     canonical_node_id: str
     duplicate_node_ids: list[str]
+
+
+@dataclass
+class _DocNode:
+    node_id: str
+    num: Optional[int]
+    properties: dict[str, Any]
+    has_links: bool
+    metadata_score: int
+
+
+@dataclass
+class _CompactionPlan:
+    strategy: str
+    doc_key_groups: list[_DupGroup]
+    ingest_id_groups: list[_DupGroup]
+    mapping: dict[str, str]
+    report: dict[str, Any]
 
 
 class GraphCompactionService:
@@ -37,58 +55,207 @@ class GraphCompactionService:
             return override
         return str(getattr(self.settings, "DEFAULT_PROJECT_ID", "default") or "default")
 
-    def _duplicate_groups(self, *, project_id: str) -> list[_DupGroup]:
+    def _node_sort_key(self, node: _DocNode) -> tuple[int, int, int, str]:
+        has_links_rank = 0 if bool(node.has_links) else 1
+        metadata_rank = -int(node.metadata_score)
+        num_rank = int(node.num) if node.num is not None else (10**9)
+        return (has_links_rank, metadata_rank, num_rank, str(node.node_id))
+
+    def _metadata_score(self, properties: dict[str, Any]) -> int:
+        if not isinstance(properties, dict):
+            return 0
+        skip_keys = {
+            "ingest_ids",
+            "ingest_id",
+            "resolved",
+            "extracted",
+            "workflow_assigned",
+        }
+        score = 0
+        for key, value in properties.items():
+            if str(key) in skip_keys:
+                continue
+            if isinstance(value, str) and value.strip():
+                score += 1
+            elif isinstance(value, bool) and bool(value):
+                score += 1
+            elif isinstance(value, (int, float)):
+                score += 1
+            elif isinstance(value, list) and any(str(v).strip() for v in value):
+                score += 1
+            elif isinstance(value, dict) and value:
+                score += 1
+        return int(score)
+
+    def _document_nodes(self, *, project_id: str) -> dict[str, _DocNode]:
         with connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
                     SELECT
-                      COALESCE(properties_json->>'doc_key', '') AS doc_key,
-                      ARRAY_AGG(node_id ORDER BY num ASC NULLS LAST, node_id ASC) AS node_ids
-                    FROM graph_nodes
-                    WHERE project_id=%s
-                      AND kind='document'
-                      AND COALESCE(properties_json->>'doc_key', '') <> ''
-                    GROUP BY COALESCE(properties_json->>'doc_key', '')
-                    HAVING COUNT(*) > 1
-                    ORDER BY doc_key ASC
+                      n.node_id,
+                      n.num,
+                      n.properties_json,
+                      EXISTS(
+                        SELECT 1
+                        FROM graph_edges e
+                        WHERE e.project_id=n.project_id
+                          AND (e.source_id=n.node_id OR e.target_id=n.node_id)
+                      ) AS has_links
+                    FROM graph_nodes n
+                    WHERE n.project_id=%s
+                      AND n.kind='document'
+                    ORDER BY n.node_id ASC
                     """,
                     (project_id,),
                 )
                 rows = cur.fetchall() or []
 
+        out: dict[str, _DocNode] = {}
+        for node_id, num, properties_json, has_links in rows:
+            nid = str(node_id or "").strip()
+            if not nid:
+                continue
+            props = properties_json if isinstance(properties_json, dict) else {}
+            out[nid] = _DocNode(
+                node_id=nid,
+                num=int(num) if num is not None else None,
+                properties=props,
+                has_links=bool(has_links),
+                metadata_score=self._metadata_score(props),
+            )
+        return out
+
+    def _duplicate_groups_doc_key(
+        self, *, nodes_by_id: dict[str, _DocNode]
+    ) -> list[_DupGroup]:
+        grouped: dict[str, list[_DocNode]] = {}
+        for node in nodes_by_id.values():
+            doc_key = str((node.properties or {}).get("doc_key") or "").strip()
+            if not doc_key:
+                continue
+            grouped.setdefault(doc_key, []).append(node)
+
         groups: list[_DupGroup] = []
-        for doc_key, node_ids in rows:
-            ids = [str(x) for x in (node_ids or []) if str(x).strip()]
-            if len(ids) < 2:
+        for doc_key in sorted(grouped.keys()):
+            members = sorted(grouped.get(doc_key) or [], key=self._node_sort_key)
+            if len(members) < 2:
                 continue
             groups.append(
                 _DupGroup(
-                    doc_key=str(doc_key),
-                    canonical_node_id=str(ids[0]),
-                    duplicate_node_ids=[str(x) for x in ids[1:]],
+                    group_key=str(doc_key),
+                    canonical_node_id=str(members[0].node_id),
+                    duplicate_node_ids=[str(m.node_id) for m in members[1:]],
                 )
             )
         return groups
 
+    def _duplicate_groups_ingest_id(
+        self, *, nodes_by_id: dict[str, _DocNode]
+    ) -> list[_DupGroup]:
+        grouped: dict[str, list[_DocNode]] = {}
+        for node in nodes_by_id.values():
+            props = node.properties or {}
+            ingest_ids_raw = props.get("ingest_ids")
+            ingest_ids: list[str] = []
+            if isinstance(ingest_ids_raw, list):
+                ingest_ids.extend(
+                    [str(x).strip() for x in ingest_ids_raw if str(x or "").strip()]
+                )
+            single_ingest = str(props.get("ingest_id") or "").strip()
+            if single_ingest:
+                ingest_ids.append(single_ingest)
+            for ingest_id in sorted(set(ingest_ids)):
+                grouped.setdefault(ingest_id, []).append(node)
+
+        groups: list[_DupGroup] = []
+        for ingest_id in sorted(grouped.keys()):
+            members = sorted(grouped.get(ingest_id) or [], key=self._node_sort_key)
+            if len(members) < 2:
+                continue
+            groups.append(
+                _DupGroup(
+                    group_key=str(ingest_id),
+                    canonical_node_id=str(members[0].node_id),
+                    duplicate_node_ids=[str(m.node_id) for m in members[1:]],
+                )
+            )
+        return groups
+
+    def _build_plan(self, *, project_id: str) -> _CompactionPlan:
+        strategy = "doc-key+ingest-id-dedup-v2"
+        nodes_by_id = self._document_nodes(project_id=project_id)
+        doc_groups = self._duplicate_groups_doc_key(nodes_by_id=nodes_by_id)
+        ingest_groups = self._duplicate_groups_ingest_id(nodes_by_id=nodes_by_id)
+
+        mapping: dict[str, str] = {}
+
+        def _resolve(node_id: str) -> str:
+            current = str(node_id)
+            seen: set[str] = set()
+            while current in mapping and current not in seen:
+                seen.add(current)
+                current = str(mapping[current])
+            return current
+
+        duplicate_candidates: set[str] = set()
+        for group in ingest_groups + doc_groups:
+            canonical = _resolve(str(group.canonical_node_id))
+            for dup in group.duplicate_node_ids:
+                duplicate_candidates.add(str(dup))
+                dup_resolved = _resolve(str(dup))
+                if dup_resolved == canonical:
+                    continue
+                mapping[dup_resolved] = canonical
+
+        final_mapping: dict[str, str] = {}
+        for dup in sorted(duplicate_candidates):
+            resolved = _resolve(str(dup))
+            if resolved != str(dup):
+                final_mapping[str(dup)] = str(resolved)
+
+        preview_groups = [
+            {
+                "doc_key": g.group_key,
+                "canonical_node_id": g.canonical_node_id,
+                "duplicate_node_ids": list(g.duplicate_node_ids),
+            }
+            for g in doc_groups
+        ]
+        ingest_report_groups = [
+            {
+                "ingest_id": g.group_key,
+                "canonical_node_id": g.canonical_node_id,
+                "duplicate_node_ids": list(g.duplicate_node_ids),
+            }
+            for g in ingest_groups
+        ]
+        report = {
+            "project_id": project_id,
+            "strategy": strategy,
+            "duplicate_doc_keys": len(doc_groups),
+            "duplicate_ingest_ids": len(ingest_groups),
+            "duplicate_nodes": int(len(final_mapping)),
+            "groups": preview_groups,
+            "ingest_id_dedup": {
+                "duplicate_ingest_ids": len(ingest_groups),
+                "duplicate_nodes": sum(len(g.duplicate_node_ids) for g in ingest_groups),
+                "groups": ingest_report_groups,
+            },
+        }
+
+        return _CompactionPlan(
+            strategy=strategy,
+            doc_key_groups=doc_groups,
+            ingest_id_groups=ingest_groups,
+            mapping=final_mapping,
+            report=report,
+        )
+
     def preview(self, *, project_id: Optional[str] = None) -> dict[str, Any]:
         pid = self._project_id(project_id)
-        groups = self._duplicate_groups(project_id=pid)
-        dup_nodes = sum(len(g.duplicate_node_ids) for g in groups)
-        return {
-            "project_id": pid,
-            "strategy": "doc-key-dedup-v1",
-            "duplicate_doc_keys": len(groups),
-            "duplicate_nodes": int(dup_nodes),
-            "groups": [
-                {
-                    "doc_key": g.doc_key,
-                    "canonical_node_id": g.canonical_node_id,
-                    "duplicate_node_ids": list(g.duplicate_node_ids),
-                }
-                for g in groups
-            ],
-        }
+        plan = self._build_plan(project_id=pid)
+        return dict(plan.report)
 
     def run_dry_run(self, *, project_id: Optional[str] = None) -> dict[str, Any]:
         pid = self._project_id(project_id)
@@ -255,17 +422,20 @@ class GraphCompactionService:
     def run_apply(self, *, project_id: Optional[str] = None) -> dict[str, Any]:
         pid = self._project_id(project_id)
         run_id = f"gcompact:{uuid.uuid4()}"
-        preview = self.preview(project_id=pid)
-        groups = self._duplicate_groups(project_id=pid)
-        mapping: dict[str, str] = {}
-        for g in groups:
-            for dup in g.duplicate_node_ids:
-                mapping[str(dup)] = str(g.canonical_node_id)
+        plan = self._build_plan(project_id=pid)
+        preview = dict(plan.report)
+        mapping = dict(plan.mapping)
 
         aliases_repointed = 0
         edges_rewritten = 0
         edges_merged = 0
         nodes_deleted = 0
+        mutation_journal: dict[str, list[dict[str, Any]]] = {
+            "aliases_repointed": [],
+            "edges_rewritten": [],
+            "edges_merged": [],
+            "nodes_deleted": [],
+        }
         snapshot = self._snapshot_project_graph(project_id=pid)
 
         with connect() as conn:
@@ -287,13 +457,23 @@ class GraphCompactionService:
                     (
                         run_id,
                         pid,
-                        str(preview.get("strategy") or "doc-key-dedup-v1"),
+                        str(preview.get("strategy") or plan.strategy),
                         _json_dumps(preview),
                         _json_dumps(snapshot),
                     ),
                 )
 
                 for dup, canonical in mapping.items():
+                    cur.execute(
+                        """
+                        SELECT alias
+                        FROM graph_aliases
+                        WHERE project_id=%s AND node_id=%s
+                        ORDER BY alias ASC
+                        """,
+                        (pid, dup),
+                    )
+                    alias_rows = cur.fetchall() or []
                     cur.execute(
                         """
                         UPDATE graph_aliases
@@ -303,6 +483,17 @@ class GraphCompactionService:
                         (canonical, pid, dup),
                     )
                     aliases_repointed += int(cur.rowcount or 0)
+                    for row in alias_rows:
+                        alias = str((row or [""])[0] or "").strip()
+                        if not alias:
+                            continue
+                        mutation_journal["aliases_repointed"].append(
+                            {
+                                "alias": alias,
+                                "from_node_id": str(dup),
+                                "to_node_id": str(canonical),
+                            }
+                        )
 
                 if mapping:
                     cur.execute(
@@ -393,6 +584,16 @@ class GraphCompactionService:
 
                         cur.execute("DELETE FROM graph_edges WHERE edge_id=%s", (old_id,))
                         edges_merged += 1
+                        mutation_journal["edges_merged"].append(
+                            {
+                                "deleted_edge_id": int(old_id),
+                                "kept_edge_id": int(kept_edge_id),
+                                "source_id": str(new_source),
+                                "target_id": str(new_target),
+                                "kind": str(kind),
+                                "ref_id": str(ref_id or ""),
+                            }
+                        )
                         continue
 
                     cur.execute(
@@ -406,6 +607,17 @@ class GraphCompactionService:
                         (new_source, new_target, old_id),
                     )
                     edges_rewritten += int(cur.rowcount or 0)
+                    mutation_journal["edges_rewritten"].append(
+                        {
+                            "edge_id": int(old_id),
+                            "old_source_id": str(source_id),
+                            "old_target_id": str(target_id),
+                            "new_source_id": str(new_source),
+                            "new_target_id": str(new_target),
+                            "kind": str(kind),
+                            "ref_id": str(ref_id or ""),
+                        }
+                    )
 
                 for dup in mapping.keys():
                     cur.execute(
@@ -413,6 +625,12 @@ class GraphCompactionService:
                         (pid, str(dup)),
                     )
                     nodes_deleted += int(cur.rowcount or 0)
+                    mutation_journal["nodes_deleted"].append(
+                        {
+                            "node_id": str(dup),
+                            "canonical_node_id": str(mapping.get(str(dup)) or ""),
+                        }
+                    )
 
                 report = {
                     **preview,
@@ -420,6 +638,7 @@ class GraphCompactionService:
                     "edges_rewritten": int(edges_rewritten),
                     "edges_merged": int(edges_merged),
                     "nodes_deleted": int(nodes_deleted),
+                    "mutation_journal": mutation_journal,
                 }
                 cur.execute(
                     """
@@ -489,7 +708,7 @@ class GraphCompactionService:
                       %s,
                       'rollback',
                       'running',
-                      'doc-key-dedup-v1',
+                      'doc-key+ingest-id-dedup-v2',
                       %s,
                       '{}'::jsonb,
                       now()

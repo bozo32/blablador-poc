@@ -22,6 +22,8 @@ Plans:
 - `10-04.5-01-07-02-PLAN.md` — Backend: opinion events table + follow projection APIs (reviewer-scoped)
 - `10-04.5-01-07-03-PLAN.md` — Frontend: reading rail backed by opinion follow projection
 - `10-04.5-01-07-04-PLAN.md` — Export/import: include opinion_events.ndjson in project zip
+- `10-04.5-03-PLAN.md` — UX follow-up: duplicate queue keys + non-blocking intake auto-routing
+- `10-04.5-04-PLAN.md` — Intake policy hardening: remove route prompts and send unclear uploads to Stray flow
 - `10-05-PLAN.md` — Demo + trace replay (reproducible E2E)
 - `10-06-PLAN.md` — Optional add-ons (hosted inference, tri-level assessment)
 - `10-07-PLAN.md` — Deprioritized ops/cloud direction (doc-only backlog)

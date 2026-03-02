@@ -11,6 +11,18 @@ repo_root() {
   git rev-parse --show-toplevel 2>/dev/null || pwd
 }
 
+select_docker() {
+  DOCKER=(docker)
+  if docker info >/dev/null 2>&1; then
+    return 0
+  fi
+  if command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then
+    DOCKER=(sudo docker)
+    return 0
+  fi
+  return 1
+}
+
 say() {
   printf "%s\n" "$*"
 }
@@ -42,31 +54,29 @@ start_api_from_worktree() {
     say "WARN: docker not found; assuming API already running at ${API_URL}"
     return 0
   fi
-  if ! docker info >/dev/null 2>&1; then
-    say "WARN: docker not available; assuming API already running at ${API_URL}"
-    return 0
-  fi
-  if ! command -v docker compose >/dev/null 2>&1; then
-    say "WARN: docker compose not found; assuming API already running at ${API_URL}"
+  if ! select_docker; then
+    say "WARN: docker daemon not accessible; assuming API already running at ${API_URL}"
     return 0
   fi
 
-  docker compose up -d postgres minio minio-init grobid fallback-worker
+  DC=("${DOCKER[@]}" compose)
+
+  "${DC[@]}" up -d postgres minio minio-init grobid fallback-worker
 
   # Ensure the running API container reflects the current working tree without rebuild.
-  docker compose stop app-api >/dev/null 2>&1 || true
-  docker compose rm -f app-api >/dev/null 2>&1 || true
+  "${DC[@]}" stop app-api >/dev/null 2>&1 || true
+  "${DC[@]}" rm -f app-api >/dev/null 2>&1 || true
 
   # Clean up any prior `docker compose run -d app-api` containers that may still hold port 8000.
-  old_ids=$(docker ps -aq --filter "name=blablador-poc-app-api-run" || true)
+  old_ids=$(${DOCKER[*]} ps -aq --filter "name=blablador-poc-app-api-run" 2>/dev/null || true)
   if [ -n "${old_ids}" ]; then
-    docker rm -f ${old_ids} >/dev/null 2>&1 || true
+    ${DOCKER[*]} rm -f ${old_ids} >/dev/null 2>&1 || true
   fi
 
   local root
   root="$(repo_root)"
 
-  docker compose run -d --service-ports \
+  "${DC[@]}" run -d --service-ports \
     -v "${root}/backend:/app/backend" \
     -v "${root}/frontend:/app/frontend" \
     -v "${root}/application.py:/app/application.py" \

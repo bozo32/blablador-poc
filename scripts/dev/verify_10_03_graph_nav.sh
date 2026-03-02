@@ -5,21 +5,29 @@ curl_json() {
   curl -fsS --retry 20 --retry-delay 1 --retry-connrefused --max-time 30 "$@"
 }
 
-docker compose up -d postgres minio minio-init grobid fallback-worker
+DOCKER=(docker)
+if ! docker info >/dev/null 2>&1; then
+  if command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then
+    DOCKER=(sudo docker)
+  fi
+fi
+DC=("${DOCKER[@]}" compose)
+
+"${DC[@]}" up -d postgres minio minio-init grobid fallback-worker
 
 # Ensure the running API container reflects the current working tree without
 # requiring a full image rebuild (use bind mounts to overlay code).
-docker compose stop app-api >/dev/null 2>&1 || true
-docker compose rm -f app-api >/dev/null 2>&1 || true
+"${DC[@]}" stop app-api >/dev/null 2>&1 || true
+"${DC[@]}" rm -f app-api >/dev/null 2>&1 || true
 
 # Clean up any prior `docker compose run -d app-api` containers that may still
 # be holding the 8000 port.
-old_ids=$(docker ps -aq --filter "name=blablador-poc-app-api-run" || true)
+old_ids=$(${DOCKER[*]} ps -aq --filter "name=blablador-poc-app-api-run" 2>/dev/null || true)
 if [ -n "${old_ids}" ]; then
-  docker rm -f ${old_ids} >/dev/null 2>&1 || true
+  ${DOCKER[*]} rm -f ${old_ids} >/dev/null 2>&1 || true
 fi
 
-docker compose run -d --service-ports \
+"${DC[@]}" run -d --service-ports \
   -v "${PWD}/backend:/app/backend" \
   -v "${PWD}/frontend:/app/frontend" \
   -v "${PWD}/application.py:/app/application.py" \

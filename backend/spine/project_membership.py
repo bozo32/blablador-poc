@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
@@ -13,6 +14,13 @@ def _clean_text(value: Any, *, field: str) -> str:
     return text
 
 
+def _iso(value: Any) -> str | None:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    text = str(value or "").strip()
+    return text or None
+
+
 def list_projects_for_user(*, user_id: str) -> list[dict[str, Any]]:
     uid = _clean_text(user_id, field="user_id")
     with connect() as conn:
@@ -20,15 +28,18 @@ def list_projects_for_user(*, user_id: str) -> list[dict[str, Any]]:
             cur.execute(
                 """
                 SELECT m.project_id,
+                       COALESCE(pm.meta_json->>'name', '') AS project_name,
                        m.role,
                        m.created_at,
                        m.updated_at,
                        a.project_id AS active_project_id
                   FROM user_project_memberships m
+             LEFT JOIN project_meta pm
+                    ON pm.project_id = m.project_id
              LEFT JOIN user_active_projects a
                     ON a.user_id = m.user_id
                  WHERE m.user_id = %s
-              ORDER BY m.updated_at DESC, m.created_at DESC, m.project_id ASC
+               ORDER BY m.updated_at DESC, m.created_at DESC, m.project_id ASC
                 """,
                 (uid,),
             )
@@ -36,14 +47,16 @@ def list_projects_for_user(*, user_id: str) -> list[dict[str, Any]]:
 
     out: list[dict[str, Any]] = []
     for row in rows:
-        active_project_id = str(row[4] or "").strip() if row[4] is not None else None
+        active_project_id = str(row[5] or "").strip() if row[5] is not None else None
         project_id = str(row[0] or "").strip()
+        project_name = str(row[1] or "").strip() or None
         out.append(
             {
                 "project_id": project_id,
-                "role": str(row[1] or "member").strip() or "member",
-                "joined_at": row[2],
-                "updated_at": row[3],
+                "name": project_name,
+                "role": str(row[2] or "member").strip() or "member",
+                "joined_at": _iso(row[3]),
+                "updated_at": _iso(row[4]),
                 "is_active": bool(active_project_id and active_project_id == project_id),
             }
         )
@@ -110,8 +123,8 @@ def create_project_for_user(
         "user_id": row[0],
         "project_id": row[1],
         "role": row[2],
-        "joined_at": row[3],
-        "updated_at": row[4],
+        "joined_at": _iso(row[3]),
+        "updated_at": _iso(row[4]),
     }
 
 

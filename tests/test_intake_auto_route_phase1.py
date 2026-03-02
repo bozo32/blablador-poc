@@ -62,19 +62,23 @@ class _StubStreamlit:
         return _Ctx()
 
 
-def test_unknown_drop_auto_routes_to_source_without_blocking(monkeypatch) -> None:
+def test_unknown_drop_auto_routes_to_citing_without_blocking(monkeypatch) -> None:
     stub = _StubStreamlit()
     stub.session_state["intake_dropzone_nonce"] = 0
     stub.session_state["intake-dropzone::0"] = [_Upload("unknown.pdf", b"%PDF-1.4")]
     monkeypatch.setattr(ui, "st", stub)
 
-    routed_source: list[tuple[str, bool]] = []
+    routed_citing: list[str] = []
     monkeypatch.setattr(ui, "_intake_guess_intent", lambda **_: "unknown")
-    monkeypatch.setattr(ui, "_intake_route_citing", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        ui,
+        "_intake_route_citing",
+        lambda item_id, **_kwargs: routed_citing.append(str(item_id)),
+    )
     monkeypatch.setattr(
         ui,
         "_intake_route_source",
-        lambda item_id, *, attach_now=False: routed_source.append((item_id, attach_now)),
+        lambda item_id, *, attach_now=False: None,
     )
     monkeypatch.setattr(ui, "_rerun", lambda: None)
 
@@ -85,16 +89,15 @@ def test_unknown_drop_auto_routes_to_source_without_blocking(monkeypatch) -> Non
     item = inbox[0]
     assert item["intent"] == "unknown"
     assert item["stage"] != "awaiting-intent"
-    assert item["routed_intent"] == "source"
+    assert item["routed_intent"] == "citing"
     assert item["auto_routed"] is True
     assert item["override_available"] is False
     assert (
         item["note"]
-        == "Intent unclear; routed to Stray documents for placement review."
+        == "Intent unclear; processing metadata first, then placement can be refined."
     )
     assert item["intent_guess"] == "unknown"
-    assert len(routed_source) == 1
-    assert routed_source[0][1] is False
+    assert len(routed_citing) == 1
 
 
 def test_status_refresh_uses_routed_intent_for_auto_routed_unknown(monkeypatch) -> None:
@@ -147,19 +150,19 @@ def test_auto_routed_unknown_hides_route_choice_controls(monkeypatch) -> None:
     assert "Route as Source" not in stub.button_labels
     assert "Attach now" not in stub.button_labels
     assert any(
-        "Intent unclear; this item was routed to Stray documents for placement." in c
+        "Intent unclear; metadata processing runs first, then placement can be refined." in c
         for c in stub.captions
     )
 
 
-def test_empty_intake_copy_mentions_stray_auto_route_policy(monkeypatch) -> None:
+def test_empty_intake_copy_mentions_metadata_first_policy(monkeypatch) -> None:
     stub = _StubStreamlit()
     monkeypatch.setattr(ui, "st", stub)
     ui.render_intake_panel(max_rows=None)
-    assert any("unclear uploads route to Stray documents" in c for c in stub.captions)
+    assert any("Intent classification is deferred until metadata processing" in c for c in stub.captions)
 
 
-def test_sources_empty_copy_mentions_unclear_upload_handoff(monkeypatch) -> None:
+def test_sources_empty_copy_no_longer_mentions_unclear_handoff(monkeypatch) -> None:
     stub = _StubStreamlit()
     monkeypatch.setattr(ui, "st", stub)
     monkeypatch.setattr(ui.attachment_queue, "init_attachment_queue_state", lambda: None)
@@ -170,4 +173,4 @@ def test_sources_empty_copy_mentions_unclear_upload_handoff(monkeypatch) -> None
 
     ui.render_sources_panel(max_rows=None)
 
-    assert any("unclear uploads route here as Stray documents" in c for c in stub.captions)
+    assert any("No sources yet. Upload via Drop PDFs." in c for c in stub.captions)

@@ -4,6 +4,12 @@
 
 OS-ERIN is a local-first citation validation web app: a reviewer uploads an academic PDF (“citing” paper), navigates in-text citation callouts, follows a chosen citation to a target reference, segments the citing sentence into reviewable claim text, attaches the cited-source PDF, and then runs an evidence pipeline that retrieves and ranks candidate spans from the cited source and labels them (support/contradict/neutral) using NLI—after which the reviewer records a judgment and exports those judgments for downstream analysis.
 
+Identity/scope/visibility contract for current POC behavior is documented in: `docs/IDENTITY_SCOPE_VISIBILITY_CONTRACT.md`.
+
+Directional narrative for EU-library citation-walking target use is documented in: `docs/EU_LIBRARY_CITATION_WALKING_PATH.md`.
+
+Design intent and architecture tradeoffs are documented in: `docs/SYSTEM_DESIGN_RATIONALE.md`.
+
 ---
 
 ## End-to-end flow (≈1 page)
@@ -257,4 +263,3 @@ OS-ERIN is a local-first citation validation web app: a reviewer uploads an acad
 - Week 2: spine-only attachments (records + artifacts) + backfill/migration strategy for existing local data.
 - Week 3: remove legacy codepaths and update smoke tests + docs; stabilize Compose “one command runs all”.
 - Week 4: UX/ops pass: Works Manager-style status surfacing and better failure remediation loops.
-

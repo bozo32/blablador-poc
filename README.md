@@ -57,3 +57,7 @@ This repo runs as multiple services under Compose (see `docker-compose.yml`):
 ## Specs
 
 - Repo functional description + technical spec: `docs/REPO_SPEC.md`
+- Identity/scope/visibility contract: `docs/IDENTITY_SCOPE_VISIBILITY_CONTRACT.md`
+- EU library citation-walking direction and gaps: `docs/EU_LIBRARY_CITATION_WALKING_PATH.md`
+- System design rationale (intent + tradeoffs): `docs/SYSTEM_DESIGN_RATIONALE.md`
+- UX style conventions for contributors/agents: `.planning/codebase/UX_STYLE_CONVENTIONS.md`

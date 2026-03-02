@@ -1,3 +1,16 @@
+---
+gsd_state_version: 1.0
+milestone: v1.0
+milestone_name: milestone
+status: unknown
+last_updated: "2026-03-02T11:18:57.854Z"
+progress:
+  total_phases: 3
+  completed_phases: 0
+  total_plans: 16
+  completed_plans: 12
+---
+
 # Project State
 
 ## Project Reference
@@ -13,8 +26,8 @@ Planning index: `.planning/PRIORITIES.md`
 
 Phase: 10 of 12 (Contracts + core workflow simplification)
 Plan: 6 of 7 (10-04.5 Opinion layer)
-Status: In progress (10-04.5-01-07-05 complete; next 10-04.5-01-07-06 or 10-05)
-Last activity: 2026-02-28 — Completed 10-04.5-01-07-05; wired UI to server-backed opinion layer for follow rail
+Status: In progress (10-04.5-03 complete; next 10-05)
+Last activity: 2026-03-02 — Completed 10-04.5-03; fixed rail/tab queue key collisions and enabled non-blocking unknown-upload auto-routing
 
 Progress: ██████████░ 80%
 
@@ -38,6 +51,7 @@ Progress: ██████████░ 80%
 **Recent Trend:**
 - Last 5 plans: 10-04.5-01-04 (20 min), 10-04.5-01-03 (9 min), 05-04 (23 min), 05-03 (15 min), 05-02 (22 min)
 - Trend: Building
+| Phase 10-contracts-core-workflow-simplification P10-04.5-03 | 326 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -104,6 +118,8 @@ Recent decisions affecting current work:
 
 - Use local citation graph data when DOI resolution is unavailable to avoid OpenAlex 404s (02-02).
 - Prefer GROBID consolidation when resolver sources disagree; warn that OpenAlex may return citing articles (02-06).
+- [Phase 10-contracts-core-workflow-simplification]: Unknown intake intent now auto-routes to citing while keeping explicit non-blocking overrides.
+- [Phase 10-contracts-core-workflow-simplification]: Requested-works widget scope now prefixes parent panel scope to prevent rail/tab duplicate Streamlit keys.
 
 ### Roadmap Evolution
 
@@ -130,6 +146,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-02-28T00:00:00Z
-Stopped at: Completed 10-04.5-01-07-05-PLAN.md
+Last session: 2026-03-02T11:18:13Z
+Stopped at: Completed 10-04.5-03-PLAN.md
 Resume file: None

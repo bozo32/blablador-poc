@@ -11,11 +11,23 @@ import streamlit as st
 DEFAULT_TIMEOUT = 45
 
 
-def _project_headers() -> Dict[str, str]:
+def _strict_scope_headers(*, reviewer_uid: Optional[str] = None) -> Dict[str, str]:
     pid = str(st.session_state.get("project_id") or "").strip()
     if not pid:
-        pid = "default"
-    return {"X-Project-Id": pid}
+        raise EvidenceApiError("evidence request requires project_id")
+
+    session_uid = str(st.session_state.get("active_reviewer_uid") or "").strip()
+    reviewer = str(reviewer_uid or "").strip() or session_uid
+    user_id = session_uid or reviewer
+    if not user_id:
+        raise EvidenceApiError("evidence request requires user_id")
+    if not reviewer:
+        raise EvidenceApiError("evidence request requires reviewer_uid")
+    return {
+        "X-Project-Id": pid,
+        "X-User-Id": user_id,
+        "X-Reviewer-Uid": reviewer,
+    }
 
 
 MAX_LIST_REQUESTS = 2
@@ -93,7 +105,10 @@ def _request(
     headers = kwargs.pop("headers", {})
     headers = {**_auth_headers(), **headers}
     if str(path or "").startswith("/attachments"):
-        headers = {**_project_headers(), **headers}
+        pid = str(st.session_state.get("project_id") or "").strip()
+        if not pid:
+            raise EvidenceApiError("evidence request requires project_id")
+        headers = {"X-Project-Id": pid, **headers}
     try:
         response = requests.request(
             method,
@@ -172,7 +187,12 @@ def list_evidence(
             params["label"] = label
         if claim_text:
             params["claim_text"] = claim_text
-        payload = _request("get", f"/claims/{claim_id}/evidence", params=params)
+        payload = _request(
+            "get",
+            f"/claims/{claim_id}/evidence",
+            params=params,
+            headers=_strict_scope_headers(reviewer_uid=reviewer_uid),
+        )
     finally:
         remaining_slots = _release_slot(claim_id)
 
@@ -198,11 +218,17 @@ def get_evidence_decisions(
     reviewer_uid: str,
     events_limit: int = 20,
 ) -> Dict[str, Any]:
+    normalized_reviewer = str(reviewer_uid or "").strip()
     params = {
-        "reviewer_uid": str(reviewer_uid or "default").strip() or "default",
+        "reviewer_uid": normalized_reviewer,
         "events_limit": max(0, min(int(events_limit), 200)),
     }
-    return _request("get", f"/claims/{claim_id}/evidence/decisions", params=params)
+    return _request(
+        "get",
+        f"/claims/{claim_id}/evidence/decisions",
+        params=params,
+        headers=_strict_scope_headers(reviewer_uid=normalized_reviewer),
+    )
 
 
 def append_evidence_decision_event(
@@ -217,7 +243,8 @@ def append_evidence_decision_event(
     payload: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     url = f"{_api_root()}/claims/{claim_id}/evidence/decisions/events"
-    params = {"reviewer_uid": str(reviewer_uid or "default").strip() or "default"}
+    normalized_reviewer = str(reviewer_uid or "").strip()
+    params = {"reviewer_uid": normalized_reviewer}
     body: Dict[str, Any] = {
         "idempotency_key": str(idempotency_key or "").strip(),
         "expected_version": int(expected_version),
@@ -233,7 +260,11 @@ def append_evidence_decision_event(
     if payload is not None:
         body["payload"] = dict(payload)
 
-    headers = {**_auth_headers(), "Content-Type": "application/json"}
+    headers = {
+        **_auth_headers(),
+        **_strict_scope_headers(reviewer_uid=normalized_reviewer),
+        "Content-Type": "application/json",
+    }
     try:
         response = requests.request(
             "post",

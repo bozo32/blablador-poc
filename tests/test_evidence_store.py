@@ -79,7 +79,14 @@ def stub_streamlit(monkeypatch):
 
 
 def test_api_stub_request_limit(stub_streamlit, monkeypatch):
-    stub_streamlit.session_state.update({"api_url": "http://backend", "api_key": "k"})
+    stub_streamlit.session_state.update(
+        {
+            "api_url": "http://backend",
+            "api_key": "k",
+            "project_id": "proj-a",
+            "active_reviewer_uid": "reviewer-a",
+        }
+    )
     sample_payload = {
         "claim_id": "claim-1",
         "candidates": [{"id": "cand-1"}],

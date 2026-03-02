@@ -4,7 +4,15 @@ from typing import Any
 
 import pytest
 
-from frontend import graph_api, ingestion_api, ledger_api, opinion_api, project_api
+from frontend import (
+    evidence_api,
+    graph_api,
+    ingestion_api,
+    judgment_api,
+    ledger_api,
+    opinion_api,
+    project_api,
+)
 
 
 class _FakeResponse:
@@ -222,3 +230,77 @@ def test_project_api_fails_fast_without_project_scope() -> None:
 def test_project_api_fails_fast_without_user_scope() -> None:
     with pytest.raises(project_api.ProjectApiError, match="user_id"):
         project_api.get_meta(project_id="proj-a", user_id=None)
+
+
+def test_evidence_client_fails_fast_without_scope(monkeypatch: pytest.MonkeyPatch) -> None:
+    stub = type("_Stub", (), {"session_state": {}})()
+    monkeypatch.setattr(evidence_api, "st", stub)
+    with pytest.raises(evidence_api.EvidenceApiError, match="project_id"):
+        evidence_api.list_evidence("claim-1", reviewer_uid="reviewer-a")
+
+
+def test_evidence_client_sends_strict_scope_identity_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+    stub = type(
+        "_Stub",
+        (),
+        {
+            "session_state": {
+                "project_id": "proj-a",
+                "active_reviewer_uid": "reviewer-a",
+                "api_url": "http://api",
+            }
+        },
+    )()
+    monkeypatch.setattr(evidence_api, "st", stub)
+
+    def _fake_request(method: str, path: str, **kwargs):
+        captured["method"] = method
+        captured["path"] = path
+        captured.update(kwargs)
+        return {"candidates": [], "total": 0, "offset": 0, "limit": 5}
+
+    monkeypatch.setattr(evidence_api, "_request", _fake_request)
+    evidence_api.list_evidence("claim-1", reviewer_uid="reviewer-a")
+    assert captured["headers"] == {
+        "X-Project-Id": "proj-a",
+        "X-User-Id": "reviewer-a",
+        "X-Reviewer-Uid": "reviewer-a",
+    }
+
+
+def test_judgment_client_sends_strict_scope_identity_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+    stub = type(
+        "_Stub",
+        (),
+        {
+            "session_state": {
+                "project_id": "proj-a",
+                "active_reviewer_uid": "reviewer-a",
+                "api_url": "http://api",
+            },
+            "toast": lambda *_args, **_kwargs: None,
+            "error": lambda *_args, **_kwargs: None,
+        },
+    )()
+    monkeypatch.setattr(judgment_api, "st", stub)
+
+    def _fake_request(method: str, url: str, **kwargs):
+        captured["method"] = method
+        captured["url"] = url
+        captured.update(kwargs)
+        return _FakeResponse({"claim_id": "claim-1"})
+
+    monkeypatch.setattr(judgment_api.requests, "request", _fake_request)
+    payload = judgment_api.get_judgment("claim-1", reviewer_uid="reviewer-a")
+    assert payload["claim_id"] == "claim-1"
+    assert captured["headers"] == {
+        "X-Project-Id": "proj-a",
+        "X-User-Id": "reviewer-a",
+        "X-Reviewer-Uid": "reviewer-a",
+    }

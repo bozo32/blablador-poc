@@ -854,6 +854,12 @@ class LedgerRow(BaseModel):
     extracted: bool = False
     resolved: bool = False
     ingest_id: Optional[str] = None
+    canonical_extraction_status: Optional[str] = None
+    canonical_extraction_error: Optional[str] = None
+    canonical_body_extraction_status: Optional[str] = None
+    canonical_body_extraction_error: Optional[str] = None
+    canonical_resolution_status: Optional[str] = None
+    canonical_resolution_error: Optional[str] = None
 
 
 class LedgerResponse(BaseModel):
@@ -951,6 +957,7 @@ class ProjectImportResponse(BaseModel):
 
 class ProjectMembershipSummary(BaseModel):
     project_id: str
+    name: Optional[str] = None
     role: str = "member"
     joined_at: Optional[str] = None
     updated_at: Optional[str] = None

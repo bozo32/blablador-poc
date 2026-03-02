@@ -326,8 +326,8 @@ class GraphStore:
                     (ing, pid, key),
                 )
 
-    def resolve_alias(self, alias: str) -> Optional[str]:
-        pid = self._project_id()
+    def resolve_alias(self, alias: str, *, project_id: Optional[str] = None) -> Optional[str]:
+        pid = self._project_id(project_id)
         a = str(alias or "").strip()
         if not a:
             return None
@@ -345,13 +345,17 @@ class GraphStore:
                 return str(row[0]) if row and row[0] else None
 
     def resolve_reference_to_ingest_id(
-        self, *, citing_doc_id: str, reference_id: str
+        self,
+        *,
+        citing_doc_id: str,
+        reference_id: str,
+        project_id: Optional[str] = None,
     ) -> Optional[str]:
         citing = str(citing_doc_id or "").strip()
         ref = str(reference_id or "").strip()
         if not citing or not ref:
             return None
-        node_id = self.resolve_alias(f"ref:{citing}:{ref}")
+        node_id = self.resolve_alias(f"ref:{citing}:{ref}", project_id=project_id)
         if not node_id:
             return None
         node = self._get_node(node_id) or {}
@@ -363,7 +367,7 @@ class GraphStore:
 
         doi = normalize_doi(props.get("doi"))
         if doi:
-            node_id2 = self.resolve_alias(f"doi:{doi}")
+            node_id2 = self.resolve_alias(f"doi:{doi}", project_id=project_id)
             if node_id2:
                 node2 = self._get_node(str(node_id2)) or {}
                 props2 = node2.get("properties") or {}
@@ -374,7 +378,7 @@ class GraphStore:
 
         doc_key = str(props.get("doc_key") or "").strip()
         if doc_key.startswith("bib:"):
-            node_id3 = self.resolve_alias(doc_key)
+            node_id3 = self.resolve_alias(doc_key, project_id=project_id)
             if node_id3:
                 node3 = self._get_node(str(node_id3)) or {}
                 props3 = node3.get("properties") or {}
@@ -720,11 +724,15 @@ class GraphStore:
                     )
 
     def mark_doc_assigned_for_attachment(
-        self, *, doc_id: Optional[str], claim_id: Optional[str]
+        self,
+        *,
+        doc_id: Optional[str],
+        claim_id: Optional[str],
+        project_id: Optional[str] = None,
     ) -> None:
         if not doc_id or not claim_id:
             return
-        doc_node_id = self.resolve_alias(f"ingest:{doc_id}")
+        doc_node_id = self.resolve_alias(f"ingest:{doc_id}", project_id=project_id)
         if not doc_node_id:
             return
         self._upsert_node(
@@ -732,11 +740,17 @@ class GraphStore:
             kind="document",
             label=None,
             merge_properties={"workflow_assigned": True},
+            project_id=project_id,
         )
 
     def link_reference_to_ingest(
-        self, *, citing_doc_id: str, reference_id: str, cited_ingest_id: str
-    ) -> None:
+        self,
+        *,
+        citing_doc_id: str,
+        reference_id: str,
+        cited_ingest_id: str,
+        project_id: Optional[str] = None,
+    ) -> bool:
         """Attach an uploaded cited work to a reference node.
 
         Auto-place requires `ref:{citing_doc_id}:{reference_id}` to resolve to a
@@ -749,16 +763,227 @@ class GraphStore:
         ref = str(reference_id or "").strip()
         cited = str(cited_ingest_id or "").strip()
         if not citing or not ref or not cited:
-            return
-        ref_node = self.resolve_alias(f"ref:{citing}:{ref}")
+            return False
+        pid = self._project_id(project_id)
+        ref_node = self.resolve_alias(f"ref:{citing}:{ref}", project_id=pid)
         if not ref_node:
-            return
-        self._upsert_node(
-            node_id=str(ref_node),
-            kind="document",
-            label=None,
-            merge_properties={"ingest_ids": [cited]},
+            citing_node = self.resolve_alias(f"ingest:{citing}", project_id=pid)
+            if citing_node:
+                with connect() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """
+                            SELECT target_id
+                            FROM graph_edges
+                            WHERE project_id=%s
+                              AND source_id=%s
+                              AND kind='CITES'
+                              AND ref_id=%s
+                            ORDER BY edge_id ASC
+                            LIMIT 1
+                            """,
+                            (pid, str(citing_node), ref),
+                        )
+                        row = cur.fetchone()
+                        if row and row[0]:
+                            ref_node = str(row[0])
+                            self._set_alias(
+                                alias=f"ref:{citing}:{ref}",
+                                node_id=str(ref_node),
+                                kind="reference",
+                            )
+        if not ref_node:
+            return False
+        with connect(autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE graph_nodes
+                    SET properties_json = jsonb_set(
+                          jsonb_set(
+                            COALESCE(properties_json, '{}'::jsonb),
+                            '{ingest_ids}',
+                            to_jsonb(ARRAY[%s]::text[]),
+                            true
+                          ),
+                          '{resolved}',
+                          'true'::jsonb,
+                          true
+                        ),
+                        updated_at = now()
+                    WHERE project_id=%s
+                      AND node_id=%s
+                    """,
+                    (cited, pid, str(ref_node)),
+                )
+        return True
+
+    def reconcile_ingest_projection(
+        self, *, ingest_docs: Sequence[dict], project_id: Optional[str] = None
+    ) -> int:
+        """Reconcile graph document projection fields from spine statuses."""
+        pid = self._project_id(project_id)
+        updated = 0
+        for doc in ingest_docs or []:
+            if not isinstance(doc, dict):
+                continue
+            ingest_id = str(doc.get("id") or "").strip()
+            if not ingest_id:
+                continue
+            node_id = self.resolve_alias(f"ingest:{ingest_id}", project_id=pid)
+            if not node_id:
+                continue
+
+            extraction = doc.get("extraction") if isinstance(doc.get("extraction"), dict) else {}
+            body_extraction = (
+                doc.get("body_extraction") if isinstance(doc.get("body_extraction"), dict) else {}
+            )
+            resolution = doc.get("resolution") if isinstance(doc.get("resolution"), dict) else {}
+
+            extraction_status = str(extraction.get("status") or "").strip().lower() or None
+            body_status = str(body_extraction.get("status") or "").strip().lower() or None
+            resolution_status = str(resolution.get("status") or "").strip().lower() or None
+
+            payload = {
+                "canonical_extraction_status": extraction_status,
+                "canonical_extraction_error": str(extraction.get("error") or "").strip() or None,
+                "canonical_body_extraction_status": body_status,
+                "canonical_body_extraction_error": str(body_extraction.get("error") or "").strip() or None,
+                "canonical_resolution_status": resolution_status,
+                "canonical_resolution_error": str(resolution.get("error") or "").strip() or None,
+                "extracted": extraction_status == "complete",
+                "resolved": resolution_status == "complete",
+            }
+            with connect(autocommit=True) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE graph_nodes
+                        SET properties_json = COALESCE(properties_json, '{}'::jsonb) || %s::jsonb,
+                            updated_at = now()
+                        WHERE project_id=%s AND node_id=%s
+                        """,
+                        (_json_dumps(payload), pid, str(node_id)),
+                    )
+            updated += 1
+        return int(updated)
+
+    def _node_ingest_id(self, node_id: str) -> Optional[str]:
+        node = self._get_node(str(node_id)) or {}
+        props = node.get("properties") or {}
+        ingest_ids = props.get("ingest_ids") or []
+        if isinstance(ingest_ids, list) and ingest_ids:
+            value = ingest_ids[0]
+            return str(value) if value else None
+        return None
+
+    def link_matching_references_for_ingest(
+        self, *, citing_doc_id: str, cited_ingest_id: str
+    ) -> int:
+        """Best-effort map citing-doc reference nodes to a cited ingest.
+
+        Used when user places a stray doc at doc-doc level (no explicit target_id).
+        This attempts deterministic matching by DOI, then bib fingerprint, then
+        surname+year+title token overlap.
+        """
+        citing = str(citing_doc_id or "").strip()
+        cited = str(cited_ingest_id or "").strip()
+        if not citing or not cited:
+            return 0
+
+        citing_node = self.resolve_alias(f"ingest:{citing}")
+        cited_node = self.resolve_alias(f"ingest:{cited}")
+        if not citing_node or not cited_node:
+            return 0
+
+        cited_props = (self._get_node(str(cited_node)) or {}).get("properties") or {}
+        cited_doi = normalize_doi(cited_props.get("doi"))
+        cited_title = str(cited_props.get("title") or "").strip()
+        cited_authors = cited_props.get("authors") or []
+        cited_year = str(cited_props.get("year") or "").strip()
+        cited_bib = _safe_bib_key(
+            title=cited_title,
+            authors=cited_authors if isinstance(cited_authors, list) else [],
+            year=cited_year,
         )
+        cited_tokens = set(_norm_text(cited_title).split()) if cited_title else set()
+        cited_surname = _surname(cited_authors[0]) if isinstance(cited_authors, list) and cited_authors else None
+
+        with connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT target_id, ref_id
+                    FROM graph_edges
+                    WHERE project_id=%s
+                      AND source_id=%s
+                      AND kind='CITES'
+                      AND enabled=true
+                    """,
+                    (self._project_id(), str(citing_node)),
+                )
+                refs = cur.fetchall() or []
+
+        matched = 0
+        for target_id, ref_id in refs:
+            ref_node = self._get_node(str(target_id)) or {}
+            ref_props = ref_node.get("properties") or {}
+
+            ref_doi = normalize_doi(ref_props.get("doi"))
+            ref_title = str(ref_props.get("title") or "").strip()
+            ref_authors = ref_props.get("authors") or []
+            ref_year = str(ref_props.get("year") or "").strip()
+            ref_bib = _safe_bib_key(
+                title=ref_title,
+                authors=ref_authors if isinstance(ref_authors, list) else [],
+                year=ref_year,
+            )
+
+            is_match = False
+            if cited_doi and ref_doi and cited_doi == ref_doi:
+                is_match = True
+            elif cited_bib and ref_bib and cited_bib == ref_bib:
+                is_match = True
+            else:
+                ref_surname = (
+                    _surname(ref_authors[0])
+                    if isinstance(ref_authors, list) and ref_authors
+                    else None
+                )
+                ref_tokens = set(_norm_text(ref_title).split()) if ref_title else set()
+                overlap = 0.0
+                if cited_tokens and ref_tokens:
+                    inter = len(cited_tokens & ref_tokens)
+                    overlap = inter / max(1, len(cited_tokens | ref_tokens))
+                if (
+                    cited_surname
+                    and ref_surname
+                    and str(cited_surname).lower() == str(ref_surname).lower()
+                    and cited_year
+                    and ref_year
+                    and cited_year == ref_year
+                    and overlap >= 0.20
+                ):
+                    is_match = True
+
+            if not is_match:
+                continue
+
+            self._upsert_node(
+                node_id=str(target_id),
+                kind="document",
+                label=None,
+                merge_properties={"ingest_ids": [cited], "resolved": True},
+            )
+            if ref_id:
+                self._set_alias(
+                    alias=f"ref:{citing}:{str(ref_id)}",
+                    node_id=str(target_id),
+                    kind="reference",
+                )
+            matched += 1
+
+        return int(matched)
 
     def ledger_rows(self, *, project_id: Optional[str] = None) -> List[dict]:
         pid = self._project_id(project_id)
@@ -803,9 +1028,9 @@ class GraphStore:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT source_id, target_id
+                    SELECT source_id, target_id, enabled, properties_json
                     FROM graph_edges
-                    WHERE project_id=%s AND kind='CITES' AND enabled=true
+                    WHERE project_id=%s AND kind='CITES'
                     """,
                     (pid,),
                 )
@@ -813,13 +1038,33 @@ class GraphStore:
 
         outgoing: Dict[str, set[str]] = {k: set() for k in docs.keys()}
         incoming: Dict[str, set[str]] = {k: set() for k in docs.keys()}
-        for src, tgt in cite_rows:
+        outgoing_suggested: Dict[str, set[str]] = {k: set() for k in docs.keys()}
+        incoming_suggested: Dict[str, set[str]] = {k: set() for k in docs.keys()}
+        for src, tgt, enabled, props_raw in cite_rows:
             src2 = str(src)
             tgt2 = str(tgt)
-            if src2 in outgoing and tgt2 in docs:
+            props = props_raw if isinstance(props_raw, dict) else {}
+            if props_raw is not None and not isinstance(props_raw, dict):
+                try:
+                    props = json.loads(props_raw)
+                except Exception:
+                    props = {}
+
+            is_suggested = (not bool(enabled)) and (
+                str(props.get("nomination_status") or "").strip().lower()
+                == "suggested"
+                or str(props.get("source") or "").strip().lower()
+                in {"user_nomination", "manual-user"}
+            )
+
+            if bool(enabled) and src2 in outgoing and tgt2 in docs:
                 outgoing[src2].add(tgt2)
-            if tgt2 in incoming and src2 in docs:
+            if bool(enabled) and tgt2 in incoming and src2 in docs:
                 incoming[tgt2].add(src2)
+            if is_suggested and src2 in outgoing_suggested and tgt2 in docs:
+                outgoing_suggested[src2].add(tgt2)
+            if is_suggested and tgt2 in incoming_suggested and src2 in docs:
+                incoming_suggested[tgt2].add(src2)
 
         rows: List[dict] = []
         for node_id, doc in docs.items():
@@ -875,6 +1120,16 @@ class GraphStore:
                 for t in (outgoing.get(node_id) or [])
                 if t in anchored_nodes
             ]
+            incoming_suggested_live = [
+                docs[s]["num"]
+                for s in (incoming_suggested.get(node_id) or [])
+                if s in anchored_nodes
+            ]
+            outgoing_suggested_live = [
+                docs[t]["num"]
+                for t in (outgoing_suggested.get(node_id) or [])
+                if t in anchored_nodes
+            ]
 
             rows.append(
                 {
@@ -896,6 +1151,12 @@ class GraphStore:
                     ),
                     "incoming_live": sorted([int(n) for n in incoming_live if n]),
                     "outgoing_live": sorted([int(n) for n in outgoing_live if n]),
+                    "incoming_suggested_live": sorted(
+                        [int(n) for n in incoming_suggested_live if n]
+                    ),
+                    "outgoing_suggested_live": sorted(
+                        [int(n) for n in outgoing_suggested_live if n]
+                    ),
                     "ingest_id": (props.get("ingest_ids") or [None])[0],
                 }
             )
@@ -1060,6 +1321,173 @@ class GraphStore:
             merge_properties={"workflow_assigned": bool(assigned)},
             project_id=pid,
         )
+
+    def place_relation(
+        self,
+        *,
+        source_num: int,
+        target_num: int,
+        relation: str,
+        canonical: bool,
+        reviewer_uid: Optional[str] = None,
+        project_id: Optional[str] = None,
+    ) -> None:
+        pid = self._project_id(project_id)
+        src_num = int(source_num)
+        tgt_num = int(target_num)
+        relation_norm = str(relation or "is cited by").strip().lower()
+
+        source_id = self._node_id_by_num(src_num, project_id=pid)
+        target_id = self._node_id_by_num(tgt_num, project_id=pid)
+        if not source_id:
+            raise KeyError(f"Unknown source document number: {source_num}")
+        if not target_id:
+            raise KeyError(f"Unknown target document number: {target_num}")
+
+        if relation_norm == "is cited by":
+            edge_source = str(target_id)
+            edge_target = str(source_id)
+        else:
+            edge_source = str(source_id)
+            edge_target = str(target_id)
+
+        reviewer = str(reviewer_uid or "").strip() or "default"
+        existing = None
+        for edge in self.list_edges(
+            source_id=edge_source,
+            target_id=edge_target,
+            kind="CITES",
+            include_disabled=True,
+        ):
+            if str(edge.get("ref_id") or "") == "manual":
+                existing = edge
+                break
+
+        if canonical:
+            if existing:
+                self.set_edge_enabled(
+                    edge_id=int(existing.get("edge_id") or 0),
+                    enabled=True,
+                    merge_properties={
+                        "source": "manual-canonical",
+                        "canonical": True,
+                        "nomination_status": "confirmed",
+                        "confirmed_by": reviewer,
+                    },
+                )
+                try:
+                    if relation_norm == "is cited by":
+                        source_ingest = self._node_ingest_id(str(source_id))
+                        target_ingest = self._node_ingest_id(str(target_id))
+                        if source_ingest and target_ingest:
+                            self.link_matching_references_for_ingest(
+                                citing_doc_id=str(target_ingest),
+                                cited_ingest_id=str(source_ingest),
+                            )
+                except Exception:
+                    pass
+                return
+            self._upsert_edge(
+                source_id=edge_source,
+                target_id=edge_target,
+                kind="CITES",
+                ref_id="manual",
+                enabled=True,
+                merge_properties={
+                    "source": "manual-canonical",
+                    "canonical": True,
+                    "nomination_status": "confirmed",
+                    "confirmed_by": reviewer,
+                },
+                project_id=pid,
+            )
+            try:
+                if relation_norm == "is cited by":
+                    source_ingest = self._node_ingest_id(str(source_id))
+                    target_ingest = self._node_ingest_id(str(target_id))
+                    if source_ingest and target_ingest:
+                        self.link_matching_references_for_ingest(
+                            citing_doc_id=str(target_ingest),
+                            cited_ingest_id=str(source_ingest),
+                        )
+            except Exception:
+                pass
+            return
+
+        if existing and bool(existing.get("enabled")):
+            self.set_edge_enabled(
+                edge_id=int(existing.get("edge_id") or 0),
+                enabled=True,
+                merge_properties={
+                    "nomination_seen": True,
+                    "nomination_last_by": reviewer,
+                },
+            )
+            try:
+                if relation_norm == "is cited by":
+                    source_ingest = self._node_ingest_id(str(source_id))
+                    target_ingest = self._node_ingest_id(str(target_id))
+                    if source_ingest and target_ingest:
+                        self.link_matching_references_for_ingest(
+                            citing_doc_id=str(target_ingest),
+                            cited_ingest_id=str(source_ingest),
+                        )
+            except Exception:
+                pass
+            return
+
+        if existing:
+            self.set_edge_enabled(
+                edge_id=int(existing.get("edge_id") or 0),
+                enabled=False,
+                merge_properties={
+                    "source": "user_nomination",
+                    "canonical": False,
+                    "nomination_status": "suggested",
+                    "nominated_by": reviewer,
+                },
+            )
+            try:
+                if relation_norm == "is cited by":
+                    source_ingest = self._node_ingest_id(str(source_id))
+                    target_ingest = self._node_ingest_id(str(target_id))
+                    if source_ingest and target_ingest:
+                        self.link_matching_references_for_ingest(
+                            citing_doc_id=str(target_ingest),
+                            cited_ingest_id=str(source_ingest),
+                        )
+            except Exception:
+                pass
+            return
+
+        self._upsert_edge(
+            source_id=edge_source,
+            target_id=edge_target,
+            kind="CITES",
+            ref_id="manual",
+            enabled=False,
+            merge_properties={
+                "source": "user_nomination",
+                "canonical": False,
+                "nomination_status": "suggested",
+                "nominated_by": reviewer,
+            },
+            project_id=pid,
+        )
+
+        # Best-effort bridging for retrieval: if user says "source is cited by
+        # target", try to map target's reference nodes to source ingest.
+        try:
+            if relation_norm == "is cited by":
+                source_ingest = self._node_ingest_id(str(source_id))
+                target_ingest = self._node_ingest_id(str(target_id))
+                if source_ingest and target_ingest:
+                    self.link_matching_references_for_ingest(
+                        citing_doc_id=str(target_ingest),
+                        cited_ingest_id=str(source_ingest),
+                    )
+        except Exception:
+            pass
 
     def _get_edge(self, edge_id: int) -> Optional[dict]:
         pid = self._project_id()

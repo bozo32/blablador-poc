@@ -1789,6 +1789,22 @@ def render_documents_panel(*, max_rows: Optional[int] = None) -> None:
     option_nums = [int(opt.get("num")) for opt in options if opt.get("num")]
     option_by_num = {int(opt.get("num")): opt for opt in options if opt.get("num")}
 
+    ingest_status_by_id: dict[str, dict[str, str]] = {}
+    for doc in (st.session_state.get("ingested_docs") or []):
+        if not isinstance(doc, dict):
+            continue
+        iid = str(doc.get("id") or "").strip()
+        if not iid:
+            continue
+        extraction = doc.get("extraction") or {}
+        body_extraction = doc.get("body_extraction") or {}
+        resolution = doc.get("resolution") or {}
+        ingest_status_by_id[iid] = {
+            "extraction_status": str(extraction.get("status") or "").strip().lower(),
+            "body_extraction_status": str(body_extraction.get("status") or "").strip().lower(),
+            "resolution_status": str(resolution.get("status") or "").strip().lower(),
+        }
+
     q = (st.session_state.get("docs-search") or "").strip().lower()
     show_placeholders = bool(st.session_state.get("docs-show-placeholders"))
     filtered = []
@@ -1891,6 +1907,10 @@ def render_documents_panel(*, max_rows: Optional[int] = None) -> None:
         new_score = int(bool(row.get("ingest_id"))) + int(
             str(row.get("status") or "").strip().lower() == "green"
         )
+        existing_score += int(bool(existing.get("extracted"))) + int(
+            bool(existing.get("resolved"))
+        )
+        new_score += int(bool(row.get("extracted"))) + int(bool(row.get("resolved")))
         if new_score > existing_score:
             seen_docs[doc_key] = row
             try:
@@ -1939,12 +1959,45 @@ def render_documents_panel(*, max_rows: Optional[int] = None) -> None:
 
         title = row.get("title") or ""
         title_hint = f" - {title}" if title else ""
-        extraction_status = str(row.get("extraction_status") or "").strip().lower()
-        extraction_error = str(row.get("extraction_error") or "").strip()
-        body_status = str(row.get("body_extraction_status") or "").strip().lower()
-        body_error = str(row.get("body_extraction_error") or "").strip()
-        resolution_status = str(row.get("resolution_status") or "").strip().lower()
-        resolution_error = str(row.get("resolution_error") or "").strip()
+        ingest_snapshot = ingest_status_by_id.get(str(ingest_id or "").strip()) or {}
+        extraction_status = _ledger_canonical_stage(
+            row,
+            ingest_snapshot,
+            stage="extraction",
+            field="status",
+        )
+        extraction_error = _ledger_canonical_stage(
+            row,
+            ingest_snapshot,
+            stage="extraction",
+            field="error",
+        )
+        body_status = _ledger_canonical_stage(
+            row,
+            ingest_snapshot,
+            stage="body_extraction",
+            field="status",
+        )
+        body_error = _ledger_canonical_stage(
+            row,
+            ingest_snapshot,
+            stage="body_extraction",
+            field="error",
+        )
+        resolution_status = _ledger_canonical_stage(
+            row,
+            ingest_snapshot,
+            stage="resolution",
+            field="status",
+        )
+        resolution_error = _ledger_canonical_stage(
+            row,
+            ingest_snapshot,
+            stage="resolution",
+            field="error",
+        )
+        extracted = extracted or extraction_status == "complete"
+        resolved = resolved or resolution_status == "complete"
         chips = []
         if (
             extraction_status == "running"
@@ -2012,11 +2065,18 @@ def render_documents_panel(*, max_rows: Optional[int] = None) -> None:
 
     ingest_id = selected_row.get("ingest_id")
     if ingest_id:
-        extraction_status = (
-            str(selected_row.get("extraction_status") or "").strip().lower()
+        selected_snapshot = ingest_status_by_id.get(str(ingest_id or "").strip()) or {}
+        extraction_status = _ledger_canonical_stage(
+            selected_row,
+            selected_snapshot,
+            stage="extraction",
+            field="status",
         )
-        resolution_status = (
-            str(selected_row.get("resolution_status") or "").strip().lower()
+        resolution_status = _ledger_canonical_stage(
+            selected_row,
+            selected_snapshot,
+            stage="resolution",
+            field="status",
         )
         if extraction_status == "error":
             if st.button(
@@ -2254,6 +2314,11 @@ def _applied_scope_badge() -> str:
 
 def render_scope_selector_block() -> None:
     scope_lock.ensure_seeded()
+    if bool(st.session_state.pop("_scope_clear_new_project_name", False)):
+        st.session_state["scope_new_project_name"] = ""
+    pending_project_id = str(st.session_state.pop("_scope_set_project_id", "") or "").strip()
+    if pending_project_id:
+        st.session_state[SCOPE_DRAFT_PROJECT_ID] = pending_project_id
     st.markdown("**Scope selector**")
     st.caption("Set draft scope and click Apply/Switch to unlock activity.")
 
@@ -2267,6 +2332,7 @@ def render_scope_selector_block() -> None:
     draft_project_id = scope_lock.get_draft_project_id()
 
     project_options: list[str] = []
+    project_labels: dict[str, str] = {}
     active_project_id = ""
     if draft_uid:
         try:
@@ -2277,6 +2343,14 @@ def render_scope_selector_block() -> None:
                 for row in projects
                 if str((row or {}).get("project_id") or "").strip()
             ]
+            for row in projects:
+                if not isinstance(row, dict):
+                    continue
+                pid = str((row or {}).get("project_id") or "").strip()
+                if not pid:
+                    continue
+                pname = str((row or {}).get("name") or "").strip()
+                project_labels[pid] = f"{pname} ({pid})" if pname and pname != pid else pid
             active_project_id = str(listing.get("active_project_id") or "").strip()
             st.session_state["scope_projects_error"] = None
             st.session_state["scope_projects_last_uid"] = draft_uid
@@ -2297,7 +2371,9 @@ def render_scope_selector_block() -> None:
             options=select_options,
             index=select_index,
             key="scope-project-select",
-            format_func=lambda v: "Select project…" if not v else v,
+            format_func=lambda v: (
+                "Select project…" if not v else project_labels.get(str(v), str(v))
+            ),
         )
         st.session_state[SCOPE_DRAFT_PROJECT_ID] = str(selected_project or "").strip()
     else:
@@ -2332,9 +2408,10 @@ def render_scope_selector_block() -> None:
                         or ""
                     ).strip()
                     if created_project_id:
-                        st.session_state[SCOPE_DRAFT_PROJECT_ID] = created_project_id
-                        st.session_state["scope_new_project_name"] = ""
+                        st.session_state["_scope_set_project_id"] = created_project_id
+                        st.session_state["_scope_clear_new_project_name"] = True
                         st.success(f"Created project {created_project_id}")
+                        _rerun()
                 except project_api.ProjectApiError as exc:
                     st.error(str(exc))
 
@@ -5162,6 +5239,47 @@ def render_settings_controls() -> None:
         ),
     )
 
+    st.markdown("**Danger Zone**")
+    st.caption("Selective wipe for local dev diagnostics.")
+    st.checkbox("Wipe spine data (Postgres)", key="wipe_spine_data")
+    st.checkbox("Wipe object store (MinIO/S3)", key="wipe_object_store")
+    st.checkbox("Wipe graph/cache stores", key="wipe_graph_caches")
+    st.checkbox("Wipe local retrieval indexes", key="wipe_local_indexes")
+    st.text_input(
+        "Type WIPE to confirm",
+        key="wipe_confirm_text",
+        placeholder="WIPE",
+        label_visibility="collapsed",
+    )
+    if st.button(
+        "Run selective wipe",
+        key="run-selective-wipe",
+        use_container_width=True,
+    ):
+        confirm = str(st.session_state.get("wipe_confirm_text") or "").strip()
+        try:
+            result = project_api.wipe_selective(
+                confirm=confirm,
+                spine_data=bool(st.session_state.get("wipe_spine_data", False)),
+                object_store=bool(st.session_state.get("wipe_object_store", False)),
+                graph_caches=bool(st.session_state.get("wipe_graph_caches", False)),
+                local_indexes=bool(st.session_state.get("wipe_local_indexes", False)),
+            )
+            st.success(
+                "Wipe complete: "
+                f"spine={result.get('spine_tables_truncated')} "
+                f"s3_deleted={result.get('s3_deleted_objects')} "
+                f"paths={result.get('removed_paths')}"
+            )
+            st.session_state["project_meta"] = None
+            st.session_state["ingested_docs"] = None
+            st.session_state["_ingested_docs_loaded"] = False
+            st.session_state["selected_doc_id"] = ""
+            st.session_state["active_document"] = None
+            st.session_state.pop("_followed_citations_cache", None)
+        except project_api.ProjectApiError as exc:
+            st.error(str(exc))
+
 
 class _BytesUploadFile:
     def __init__(self, filename: str, data: bytes):
@@ -5492,6 +5610,25 @@ def _intake_refresh_item_status(item: dict) -> None:
         _intake_touch(item, stage="queued")
 
 
+def _ledger_canonical_stage(
+    row: dict,
+    ingest_snapshot: dict,
+    *,
+    stage: str,
+    field: str = "status",
+) -> str:
+    canonical_key = f"canonical_{stage}_{field}"
+    legacy_key = f"{stage}_{field}"
+    value = row.get(canonical_key)
+    if value in (None, ""):
+        value = ingest_snapshot.get(canonical_key)
+    if value in (None, ""):
+        value = row.get(legacy_key)
+    if value in (None, ""):
+        value = ingest_snapshot.get(legacy_key)
+    return str(value or "").strip().lower()
+
+
 def render_intake_panel(*, max_rows: Optional[int] = None) -> None:
     st.markdown("**Drop PDFs**")
     uploader_key = (
@@ -5548,7 +5685,10 @@ def render_intake_panel(*, max_rows: Optional[int] = None) -> None:
                 item["auto_routed"] = True
                 item["override_available"] = True
                 item["routed_intent"] = "citing"
-                item["note"] = "Auto-routed to Citing from unknown intent."
+                item["note"] = (
+                    "Auto-routed to Citing from unknown intent "
+                    "(non-blocking; optional Source override available)."
+                )
                 _intake_route_citing(item_id)
         st.session_state["intake_dropzone_nonce"] = (
             int(st.session_state.get("intake_dropzone_nonce") or 0) + 1
@@ -5567,8 +5707,8 @@ def render_intake_panel(*, max_rows: Optional[int] = None) -> None:
     inbox = st.session_state.get("intake_inbox") or []
     if not inbox:
         st.caption(
-            "Drop one or more PDFs to start. Unknown items auto-route to Citing and "
-            "can be overridden to Source anytime."
+            "Drop one or more PDFs to start. Unknown items non-blockingly "
+            "auto-route to Citing with an optional Source override."
         )
         return
 
@@ -5770,7 +5910,13 @@ def render_workspace_left_pane() -> None:
         unsafe_allow_html=True,
     )
 
-    render_scope_selector_block()
+    with st.expander("Scope selector", expanded=True):
+        render_scope_selector_block()
+
+    with st.expander("⚙ Settings", expanded=False):
+        render_settings_controls()
+        st.toggle("Dense", key=WORKSPACE_DENSE_MODE)
+
     if not scope_lock.has_applied_scope():
         st.info("Apply a user + project scope to unlock workspace activity.")
         return
@@ -5797,29 +5943,59 @@ def render_workspace_left_pane() -> None:
         )
         st.markdown("---")
 
-    with st.expander("⚙ Settings", expanded=False):
-        render_settings_controls()
-        st.toggle("Dense", key=WORKSPACE_DENSE_MODE)
-
-
 def render_activity_console_strip() -> None:
     lines: list[str] = []
     now = datetime.now(timezone.utc).strftime("%H:%M:%S")
     lines.append(f"[{now}] Workspace active")
+
+    # Scope / selection summary
+    uid = scope_lock.get_applied_uid() or "(none)"
+    pid = scope_lock.get_applied_project_id() or "(none)"
+    selected_doc = str(st.session_state.get("selected_doc_id") or "").strip() or "(none)"
+    lines.append(f"[scope] uid={uid} project={pid} selected_doc={selected_doc}")
+
+    # Rail summary
     followed = st.session_state.get("followed_citations") or []
     if isinstance(followed, list):
         lines.append(f"[rail] followed_citations={len(followed)}")
 
+    # Ledger diagnostics (ephemeral, high-signal)
+    try:
+        rows = _ledger_rows_cached()
+        placeholders = sum(1 for r in rows if not bool((r or {}).get("anchored")))
+        anchored = sum(1 for r in rows if bool((r or {}).get("anchored")))
+        duplicates_by_ingest = {}
+        for r in rows:
+            iid = str((r or {}).get("ingest_id") or "").strip()
+            if iid:
+                duplicates_by_ingest[iid] = duplicates_by_ingest.get(iid, 0) + 1
+        dup_count = sum(1 for c in duplicates_by_ingest.values() if int(c) > 1)
+        lines.append(
+            f"[ledger] rows={len(rows)} anchored={anchored} placeholders={placeholders} dup_ingest={dup_count}"
+        )
+    except Exception:
+        pass
+
+    # Intake items
     inbox = st.session_state.get("intake_inbox") or []
     for item in inbox[-8:]:
         if not isinstance(item, dict):
             continue
         fname = str(item.get("filename") or "document.pdf")
         stage = str(item.get("stage") or "queued")
-        lines.append(f"[intake] {fname} -> {stage}")
+        intent = str(item.get("routed_intent") or item.get("intent") or "").strip() or "?"
+        lines.append(f"[intake] {fname} -> {stage} ({intent})")
 
+    # Attachment queue items
     try:
-        for att in (attachment_queue.get_queue_items() or [])[-8:]:
+        snap = attachment_queue.get_queue_snapshot() or {}
+        summary = snap.get("summary") or {}
+        if isinstance(summary, dict):
+            parts = []
+            for k in ["pending", "converting", "parsing", "matched", "error"]:
+                parts.append(f"{k}={int(summary.get(k, 0) or 0)}")
+            lines.append(f"[attachments] {' '.join(parts)}")
+        for att in (attachment_queue.get_queue_items() or [])[-6:]:
             if not isinstance(att, dict):
                 continue
             name = str(att.get("filename") or att.get("id") or "attachment")

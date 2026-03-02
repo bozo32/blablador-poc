@@ -1366,6 +1366,69 @@ def _allow_local_path_upload_for_dev() -> bool:
     }
 
 
+def _scoped_graph_store(project_id: str) -> GraphStore:
+    return GraphStore(settings=SimpleNamespace(DEFAULT_PROJECT_ID=str(project_id)))
+
+
+def _list_spine_ingests_by_id(project_id: str) -> dict[str, dict]:
+    by_ingest: dict[str, dict] = {}
+    try:
+        for doc in list_ingests_from_spine(project_id=str(project_id), limit=2000):
+            ingest_id = str((doc or {}).get("id") or "").strip()
+            if ingest_id:
+                by_ingest[ingest_id] = dict(doc or {})
+    except Exception:
+        logger.exception("Spine list failed for ledger enrichment")
+    return by_ingest
+
+
+def _apply_canonical_ledger_status(rows: list[dict], by_ingest: dict[str, dict]) -> None:
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        ingest_id = str(row.get("ingest_id") or "").strip()
+        if not ingest_id:
+            continue
+        doc = by_ingest.get(ingest_id) or {}
+        extraction = doc.get("extraction") if isinstance(doc.get("extraction"), dict) else {}
+        body_extraction = (
+            doc.get("body_extraction")
+            if isinstance(doc.get("body_extraction"), dict)
+            else {}
+        )
+        resolution = doc.get("resolution") if isinstance(doc.get("resolution"), dict) else {}
+
+        row["canonical_extraction_status"] = extraction.get("status")
+        row["canonical_extraction_error"] = extraction.get("error")
+        row["canonical_body_extraction_status"] = body_extraction.get("status")
+        row["canonical_body_extraction_error"] = body_extraction.get("error")
+        row["canonical_resolution_status"] = resolution.get("status")
+        row["canonical_resolution_error"] = resolution.get("error")
+
+        # Keep existing fields for compatibility while canonical fields roll out.
+        row["extraction_status"] = extraction.get("status")
+        row["extraction_error"] = extraction.get("error")
+        row["body_extraction_status"] = body_extraction.get("status")
+        row["body_extraction_error"] = body_extraction.get("error")
+        row["resolution_status"] = resolution.get("status")
+        row["resolution_error"] = resolution.get("error")
+
+
+def _build_ledger_response(*, project_id: str, reconcile: bool = False) -> dict:
+    scoped_store = _scoped_graph_store(project_id)
+    by_ingest = _list_spine_ingests_by_id(project_id)
+    if reconcile and by_ingest:
+        try:
+            scoped_store.reconcile_ingest_projection(ingest_docs=list(by_ingest.values()))
+        except Exception:
+            logger.exception("Ledger reconciliation failed")
+
+    rows = scoped_store.ledger_rows()
+    options = scoped_store.ledger_options()
+    _apply_canonical_ledger_status(rows, by_ingest)
+    return {"rows": rows, "options": options}
+
+
 @app.post("/ingest", response_model=schemas.IngestUploadResponse)
 async def ingest_document(
     background_tasks: BackgroundTasks,
@@ -1514,44 +1577,7 @@ def get_document_ledger(
     x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
 ):
     project_id = _require_project_id_for_upload(x_project_id, endpoint="/ledger")
-    scoped_store = GraphStore(settings=SimpleNamespace(DEFAULT_PROJECT_ID=project_id))
-    rows = scoped_store.ledger_rows()
-    options = scoped_store.ledger_options()
-
-    # Enrich ledger rows with ingestion stage status/errors so the UI can show
-    # failures without requiring a click.
-    by_ingest: dict[str, dict] = {}
-
-    project_id = str(project_id)
-    try:
-        for doc in list_ingests_from_spine(project_id=project_id, limit=2000):
-            ingest_id = str(doc.get("id") or "").strip()
-            if ingest_id:
-                by_ingest[ingest_id] = doc
-    except Exception:
-        logger.exception("Spine list failed for ledger enrichment")
-
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        ingest_id = str(row.get("ingest_id") or "").strip()
-        if not ingest_id:
-            continue
-        doc = by_ingest.get(ingest_id) or {}
-        extraction = doc.get("extraction") or {}
-        body_extraction = doc.get("body_extraction") or {}
-        resolution = doc.get("resolution") or {}
-        if isinstance(extraction, dict):
-            row["extraction_status"] = extraction.get("status")
-            row["extraction_error"] = extraction.get("error")
-        if isinstance(body_extraction, dict):
-            row["body_extraction_status"] = body_extraction.get("status")
-            row["body_extraction_error"] = body_extraction.get("error")
-        if isinstance(resolution, dict):
-            row["resolution_status"] = resolution.get("status")
-            row["resolution_error"] = resolution.get("error")
-
-    return {"rows": rows, "options": options}
+    return _build_ledger_response(project_id=str(project_id), reconcile=True)
 
 
 @app.get("/projects", response_model=schemas.ProjectMembershipListResponse)
@@ -1603,6 +1629,7 @@ def create_project(
     return {
         "project": {
             "project_id": project_id,
+            "name": display_name or str(meta.get("name") or "").strip() or None,
             "role": str(project.get("role") or "owner"),
             "joined_at": project.get("joined_at"),
             "updated_at": project.get("updated_at"),
@@ -2211,13 +2238,11 @@ def update_ledger_outgoing(
             x_user_id=x_user_id,
             endpoint="/ledger/{doc_num}/outgoing",
         )
-        scoped_store = GraphStore(
-            settings=SimpleNamespace(DEFAULT_PROJECT_ID=project_id)
-        )
+        scoped_store = _scoped_graph_store(project_id)
         scoped_store.set_outgoing(source_num=int(doc_num), target_nums=payload.targets)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return {"rows": scoped_store.ledger_rows(), "options": scoped_store.ledger_options()}
+    return _build_ledger_response(project_id=project_id, reconcile=True)
 
 
 @app.patch("/ledger/{doc_num}/incoming", response_model=schemas.LedgerResponse)
@@ -2233,13 +2258,11 @@ def update_ledger_incoming(
             x_user_id=x_user_id,
             endpoint="/ledger/{doc_num}/incoming",
         )
-        scoped_store = GraphStore(
-            settings=SimpleNamespace(DEFAULT_PROJECT_ID=project_id)
-        )
+        scoped_store = _scoped_graph_store(project_id)
         scoped_store.set_incoming(target_num=int(doc_num), source_nums=payload.targets)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return {"rows": scoped_store.ledger_rows(), "options": scoped_store.ledger_options()}
+    return _build_ledger_response(project_id=project_id, reconcile=True)
 
 
 @app.patch("/ledger/{doc_num}/assign", response_model=schemas.LedgerResponse)
@@ -2255,13 +2278,11 @@ def update_ledger_assigned(
             x_user_id=x_user_id,
             endpoint="/ledger/{doc_num}/assign",
         )
-        scoped_store = GraphStore(
-            settings=SimpleNamespace(DEFAULT_PROJECT_ID=project_id)
-        )
+        scoped_store = _scoped_graph_store(project_id)
         scoped_store.set_assigned(doc_num=int(doc_num), assigned=bool(payload.assigned))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return {"rows": scoped_store.ledger_rows(), "options": scoped_store.ledger_options()}
+    return _build_ledger_response(project_id=project_id, reconcile=True)
 
 
 @app.post("/ledger/place", response_model=schemas.LedgerResponse)
@@ -2276,9 +2297,7 @@ def place_ledger_relation(
             x_user_id=x_user_id,
             endpoint="/ledger/place",
         )
-        scoped_store = GraphStore(
-            settings=SimpleNamespace(DEFAULT_PROJECT_ID=project_id)
-        )
+        scoped_store = _scoped_graph_store(project_id)
         scoped_store.place_relation(
             source_num=int(payload.source_num),
             target_num=int(payload.target_num),
@@ -2288,7 +2307,7 @@ def place_ledger_relation(
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return {"rows": scoped_store.ledger_rows(), "options": scoped_store.ledger_options()}
+    return _build_ledger_response(project_id=project_id, reconcile=True)
 
 
 @app.post("/ledger/place-reference", response_model=schemas.LedgerResponse)
@@ -2311,13 +2330,12 @@ def place_ledger_reference(
             x_user_id=x_user_id,
             endpoint="/ledger/place-reference",
         )
-        scoped_store = GraphStore(
-            settings=SimpleNamespace(DEFAULT_PROJECT_ID=project_id)
-        )
+        scoped_store = _scoped_graph_store(project_id)
         linked = scoped_store.link_reference_to_ingest(
             citing_doc_id=citing_doc_id,
             reference_id=reference_id,
             cited_ingest_id=cited_ingest_id,
+            project_id=project_id,
         )
         if not linked:
             raise HTTPException(
@@ -2329,7 +2347,7 @@ def place_ledger_reference(
             )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return {"rows": scoped_store.ledger_rows(), "options": scoped_store.ledger_options()}
+    return _build_ledger_response(project_id=project_id, reconcile=True)
 
 
 # --- Claim graph (Phase 09) -------------------------------------------------
@@ -2567,20 +2585,16 @@ class DevWipeRequest(BaseModel):
     confirm: str
 
 
-@app.post("/dev/wipe")
-def dev_wipe(payload: DevWipeRequest):
-    confirm = str(payload.confirm or "").strip()
-    if confirm != "WIPE":
-        raise HTTPException(
-            status_code=422,
-            detail='To wipe everything, set JSON body {"confirm": "WIPE"}',
-        )
+class DevWipeSelectiveRequest(BaseModel):
+    confirm: str
+    spine_data: bool = True
+    object_store: bool = True
+    graph_caches: bool = True
+    local_indexes: bool = True
 
-    # 1) Postgres spine tables.
-    #
-    # Keep this list aligned with `tests/conftest.py` truncation so local dev
-    # and tests have consistent "wipe everything" behavior.
-    tables = [
+
+def _dev_wipe_tables() -> list[str]:
+    return [
         # 10-04: durable evidence decision events
         "evidence_decision_targets",
         "evidence_decision_events",
@@ -2617,6 +2631,8 @@ def dev_wipe(payload: DevWipeRequest):
         "judgments",
         "confirmed_claims",
         "project_meta",
+        "user_project_memberships",
+        "user_active_projects",
         # 09.3-05: durable graph + span graph workboard state
         "graph_edge_votes",
         "graph_edges",
@@ -2636,6 +2652,38 @@ def dev_wipe(payload: DevWipeRequest):
         "span_graph_work_cites",
         "span_graph_works",
     ]
+
+
+def _dev_wipe_local_indexes() -> int:
+    paths = [
+        Path(app_settings.COLBERT_ROOT),
+        Path(app_settings.COLBERT_INDEX_PATH),
+    ]
+    removed = 0
+    for p in paths:
+        try:
+            if p.exists():
+                shutil.rmtree(p, ignore_errors=True)
+                removed += 1
+        except Exception:
+            pass
+    return int(removed)
+
+
+@app.post("/dev/wipe")
+def dev_wipe(payload: DevWipeRequest):
+    confirm = str(payload.confirm or "").strip()
+    if confirm != "WIPE":
+        raise HTTPException(
+            status_code=422,
+            detail='To wipe everything, set JSON body {"confirm": "WIPE"}',
+        )
+
+    # 1) Postgres spine tables.
+    #
+    # Keep this list aligned with `tests/conftest.py` truncation so local dev
+    # and tests have consistent "wipe everything" behavior.
+    tables = _dev_wipe_tables()
     with connect(autocommit=True) as conn:
         with conn.cursor() as cur:
             cur.execute(f"TRUNCATE {', '.join(tables)} CASCADE")
@@ -2665,23 +2713,65 @@ def dev_wipe(payload: DevWipeRequest):
     #
     # Phase 09.3 removes required durable local state under ./data/**, but some
     # optional retrieval indexes (ColBERT) may still be stored locally.
-    paths = [
-        Path(app_settings.COLBERT_ROOT),
-        Path(app_settings.COLBERT_INDEX_PATH),
-    ]
-    removed = 0
-    for p in paths:
-        try:
-            if p.exists():
-                shutil.rmtree(p, ignore_errors=True)
-                removed += 1
-        except Exception:
-            pass
+    removed = _dev_wipe_local_indexes()
     return {
         "ok": True,
         "spine_tables_truncated": True,
         "s3_deleted_objects": int(deleted_objects),
         "removed_paths": int(removed),
+    }
+
+
+@app.post("/dev/wipe-selective")
+def dev_wipe_selective(payload: DevWipeSelectiveRequest):
+    confirm = str(payload.confirm or "").strip()
+    if confirm != "WIPE":
+        raise HTTPException(
+            status_code=422,
+            detail='To wipe selected data, set JSON body {"confirm": "WIPE", ...}',
+        )
+
+    spine_done = False
+    s3_deleted_objects = 0
+    removed_paths = 0
+
+    if bool(payload.spine_data):
+        with connect(autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"TRUNCATE {', '.join(_dev_wipe_tables())} CASCADE")
+        spine_done = True
+
+    if bool(payload.object_store):
+        s3_deleted_objects = int(object_store_s3.delete_all())
+
+    if bool(payload.graph_caches):
+        try:
+            graph_store.wipe()
+        except Exception:
+            logger.exception("GraphStore wipe failed")
+        try:
+            span_graph_store.wipe()
+        except Exception:
+            logger.exception("SpanGraphStore wipe failed")
+        try:
+            claim_store.wipe()
+        except Exception:
+            logger.exception("ClaimStore wipe failed")
+
+    if bool(payload.local_indexes):
+        removed_paths = _dev_wipe_local_indexes()
+
+    return {
+        "ok": True,
+        "spine_tables_truncated": bool(spine_done),
+        "s3_deleted_objects": int(s3_deleted_objects),
+        "removed_paths": int(removed_paths),
+        "selection": {
+            "spine_data": bool(payload.spine_data),
+            "object_store": bool(payload.object_store),
+            "graph_caches": bool(payload.graph_caches),
+            "local_indexes": bool(payload.local_indexes),
+        },
     }
 
 
@@ -4925,10 +5015,12 @@ def patch_attachment_status(
                 citation_index=next_citation_index,
                 target_id=next_target_id,
             )
+            scoped_graph_store = _scoped_graph_store(project_id)
             try:
-                graph_store.mark_doc_assigned_for_attachment(
+                scoped_graph_store.mark_doc_assigned_for_attachment(
                     doc_id=next_doc_id,
                     claim_id=next_claim_id,
+                    project_id=project_id,
                 )
             except Exception:
                 logger.exception("Graph index failed for attachment placement")
@@ -4939,13 +5031,22 @@ def patch_attachment_status(
             try:
                 cited_ingest_id = str(record.get("source_ingest_id") or "").strip()
                 if next_doc_id and next_target_id and cited_ingest_id:
-                    graph_store.link_reference_to_ingest(
+                    scoped_graph_store.link_reference_to_ingest(
                         citing_doc_id=str(next_doc_id),
                         reference_id=str(next_target_id),
                         cited_ingest_id=str(cited_ingest_id),
+                        project_id=project_id,
                     )
             except Exception:
                 logger.exception("Graph link failed for attachment reference")
+
+            try:
+                scoped_graph_store.reconcile_ingest_projection(
+                    ingest_docs=list(_list_spine_ingests_by_id(project_id).values()),
+                    project_id=project_id,
+                )
+            except Exception:
+                logger.exception("Projection reconciliation failed after placement")
 
             # Auto-sweep evidence once a cited source is assigned.
             try:
@@ -5014,18 +5115,28 @@ def clone_global_attachment(
 
     # Persist a doc-level reference -> ingest mapping when possible so auto-place
     # works for other claimspans referencing the same bibliography entry.
+    scoped_graph_store = _scoped_graph_store(project_id)
     try:
         cited_ingest_id = str(record.get("source_ingest_id") or "").strip()
         citing_doc_id = str(payload.doc_id or "").strip()
         reference_id = str(payload.target_id or "").strip()
         if cited_ingest_id and citing_doc_id and reference_id:
-            graph_store.link_reference_to_ingest(
+            scoped_graph_store.link_reference_to_ingest(
                 citing_doc_id=citing_doc_id,
                 reference_id=reference_id,
                 cited_ingest_id=cited_ingest_id,
+                project_id=project_id,
             )
     except Exception:
         logger.exception("Graph link failed for cloned attachment reference")
+
+    try:
+        scoped_graph_store.reconcile_ingest_projection(
+            ingest_docs=list(_list_spine_ingests_by_id(project_id).values()),
+            project_id=project_id,
+        )
+    except Exception:
+        logger.exception("Projection reconciliation failed after clone")
 
     # If the clone is already placed on a claim, trigger an evidence rerun.
     try:

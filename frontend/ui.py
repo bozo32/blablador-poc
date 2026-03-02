@@ -5387,8 +5387,9 @@ def _intake_refresh_item_status(item: dict) -> None:
     api_url = get_api_url()
     project_id = get_project_id()
     intent = str(item.get("intent") or "unknown")
+    active_intent = str(item.get("routed_intent") or intent or "unknown")
 
-    if intent == "citing":
+    if active_intent == "citing":
         doc_id = str(item.get("doc_id") or "").strip()
         if not doc_id:
             return
@@ -5461,7 +5462,7 @@ def _intake_refresh_item_status(item: dict) -> None:
         _intake_touch(item, stage="uploaded")
         return
 
-    if intent == "source":
+    if active_intent == "source":
         ids = item.get("source_queue_item_ids") or []
         if not ids:
             return
@@ -5526,12 +5527,16 @@ def render_intake_panel(*, max_rows: Optional[int] = None) -> None:
                 "size": len(data),
                 "sha256": hashlib.sha256(data).hexdigest().lower(),
                 "intent": intent,
-                "stage": "awaiting-intent" if intent == "unknown" else "queued",
+                "stage": "queued",
                 "last_event_at": _now_iso(),
                 "error": "",
                 "note": "",
                 "doc_id": None,
                 "source_queue_item_ids": [],
+                "intent_guess": intent,
+                "auto_routed": False,
+                "override_available": False,
+                "routed_intent": intent if intent in {"citing", "source"} else None,
             }
             inbox.insert(0, item)
             blobs[item_id] = data
@@ -5539,6 +5544,12 @@ def render_intake_panel(*, max_rows: Optional[int] = None) -> None:
                 _intake_route_citing(item_id)
             elif intent == "source":
                 _intake_route_source(item_id)
+            else:
+                item["auto_routed"] = True
+                item["override_available"] = True
+                item["routed_intent"] = "citing"
+                item["note"] = "Auto-routed to Citing from unknown intent."
+                _intake_route_citing(item_id)
         st.session_state["intake_dropzone_nonce"] = (
             int(st.session_state.get("intake_dropzone_nonce") or 0) + 1
         )
@@ -5556,8 +5567,8 @@ def render_intake_panel(*, max_rows: Optional[int] = None) -> None:
     inbox = st.session_state.get("intake_inbox") or []
     if not inbox:
         st.caption(
-            "Drop one or more PDFs to start. Unknown items stay here until you choose "
-            "Citing vs Source."
+            "Drop one or more PDFs to start. Unknown items auto-route to Citing and "
+            "can be overridden to Source anytime."
         )
         return
 
@@ -5588,8 +5599,16 @@ def render_intake_panel(*, max_rows: Optional[int] = None) -> None:
         with cols[1]:
             filename = str(item.get("filename") or "document.pdf")
             size_label = format_filesize(int(item.get("size") or 0))
+            routed_intent = str(item.get("routed_intent") or intent).strip() or intent
             st.markdown(f"**{html.escape(filename)}**")
-            st.caption(f"Intent: {intent} • Stage: {stage} • Size: {size_label}")
+            if intent == "unknown" and bool(item.get("auto_routed")):
+                st.caption(
+                    "Intent: unknown (auto-routed to "
+                    f"{routed_intent}) • Stage: {stage} • Size: {size_label}"
+                )
+                st.caption("Optional override: route as Source (or re-route as Citing).")
+            else:
+                st.caption(f"Intent: {intent} • Stage: {stage} • Size: {size_label}")
             note = str(item.get("note") or "").strip()
             if note:
                 st.caption(note)
@@ -5617,19 +5636,23 @@ def render_intake_panel(*, max_rows: Optional[int] = None) -> None:
                     )
                 )
                 if st.button(
-                    "Citing",
+                    "Route as Citing",
                     key=f"intake-mark-citing::{item_id}",
                     use_container_width=True,
                 ):
-                    item["intent"] = "citing"
+                    item["routed_intent"] = "citing"
+                    item["auto_routed"] = True
+                    item["override_available"] = True
                     _intake_route_citing(item_id)
                     _rerun()
                 if st.button(
-                    "Source",
+                    "Route as Source",
                     key=f"intake-mark-source::{item_id}",
                     use_container_width=True,
                 ):
-                    item["intent"] = "source"
+                    item["routed_intent"] = "source"
+                    item["auto_routed"] = True
+                    item["override_available"] = True
                     _intake_route_source(item_id, attach_now=False)
                     _rerun()
                 if attach_ctx and st.button(
@@ -5638,7 +5661,9 @@ def render_intake_panel(*, max_rows: Optional[int] = None) -> None:
                     help="Enqueue as a source and prefill current citing context",
                     use_container_width=True,
                 ):
-                    item["intent"] = "source"
+                    item["routed_intent"] = "source"
+                    item["auto_routed"] = True
+                    item["override_available"] = True
                     _intake_route_source(item_id, attach_now=True)
                     _rerun()
 

@@ -5683,13 +5683,12 @@ def render_intake_panel(*, max_rows: Optional[int] = None) -> None:
                 _intake_route_source(item_id)
             else:
                 item["auto_routed"] = True
-                item["override_available"] = True
-                item["routed_intent"] = "citing"
+                item["override_available"] = False
+                item["routed_intent"] = "source"
                 item["note"] = (
-                    "Auto-routed to Citing from unknown intent "
-                    "(non-blocking; optional Source override available)."
+                    "Intent unclear; routed to Stray documents for placement review."
                 )
-                _intake_route_citing(item_id)
+                _intake_route_source(item_id, attach_now=False)
         st.session_state["intake_dropzone_nonce"] = (
             int(st.session_state.get("intake_dropzone_nonce") or 0) + 1
         )
@@ -5707,8 +5706,8 @@ def render_intake_panel(*, max_rows: Optional[int] = None) -> None:
     inbox = st.session_state.get("intake_inbox") or []
     if not inbox:
         st.caption(
-            "Drop one or more PDFs to start. Unknown items non-blockingly "
-            "auto-route to Citing with an optional Source override."
+            "Drop one or more PDFs to start. Clear intent routes automatically; "
+            "unclear uploads route to Stray documents for placement review."
         )
         return
 
@@ -5746,7 +5745,9 @@ def render_intake_panel(*, max_rows: Optional[int] = None) -> None:
                     "Intent: unknown (auto-routed to "
                     f"{routed_intent}) • Stage: {stage} • Size: {size_label}"
                 )
-                st.caption("Optional override: route as Source (or re-route as Citing).")
+                st.caption(
+                    "Intent unclear; this item was routed to Stray documents for placement."
+                )
             else:
                 st.caption(f"Intent: {intent} • Stage: {stage} • Size: {size_label}")
             note = str(item.get("note") or "").strip()
@@ -5769,44 +5770,6 @@ def render_intake_panel(*, max_rows: Optional[int] = None) -> None:
                         st.write(f"Error: {item.get('error')}")
 
         with cols[2]:
-            if intent == "unknown":
-                attach_ctx = bool(st.session_state.get("selected_doc_id")) and bool(
-                    normalize_target_id(
-                        st.session_state.get("citation_selected_target")
-                    )
-                )
-                if st.button(
-                    "Route as Citing",
-                    key=f"intake-mark-citing::{item_id}",
-                    use_container_width=True,
-                ):
-                    item["routed_intent"] = "citing"
-                    item["auto_routed"] = True
-                    item["override_available"] = True
-                    _intake_route_citing(item_id)
-                    _rerun()
-                if st.button(
-                    "Route as Source",
-                    key=f"intake-mark-source::{item_id}",
-                    use_container_width=True,
-                ):
-                    item["routed_intent"] = "source"
-                    item["auto_routed"] = True
-                    item["override_available"] = True
-                    _intake_route_source(item_id, attach_now=False)
-                    _rerun()
-                if attach_ctx and st.button(
-                    "Attach now",
-                    key=f"intake-mark-source-attach::{item_id}",
-                    help="Enqueue as a source and prefill current citing context",
-                    use_container_width=True,
-                ):
-                    item["routed_intent"] = "source"
-                    item["auto_routed"] = True
-                    item["override_available"] = True
-                    _intake_route_source(item_id, attach_now=True)
-                    _rerun()
-
             if stage == "near-duplicate":
                 matches = item.get("near_duplicate_matches") or []
                 if matches:
@@ -5892,7 +5855,9 @@ def render_sources_panel(*, max_rows: Optional[int] = None) -> None:
 
     inbox = [it for it in items if _is_global_source(it)]
     if not inbox:
-        st.caption("No sources yet. Route a PDF as Source from Upload documents.")
+        st.caption(
+            "No sources yet. Upload via Drop PDFs; unclear uploads route here as Stray documents."
+        )
         return
 
     if max_rows is not None and len(inbox) > int(max_rows):

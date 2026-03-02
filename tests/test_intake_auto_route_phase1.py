@@ -62,16 +62,20 @@ class _StubStreamlit:
         return _Ctx()
 
 
-def test_unknown_drop_auto_routes_to_citing_without_blocking(monkeypatch) -> None:
+def test_unknown_drop_auto_routes_to_source_without_blocking(monkeypatch) -> None:
     stub = _StubStreamlit()
     stub.session_state["intake_dropzone_nonce"] = 0
     stub.session_state["intake-dropzone::0"] = [_Upload("unknown.pdf", b"%PDF-1.4")]
     monkeypatch.setattr(ui, "st", stub)
 
-    routed: list[str] = []
+    routed_source: list[tuple[str, bool]] = []
     monkeypatch.setattr(ui, "_intake_guess_intent", lambda **_: "unknown")
-    monkeypatch.setattr(ui, "_intake_route_citing", lambda item_id: routed.append(item_id))
-    monkeypatch.setattr(ui, "_intake_route_source", lambda *_, **__: None)
+    monkeypatch.setattr(ui, "_intake_route_citing", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        ui,
+        "_intake_route_source",
+        lambda item_id, *, attach_now=False: routed_source.append((item_id, attach_now)),
+    )
     monkeypatch.setattr(ui, "_rerun", lambda: None)
 
     ui.render_intake_panel(max_rows=None)
@@ -81,36 +85,40 @@ def test_unknown_drop_auto_routes_to_citing_without_blocking(monkeypatch) -> Non
     item = inbox[0]
     assert item["intent"] == "unknown"
     assert item["stage"] != "awaiting-intent"
-    assert item["routed_intent"] == "citing"
+    assert item["routed_intent"] == "source"
     assert item["auto_routed"] is True
-    assert item["override_available"] is True
+    assert item["override_available"] is False
+    assert (
+        item["note"]
+        == "Intent unclear; routed to Stray documents for placement review."
+    )
     assert item["intent_guess"] == "unknown"
-    assert len(routed) == 1
+    assert len(routed_source) == 1
+    assert routed_source[0][1] is False
 
 
 def test_status_refresh_uses_routed_intent_for_auto_routed_unknown(monkeypatch) -> None:
     stub = _StubStreamlit()
     monkeypatch.setattr(ui, "st", stub)
+    monkeypatch.setattr(ui.attachment_queue, "init_attachment_queue_state", lambda: None)
     monkeypatch.setattr(
-        ui,
-        "get_document",
-        lambda *_args, **_kwargs: {
-            "extraction": {"status": "complete", "data": {}},
-            "resolution": {"status": "complete"},
-        },
+        ui.attachment_queue,
+        "get_queue_snapshot",
+        lambda: {"items": {"src-1": {"status": "matched"}}},
     )
 
     item = {
         "intent": "unknown",
-        "routed_intent": "citing",
+        "routed_intent": "source",
         "doc_id": "doc-1",
+        "source_queue_item_ids": ["src-1"],
         "stage": "uploading",
     }
     ui._intake_refresh_item_status(item)
     assert item["stage"] == "done"
 
 
-def test_auto_routed_unknown_keeps_optional_override_controls(monkeypatch) -> None:
+def test_auto_routed_unknown_hides_route_choice_controls(monkeypatch) -> None:
     stub = _StubStreamlit()
     stub.session_state["intake_inbox"] = [
         {
@@ -118,9 +126,9 @@ def test_auto_routed_unknown_keeps_optional_override_controls(monkeypatch) -> No
             "filename": "paper.pdf",
             "size": 128,
             "intent": "unknown",
-            "routed_intent": "citing",
+            "routed_intent": "source",
             "auto_routed": True,
-            "override_available": True,
+            "override_available": False,
             "stage": "uploading",
             "last_event_at": "2026-01-01T00:00:00Z",
             "error": "",
@@ -135,13 +143,31 @@ def test_auto_routed_unknown_keeps_optional_override_controls(monkeypatch) -> No
 
     ui.render_intake_panel(max_rows=None)
 
-    assert "Route as Citing" in stub.button_labels
-    assert "Route as Source" in stub.button_labels
-    assert any("Optional override" in c for c in stub.captions)
+    assert "Route as Citing" not in stub.button_labels
+    assert "Route as Source" not in stub.button_labels
+    assert "Attach now" not in stub.button_labels
+    assert any(
+        "Intent unclear; this item was routed to Stray documents for placement." in c
+        for c in stub.captions
+    )
 
 
-def test_empty_intake_copy_mentions_non_blocking_auto_route(monkeypatch) -> None:
+def test_empty_intake_copy_mentions_stray_auto_route_policy(monkeypatch) -> None:
     stub = _StubStreamlit()
     monkeypatch.setattr(ui, "st", stub)
     ui.render_intake_panel(max_rows=None)
-    assert any("non-blockingly auto-route" in c for c in stub.captions)
+    assert any("unclear uploads route to Stray documents" in c for c in stub.captions)
+
+
+def test_sources_empty_copy_mentions_unclear_upload_handoff(monkeypatch) -> None:
+    stub = _StubStreamlit()
+    monkeypatch.setattr(ui, "st", stub)
+    monkeypatch.setattr(ui.attachment_queue, "init_attachment_queue_state", lambda: None)
+    monkeypatch.setattr(ui.attachment_queue, "set_show_history", lambda _value: None)
+    monkeypatch.setattr(ui.attachment_queue, "set_show_archived", lambda _value: None)
+    monkeypatch.setattr(ui.attachment_queue, "sync_backend_state", lambda: None)
+    monkeypatch.setattr(ui.attachment_queue, "get_queue_items", lambda: [])
+
+    ui.render_sources_panel(max_rows=None)
+
+    assert any("unclear uploads route here as Stray documents" in c for c in stub.captions)

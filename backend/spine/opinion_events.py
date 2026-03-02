@@ -26,6 +26,21 @@ def _json_dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
 
 
+def normalize_visibility(visibility: Optional[str]) -> str:
+    raw = str(visibility or "private").strip().lower()
+    if raw == "shared":
+        raw = "selectable"
+    if raw not in {"private", "selectable", "public"}:
+        raise ValueError("visibility must be one of: private, selectable, public, shared")
+    return raw
+
+
+def _acl_clause_for_owner_stream(*, include_selectable: bool) -> str:
+    if include_selectable:
+        return "(owner_uid = %s OR visibility IN ('public', 'selectable'))"
+    return "(owner_uid = %s OR visibility = 'public')"
+
+
 def append_event(
     project_id: str,
     user_id: str,
@@ -47,6 +62,7 @@ def append_event(
     Returns the created event with generated event_id.
     """
     payload_json = _json_dumps(payload or {})
+    normalized_visibility = normalize_visibility(visibility)
     
     with connect(autocommit=True) as conn:
         with conn.cursor() as cur:
@@ -65,7 +81,7 @@ def append_event(
                 """,
                 (
                     project_id, user_id, owner_uid, kind, target_key,
-                    visibility, group_id, mode, payload_json, idempotency_key,
+                    normalized_visibility, group_id, mode, payload_json, idempotency_key,
                     doc_id, citation_index, target_id, span_id,
                 )
             )
@@ -79,7 +95,7 @@ def append_event(
         "owner_uid": owner_uid,
         "kind": kind,
         "target_key": target_key,
-        "visibility": visibility,
+        "visibility": normalized_visibility,
         "group_id": group_id,
         "mode": mode,
         "payload": payload or {},
@@ -94,11 +110,14 @@ def append_event(
 def list_recent_events(
     project_id: str,
     owner_uid: str,
+    viewer_uid: str,
+    viewer_is_project_member: bool,
     target_key: Optional[str] = None,
     kind: Optional[str] = None,
     limit: int = 20,
 ) -> List[Dict[str, Any]]:
     """List recent opinion events for a reviewer."""
+    include_selectable = bool(viewer_is_project_member)
     with connect() as conn:
         with conn.cursor() as cur:
             query = """
@@ -106,9 +125,12 @@ def list_recent_events(
                        target_key, visibility, group_id, mode, payload_json,
                        doc_id, citation_index, target_id, span_id
                 FROM opinion_events
-                WHERE project_id = %s AND owner_uid = %s
+                WHERE project_id = %s
+                  AND owner_uid = %s
+                  AND
             """
-            params = [project_id, owner_uid]
+            query += _acl_clause_for_owner_stream(include_selectable=include_selectable)
+            params: list[object] = [project_id, owner_uid, viewer_uid]
             
             if target_key:
                 query += " AND target_key = %s"
@@ -132,7 +154,7 @@ def list_recent_events(
             "owner_uid": row[3],
             "kind": row[4],
             "target_key": row[5],
-            "visibility": row[6],
+            "visibility": normalize_visibility(row[6]),
             "group_id": row[7],
             "mode": row[8],
             "payload": json.loads(row[9]) if row[9] else {},
@@ -148,12 +170,15 @@ def list_recent_events(
 def get_follow_status(
     project_id: str,
     owner_uid: str,
+    viewer_uid: str,
+    viewer_is_project_member: bool,
     target_key: str,
 ) -> Optional[Dict[str, Any]]:
     """Get the latest follow status for a target key.
     
     Returns the most recent follow/ignore/complete event for the given target.
     """
+    include_selectable = bool(viewer_is_project_member)
     with connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -163,32 +188,42 @@ def get_follow_status(
                 FROM opinion_events
                 WHERE project_id = %s 
                   AND owner_uid = %s 
+                  AND
+                """
+                + _acl_clause_for_owner_stream(include_selectable=include_selectable)
+                +
+                """
                   AND target_key = %s
                   AND kind = 'follow'
                 ORDER BY event_id DESC
                 LIMIT 1
                 """,
-                (project_id, owner_uid, target_key)
+                (project_id, owner_uid, viewer_uid, target_key)
             )
             row = cur.fetchone()
     
     if not row:
         return None
     
+    payload = json.loads(row[7]) if row[7] else {}
+
     return {
         "event_id": row[0],
         "created_at": row[1].isoformat().replace("+00:00", "Z") if row[1] else None,
         "actor_uid": row[2],
         "owner_uid": row[3],
-        "status": row[5],  # target_key stores the status for follow events
-        "visibility": row[6],
-        "payload": json.loads(row[7]) if row[7] else {},
+        "target_key": row[5],
+        "visibility": normalize_visibility(row[6]),
+        "payload": payload,
+        "status": payload.get("status", "follow"),
     }
 
 
 def list_follow_by_doc(
     project_id: str,
     owner_uid: str,
+    viewer_uid: str,
+    viewer_is_project_member: bool,
     doc_id: str,
     limit: int = 500,
 ) -> List[Dict[str, Any]]:
@@ -196,6 +231,7 @@ def list_follow_by_doc(
     
     Returns one row per span_id with current_status and sort_key (min citation_index).
     """
+    include_selectable = bool(viewer_is_project_member)
     with connect() as conn:
         with conn.cursor() as cur:
             # Get latest follow status per span_id
@@ -205,28 +241,42 @@ def list_follow_by_doc(
                     span_id,
                     target_key,
                     payload_json,
-                    citation_index
+                    citation_index,
+                    target_id
                 FROM opinion_events
                 WHERE project_id = %s
                   AND owner_uid = %s
+                  AND
+                """
+                + _acl_clause_for_owner_stream(include_selectable=include_selectable)
+                +
+                """
                   AND doc_id = %s
                   AND kind = 'follow'
                   AND span_id IS NOT NULL
                 ORDER BY span_id, event_id DESC
                 LIMIT %s
                 """,
-                (project_id, owner_uid, doc_id, limit)
+                (project_id, owner_uid, viewer_uid, doc_id, limit)
             )
             rows = cur.fetchall()
     
     result = []
     for row in rows:
-        payload = json.loads(row[2]) if row[2] else {}
+        raw_payload = row[2]
+        if isinstance(raw_payload, dict):
+            payload = raw_payload
+        elif raw_payload:
+            payload = json.loads(raw_payload)
+        else:
+            payload = {}
         result.append({
             "span_id": row[0],
             "target_key": row[1],
             "current_status": payload.get("status", "follow"),
             "sort_key": row[3] if row[3] is not None else 0,
+            "citation_index": row[3] if row[3] is not None else 0,
+            "target_id": row[4],
         })
     
     # Sort by citation_index (sort_key) for rail ordering
@@ -277,6 +327,7 @@ def export_events_ndjson(
             "kind": row[4],
             "target_key": row[5],
             "visibility": row[6],
+            "visibility": normalize_visibility(row[6]),
             "group_id": row[7],
             "mode": row[8],
             "payload": json.loads(row[9]) if row[9] else {},
@@ -353,7 +404,7 @@ def import_events_ndjson(
                         event.get("owner_uid", user_id),
                         event.get("kind", "follow"),
                         event.get("target_key", ""),
-                        event.get("visibility", "private"),
+                        normalize_visibility(event.get("visibility", "private")),
                         event.get("group_id"),
                         event.get("mode", 0o600),
                         _json_dumps(event.get("payload", {})),

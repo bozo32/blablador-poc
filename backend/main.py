@@ -136,6 +136,7 @@ from backend.spine.project_meta import (
 from backend.spine.project_membership import (
     create_project_for_user,
     get_active_project_for_user,
+    has_project_membership,
     list_projects_for_user,
     set_active_project_for_user,
 )
@@ -1348,6 +1349,11 @@ def _require_projects_user_id(
     if not user_id:
         raise HTTPException(status_code=400, detail="X-User-Id header is required")
     return user_id
+
+
+def _require_project_membership_for_scope(*, project_id: str, user_id: str) -> None:
+    if not has_project_membership(user_id=user_id, project_id=project_id):
+        raise HTTPException(status_code=403, detail="User is not a member of this project")
 
 
 def _allow_local_path_upload_for_dev() -> bool:
@@ -3654,9 +3660,9 @@ class OpinionEventResponse(BaseModel):
 def append_opinion_event(
     payload: OpinionEventRequest,
     reviewer_uid: Optional[str] = Query(None),
-    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
-    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
-    x_reviewer_uid: Optional[str] = Header(None, alias="X-Reviewer-Uid"),
+    x_project_id: str = Header(..., alias="X-Project-Id"),
+    x_user_id: str = Header(..., alias="X-User-Id"),
+    x_reviewer_uid: str = Header(..., alias="X-Reviewer-Uid"),
 ):
     """Append an opinion event (e.g., follow/ignore/complete)."""
     project_id, user_id = _require_scope_for_write_pilot(
@@ -3665,15 +3671,20 @@ def append_opinion_event(
         endpoint="/opinions/events",
     )
 
+    _require_project_membership_for_scope(project_id=project_id, user_id=user_id)
+
     reviewer_header = str(x_reviewer_uid or "").strip()
     reviewer_param = str(reviewer_uid or "").strip()
-    if not reviewer_header:
-        raise HTTPException(status_code=400, detail="X-Reviewer-Uid header is required")
     if reviewer_param and reviewer_param != reviewer_header:
             raise HTTPException(
                 status_code=403,
                 detail="X-Reviewer-Uid must match reviewer_uid parameter"
             )
+    if user_id != reviewer_header:
+        raise HTTPException(
+            status_code=403,
+            detail="X-User-Id must match X-Reviewer-Uid for opinion writes",
+        )
 
     owner_uid = reviewer_header
 
@@ -3687,9 +3698,11 @@ def append_opinion_event(
             )
     
     # Build target_key if not provided
-    target_key = payload.target_key
+    target_key = str(payload.target_key or "").strip()
     if not target_key and payload.span_id:
         target_key = f"citespan:{payload.span_id}"
+    if not target_key:
+        raise HTTPException(status_code=422, detail="target_key is required")
     
 
     event = opinion_events.append_event(
@@ -3729,10 +3742,16 @@ def list_follows_by_doc(
     doc_id: str,
     reviewer_uid: Optional[str] = Query(None),
     x_project_id: str = Header(..., alias="X-Project-Id"),
+    x_user_id: str = Header(..., alias="X-User-Id"),
     x_reviewer_uid: str = Header(..., alias="X-Reviewer-Uid"),
 ):
     """List projected follow entries for a document."""
-    project_id = _require_project_id_for_upload(x_project_id)
+    project_id, user_id = _require_scope_for_write_pilot(
+        x_project_id=x_project_id,
+        x_user_id=x_user_id,
+        endpoint="/opinions/follow/by-doc",
+    )
+    _require_project_membership_for_scope(project_id=project_id, user_id=user_id)
     owner_uid = _require_reviewer_identity(
         reviewer_uid=reviewer_uid,
         x_reviewer_uid=x_reviewer_uid,
@@ -3742,6 +3761,8 @@ def list_follows_by_doc(
     follows = opinion_events.list_follow_by_doc(
         project_id=project_id,
         owner_uid=owner_uid,
+        viewer_uid=user_id,
+        viewer_is_project_member=True,
         doc_id=doc_id,
     )
     
@@ -3753,10 +3774,16 @@ def get_follow_for_target(
     target_key: str,
     reviewer_uid: Optional[str] = Query(None),
     x_project_id: str = Header(..., alias="X-Project-Id"),
+    x_user_id: str = Header(..., alias="X-User-Id"),
     x_reviewer_uid: str = Header(..., alias="X-Reviewer-Uid"),
 ):
     """Get projected follow status for a target key."""
-    project_id = _require_project_id_for_upload(x_project_id)
+    project_id, user_id = _require_scope_for_write_pilot(
+        x_project_id=x_project_id,
+        x_user_id=x_user_id,
+        endpoint="/opinions/follow/target",
+    )
+    _require_project_membership_for_scope(project_id=project_id, user_id=user_id)
     owner_uid = _require_reviewer_identity(
         reviewer_uid=reviewer_uid,
         x_reviewer_uid=x_reviewer_uid,
@@ -3766,6 +3793,8 @@ def get_follow_for_target(
     status = opinion_events.get_follow_status(
         project_id=project_id,
         owner_uid=owner_uid,
+        viewer_uid=user_id,
+        viewer_is_project_member=True,
         target_key=target_key,
     )
     
@@ -3782,10 +3811,16 @@ def list_opinion_events(
     kind: Optional[str] = None,
     limit: int = Query(20, ge=1, le=100),
     x_project_id: str = Header(..., alias="X-Project-Id"),
+    x_user_id: str = Header(..., alias="X-User-Id"),
     x_reviewer_uid: str = Header(..., alias="X-Reviewer-Uid"),
 ):
     """List recent opinion events."""
-    project_id = _require_project_id_for_upload(x_project_id)
+    project_id, user_id = _require_scope_for_write_pilot(
+        x_project_id=x_project_id,
+        x_user_id=x_user_id,
+        endpoint="/opinions/events",
+    )
+    _require_project_membership_for_scope(project_id=project_id, user_id=user_id)
     owner_uid = _require_reviewer_identity(
         reviewer_uid=reviewer_uid,
         x_reviewer_uid=x_reviewer_uid,
@@ -3795,6 +3830,8 @@ def list_opinion_events(
     events = opinion_events.list_recent_events(
         project_id=project_id,
         owner_uid=owner_uid,
+        viewer_uid=user_id,
+        viewer_is_project_member=True,
         target_key=target_key,
         kind=kind,
         limit=limit,

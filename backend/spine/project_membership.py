@@ -155,3 +155,22 @@ def set_active_project_for_user(*, user_id: str, project_id: str, actor_user_id:
         conn.commit()
 
     return True
+
+
+def has_project_membership(*, user_id: str, project_id: str) -> bool:
+    uid = _clean_text(user_id, field="user_id")
+    pid = _clean_text(project_id, field="project_id")
+
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT 1
+                  FROM user_project_memberships
+                 WHERE user_id = %s
+                   AND project_id = %s
+                 LIMIT 1
+                """,
+                (uid, pid),
+            )
+            return cur.fetchone() is not None

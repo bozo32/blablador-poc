@@ -105,7 +105,8 @@ def test_attachment_write_pilot_requires_project_and_user_headers() -> None:
         assert missing_user.json()["detail"] == "X-User-Id header is required"
 
 
-def test_opinion_event_requires_project_user_and_reviewer_identity() -> None:
+def test_opinion_event_requires_project_user_and_reviewer_identity(monkeypatch) -> None:
+    monkeypatch.setattr(backend_main, "has_project_membership", lambda **kwargs: True)
     client = TestClient(backend_main.app)
     payload = {
         "kind": "follow",
@@ -114,24 +115,21 @@ def test_opinion_event_requires_project_user_and_reviewer_identity() -> None:
     }
 
     missing_project = client.post("/opinions/events", json=payload)
-    assert missing_project.status_code == 400
-    assert missing_project.json()["detail"] == "X-Project-Id header is required"
+    assert missing_project.status_code == 422
 
     missing_user = client.post(
         "/opinions/events",
         json=payload,
         headers={"X-Project-Id": "proj-pilot"},
     )
-    assert missing_user.status_code == 400
-    assert missing_user.json()["detail"] == "X-User-Id header is required"
+    assert missing_user.status_code == 422
 
     missing_reviewer = client.post(
         "/opinions/events",
         json=payload,
         headers={"X-Project-Id": "proj-pilot", "X-User-Id": "reviewer-1"},
     )
-    assert missing_reviewer.status_code == 400
-    assert missing_reviewer.json()["detail"] == "X-Reviewer-Uid header is required"
+    assert missing_reviewer.status_code == 422
 
 
 def test_opinion_event_reviewer_mismatch_rejected(monkeypatch) -> None:
@@ -140,6 +138,7 @@ def test_opinion_event_reviewer_mismatch_rejected(monkeypatch) -> None:
             return kwargs
 
     monkeypatch.setattr(backend_main, "opinion_events", _StubOpinionEvents())
+    monkeypatch.setattr(backend_main, "has_project_membership", lambda **kwargs: True)
     client = TestClient(backend_main.app)
 
     payload = {

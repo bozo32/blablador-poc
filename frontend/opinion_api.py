@@ -128,15 +128,18 @@ def list_follows_by_doc(
         List of follow entries with current_status and sort_key
     """
     url = f"{api_url.rstrip('/')}/opinions/follow/by-doc"
+    pid = str(project_id or "").strip()
     reviewer = str(reviewer_uid or "").strip()
+    if not pid:
+        raise RuntimeError("opinion read requires project_id")
     if not reviewer:
         raise RuntimeError("opinion read requires reviewer_uid")
     
     response = _request(
         "GET",
         url,
-        project_id=project_id,
-        headers={"X-Reviewer-Uid": reviewer},
+        project_id=pid,
+        headers={"X-User-Id": reviewer, "X-Reviewer-Uid": reviewer},
         params={
             "reviewer_uid": reviewer,
             "doc_id": doc_id,
@@ -165,7 +168,10 @@ def get_follow_for_target(
         Follow status dict or None if not found
     """
     url = f"{api_url.rstrip('/')}/opinions/follow/target"
+    pid = str(project_id or "").strip()
     reviewer = str(reviewer_uid or "").strip()
+    if not pid:
+        raise RuntimeError("opinion read requires project_id")
     if not reviewer:
         raise RuntimeError("opinion read requires reviewer_uid")
     
@@ -173,8 +179,8 @@ def get_follow_for_target(
         response = _request(
             "GET",
             url,
-            project_id=project_id,
-            headers={"X-Reviewer-Uid": reviewer},
+            project_id=pid,
+            headers={"X-User-Id": reviewer, "X-Reviewer-Uid": reviewer},
             params={
                 "reviewer_uid": reviewer,
                 "target_key": target_key,

@@ -108,6 +108,40 @@ def test_opinion_append_follow_sends_identity_headers(
     assert captured["headers"]["X-Reviewer-Uid"] == "reviewer-a"
 
 
+def test_opinion_read_fails_fast_without_project_or_reviewer() -> None:
+    with pytest.raises(RuntimeError, match="project_id"):
+        opinion_api.list_follows_by_doc("http://api", "", "reviewer-a", "doc-1")
+
+    with pytest.raises(RuntimeError, match="reviewer_uid"):
+        opinion_api.get_follow_for_target("http://api", "proj-a", "", "citespan:1")
+
+
+def test_opinion_read_sends_strict_scope_identity_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def _fake_request(method: str, url: str, **kwargs):
+        captured["method"] = method
+        captured["url"] = url
+        captured.update(kwargs)
+        return _FakeResponse({"follows": [{"span_id": "span-1"}]})
+
+    monkeypatch.setattr(opinion_api.requests, "request", _fake_request)
+    follows = opinion_api.list_follows_by_doc(
+        "http://api",
+        "proj-a",
+        "reviewer-a",
+        "doc-1",
+    )
+    assert follows == [{"span_id": "span-1"}]
+    assert captured["headers"] == {
+        "X-Project-Id": "proj-a",
+        "X-User-Id": "reviewer-a",
+        "X-Reviewer-Uid": "reviewer-a",
+    }
+
+
 def test_ingestion_mutation_fails_fast_without_project_or_user() -> None:
     with pytest.raises(RuntimeError, match="project_id"):
         ingestion_api.trigger_resolution(

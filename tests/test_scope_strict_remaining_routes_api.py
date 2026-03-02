@@ -43,20 +43,25 @@ def test_ingest_control_routes_require_mutation_user_and_project_headers() -> No
         assert missing_user.status_code == 422
 
 
-def test_opinion_reviewer_scoped_reads_require_reviewer_identity_header() -> None:
+def test_opinion_reviewer_scoped_reads_require_reviewer_identity_header(monkeypatch) -> None:
+    monkeypatch.setattr(backend_main, "has_project_membership", lambda **kwargs: True)
     client = TestClient(backend_main.app)
 
     missing_reviewer = client.get(
         "/opinions/events",
         params={"reviewer_uid": "reviewer-a"},
-        headers={"X-Project-Id": "proj-a"},
+        headers={"X-Project-Id": "proj-a", "X-User-Id": "reviewer-a"},
     )
     assert missing_reviewer.status_code == 422
 
     mismatch = client.get(
         "/opinions/follow/by-doc",
         params={"doc_id": "doc-1", "reviewer_uid": "reviewer-b"},
-        headers={"X-Project-Id": "proj-a", "X-Reviewer-Uid": "reviewer-a"},
+        headers={
+            "X-Project-Id": "proj-a",
+            "X-User-Id": "reviewer-a",
+            "X-Reviewer-Uid": "reviewer-a",
+        },
     )
     assert mismatch.status_code == 403
     assert mismatch.json()["detail"] == "X-Reviewer-Uid must match reviewer_uid parameter"

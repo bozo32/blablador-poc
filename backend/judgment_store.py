@@ -45,10 +45,15 @@ class JudgmentStore:
         self.settings = settings
 
     def read(
-        self, claim_id: str, reviewer_uid: str = "default"
+        self,
+        claim_id: str,
+        reviewer_uid: str = "default",
+        *,
+        project_id: str = "default",
     ) -> Optional[JudgmentPayload]:
         cid = str(claim_id or "").strip()
         rid = str(reviewer_uid or "default").strip() or "default"
+        pid = str(project_id or "default").strip() or "default"
         if not cid:
             return None
         with connect() as conn:
@@ -76,9 +81,9 @@ class JudgmentStore:
                       citation_anchor,
                       span_selectors
                     FROM judgments
-                    WHERE claim_id=%s AND reviewer_uid=%s
+                    WHERE claim_id=%s AND reviewer_uid=%s AND project_id=%s
                     """,
-                    (cid, rid),
+                    (cid, rid, pid),
                 )
                 row = cur.fetchone()
                 if not row:
@@ -110,7 +115,12 @@ class JudgmentStore:
         return JudgmentPayload.model_validate(payload)
 
     def upsert(
-        self, claim_id: str, judgment: dict | JudgmentUpsertRequest
+        self,
+        claim_id: str,
+        judgment: dict | JudgmentUpsertRequest,
+        *,
+        project_id: str = "default",
+        user_id: str = "local",
     ) -> JudgmentPayload:
         cid = str(claim_id or "").strip()
         if not cid:
@@ -124,6 +134,8 @@ class JudgmentStore:
             str(getattr(request, "reviewer_uid", "default") or "default").strip()
             or "default"
         )
+        pid = str(project_id or "default").strip() or "default"
+        uid = str(user_id or "local").strip() or "local"
         stored = JudgmentPayload(
             claim_id=cid,
             reviewer_uid=reviewer,
@@ -197,8 +209,8 @@ class JudgmentStore:
                     )
                     VALUES (
                       %s,
-                      'default',
-                      'local',
+                      %s,
+                      %s,
                       %s,
                       %s,
                       now(),
@@ -243,6 +255,8 @@ class JudgmentStore:
                     """,
                     (
                         str(uuid4()),
+                        pid,
+                        uid,
                         cid,
                         reviewer,
                         str(stored.status),
@@ -280,26 +294,30 @@ class JudgmentStore:
         except ValidationError:
             raise
 
-    def list_all(self) -> list[JudgmentPayload]:
+    def list_all(self, *, project_id: str = "default") -> list[JudgmentPayload]:
+        pid = str(project_id or "default").strip() or "default"
         with connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
                     SELECT claim_id, reviewer_uid
                     FROM judgments
+                    WHERE project_id=%s
                     ORDER BY claim_id, reviewer_uid
                     """
+                    , (pid,)
                 )
                 rows = cur.fetchall() or []
         out: list[JudgmentPayload] = []
         for cid, rid in rows:
-            item = self.read(str(cid), reviewer_uid=str(rid))
+            item = self.read(str(cid), reviewer_uid=str(rid), project_id=pid)
             if item is not None:
                 out.append(item)
         return out
 
-    def list_for_claim(self, claim_id: str) -> list[JudgmentPayload]:
+    def list_for_claim(self, claim_id: str, *, project_id: str = "default") -> list[JudgmentPayload]:
         cid = str(claim_id or "").strip()
+        pid = str(project_id or "default").strip() or "default"
         if not cid:
             return []
         with connect() as conn:
@@ -308,15 +326,15 @@ class JudgmentStore:
                     """
                     SELECT reviewer_uid
                     FROM judgments
-                    WHERE claim_id=%s
+                    WHERE claim_id=%s AND project_id=%s
                     ORDER BY reviewer_uid
                     """,
-                    (cid,),
+                    (cid, pid),
                 )
                 rows = cur.fetchall() or []
         out: list[JudgmentPayload] = []
         for (rid,) in rows:
-            item = self.read(cid, reviewer_uid=str(rid))
+            item = self.read(cid, reviewer_uid=str(rid), project_id=pid)
             if item is not None:
                 out.append(item)
         return out
@@ -326,8 +344,9 @@ class JudgmentStore:
         *,
         status: Literal["final", "draft", "all"],
         doc_id: str | None = None,
+        project_id: str = "default",
     ) -> list[JudgmentPayload]:
-        items = self.list_all()
+        items = self.list_all(project_id=project_id)
         if doc_id is not None:
             items = [item for item in items if item.doc_id == doc_id]
         if status != "all":
@@ -340,8 +359,9 @@ class JudgmentStore:
         include_drafts: bool,
         mode: Literal["core", "verbose"],
         format: Literal["json", "csv"],
+        project_id: str = "default",
     ) -> bytes:
-        judgments = self.list_all()
+        judgments = self.list_all(project_id=project_id)
         if not include_drafts:
             judgments = [j for j in judgments if j.status == "final"]
         judgments.sort(key=lambda item: item.claim_id)
@@ -440,8 +460,9 @@ class JudgmentStore:
         include_drafts: bool,
         mode: Literal["core", "verbose"],
         format: Literal["json", "csv"],
+        project_id: str = "default",
     ) -> bytes:
-        judgments = self.list_all()
+        judgments = self.list_all(project_id=project_id)
         if not include_drafts:
             judgments = [j for j in judgments if j.status == "final"]
 

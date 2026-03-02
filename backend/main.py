@@ -5225,9 +5225,20 @@ def get_citation_context(
     doc_id: str,
     citation_index: int = 0,
     target_id: Optional[str] = None,
-    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+    x_project_id: str = Header(..., alias="X-Project-Id"),
+    x_user_id: str = Header(..., alias="X-User-Id"),
 ):
-    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
+    project_id, user_id, _scope_source = _resolve_scope_observability(
+        endpoint="/ingest/{doc_id}/citation-context",
+        x_project_id=x_project_id,
+        x_user_id=x_user_id,
+        require_project=True,
+        require_user=True,
+        allow_dev_project_default=False,
+        include_user=True,
+    )
+    assert user_id is not None
+    _require_project_membership_for_scope(project_id=project_id, user_id=user_id)
 
     try:
         document = build_ingested_document_from_spine(
@@ -5291,9 +5302,20 @@ def get_citation_graph(
     doi: Optional[str] = None,
     depth: int = 1,
     max_nodes: int = 10,
-    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+    x_project_id: str = Header(..., alias="X-Project-Id"),
+    x_user_id: str = Header(..., alias="X-User-Id"),
 ):
-    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
+    project_id, user_id, _scope_source = _resolve_scope_observability(
+        endpoint="/ingest/{doc_id}/citation-graph",
+        x_project_id=x_project_id,
+        x_user_id=x_user_id,
+        require_project=True,
+        require_user=True,
+        allow_dev_project_default=False,
+        include_user=True,
+    )
+    assert user_id is not None
+    _require_project_membership_for_scope(project_id=project_id, user_id=user_id)
 
     try:
         document = build_ingested_document_from_spine(
@@ -5366,17 +5388,28 @@ def confirm_claims(payload: schemas.ClaimConfirmationRequest):
 )
 def list_claim_evidence(
     claim_id: str,
-    reviewer_uid: str = Query("default"),
+    reviewer_uid: Optional[str] = Query(None),
     label: Optional[str] = None,
     offset: int = 0,
     limit: int = 10,
     include_neutral: bool = True,
     pinned_only: bool = False,
     claim_text: Optional[str] = None,
-    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+    x_project_id: str = Header(..., alias="X-Project-Id"),
+    x_user_id: str = Header(..., alias="X-User-Id"),
+    x_reviewer_uid: str = Header(..., alias="X-Reviewer-Uid"),
 ):
-    reviewer = str(reviewer_uid or "").strip() or "default"
-    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
+    project_id, user_id = _require_scope_for_write_pilot(
+        x_project_id=x_project_id,
+        x_user_id=x_user_id,
+        endpoint="/claims/{claim_id}/evidence",
+    )
+    _require_project_membership_for_scope(project_id=project_id, user_id=user_id)
+    reviewer = _require_reviewer_identity(
+        reviewer_uid=reviewer_uid,
+        x_reviewer_uid=x_reviewer_uid,
+        endpoint="/claims/{claim_id}/evidence",
+    )
 
     # Register claim_text without triggering a compute-heavy rerun.
     if claim_text:
@@ -5528,12 +5561,23 @@ def list_claim_evidence(
 )
 def get_evidence_decisions(
     claim_id: str,
-    reviewer_uid: str = Query("default"),
+    reviewer_uid: Optional[str] = Query(None),
     events_limit: int = Query(20, ge=0, le=200),
-    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+    x_project_id: str = Header(..., alias="X-Project-Id"),
+    x_user_id: str = Header(..., alias="X-User-Id"),
+    x_reviewer_uid: str = Header(..., alias="X-Reviewer-Uid"),
 ):
-    reviewer = str(reviewer_uid or "").strip() or "default"
-    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
+    project_id, user_id = _require_scope_for_write_pilot(
+        x_project_id=x_project_id,
+        x_user_id=x_user_id,
+        endpoint="/claims/{claim_id}/evidence/decisions",
+    )
+    _require_project_membership_for_scope(project_id=project_id, user_id=user_id)
+    reviewer = _require_reviewer_identity(
+        reviewer_uid=reviewer_uid,
+        x_reviewer_uid=x_reviewer_uid,
+        endpoint="/claims/{claim_id}/evidence/decisions",
+    )
 
     projection = evidence_decisions_spine.get_projection(
         claim_id,
@@ -5613,12 +5657,27 @@ def get_evidence_decisions(
 def post_evidence_decision_event(
     claim_id: str,
     payload: schemas.EvidenceDecisionAppendRequest,
-    reviewer_uid: str = Query("default"),
-    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+    reviewer_uid: Optional[str] = Query(None),
+    x_project_id: str = Header(..., alias="X-Project-Id"),
+    x_user_id: str = Header(..., alias="X-User-Id"),
+    x_reviewer_uid: str = Header(..., alias="X-Reviewer-Uid"),
 ):
-    reviewer = str(reviewer_uid or "").strip() or "default"
-    project_id = str(x_project_id or "").strip() or str(app_settings.DEFAULT_PROJECT_ID)
-    user_id = str(app_settings.DEFAULT_USER_ID)
+    project_id, user_id = _require_scope_for_write_pilot(
+        x_project_id=x_project_id,
+        x_user_id=x_user_id,
+        endpoint="/claims/{claim_id}/evidence/decisions/events",
+    )
+    _require_project_membership_for_scope(project_id=project_id, user_id=user_id)
+    reviewer = _require_reviewer_identity(
+        reviewer_uid=reviewer_uid,
+        x_reviewer_uid=x_reviewer_uid,
+        endpoint="/claims/{claim_id}/evidence/decisions/events",
+    )
+    if reviewer != user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="X-User-Id must match X-Reviewer-Uid for evidence decision writes",
+        )
 
     target = payload.target
     try:
@@ -5782,12 +5841,33 @@ def put_evidence_selection(
     "/claims/{claim_id}/judgment",
     response_model=schemas.JudgmentPayload,
 )
-def get_claim_judgment(claim_id: str, reviewer_uid: str = "default"):
-    stored = judgment_store.judgment_store.read(claim_id, reviewer_uid=reviewer_uid)
+def get_claim_judgment(
+    claim_id: str,
+    reviewer_uid: Optional[str] = Query(None),
+    x_project_id: str = Header(..., alias="X-Project-Id"),
+    x_user_id: str = Header(..., alias="X-User-Id"),
+    x_reviewer_uid: str = Header(..., alias="X-Reviewer-Uid"),
+):
+    project_id, user_id = _require_scope_for_write_pilot(
+        x_project_id=x_project_id,
+        x_user_id=x_user_id,
+        endpoint="/claims/{claim_id}/judgment",
+    )
+    _require_project_membership_for_scope(project_id=project_id, user_id=user_id)
+    owner_uid = _require_reviewer_identity(
+        reviewer_uid=reviewer_uid,
+        x_reviewer_uid=x_reviewer_uid,
+        endpoint="/claims/{claim_id}/judgment",
+    )
+    stored = judgment_store.judgment_store.read(
+        claim_id,
+        reviewer_uid=owner_uid,
+        project_id=project_id,
+    )
     if stored is None:
         return schemas.JudgmentPayload(
             claim_id=claim_id,
-            reviewer_uid=reviewer_uid,
+            reviewer_uid=owner_uid,
             status="draft",
             verdict=None,
             notes=None,
@@ -5802,12 +5882,36 @@ def get_claim_judgment(claim_id: str, reviewer_uid: str = "default"):
 def put_claim_judgment(
     claim_id: str,
     payload: schemas.JudgmentUpsertRequest,
-    reviewer_uid: str = "default",
+    reviewer_uid: Optional[str] = Query(None),
+    x_project_id: str = Header(..., alias="X-Project-Id"),
+    x_user_id: str = Header(..., alias="X-User-Id"),
+    x_reviewer_uid: str = Header(..., alias="X-Reviewer-Uid"),
 ):
+    project_id, user_id = _require_scope_for_write_pilot(
+        x_project_id=x_project_id,
+        x_user_id=x_user_id,
+        endpoint="/claims/{claim_id}/judgment",
+    )
+    _require_project_membership_for_scope(project_id=project_id, user_id=user_id)
+    owner_uid = _require_reviewer_identity(
+        reviewer_uid=reviewer_uid,
+        x_reviewer_uid=x_reviewer_uid,
+        endpoint="/claims/{claim_id}/judgment",
+    )
+    if user_id != owner_uid:
+        raise HTTPException(
+            status_code=403,
+            detail="X-User-Id must match X-Reviewer-Uid for judgment writes",
+        )
     try:
         data = payload.model_dump(mode="json")
-        data["reviewer_uid"] = reviewer_uid
-        stored = judgment_store.judgment_store.upsert(claim_id, data)
+        data["reviewer_uid"] = owner_uid
+        stored = judgment_store.judgment_store.upsert(
+            claim_id,
+            data,
+            project_id=project_id,
+            user_id=user_id,
+        )
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return stored
@@ -5817,8 +5921,21 @@ def put_claim_judgment(
     "/claims/{claim_id}/judgments",
     response_model=schemas.JudgmentByReviewerResponse,
 )
-def list_claim_judgments(claim_id: str):
-    judgments = judgment_store.judgment_store.list_for_claim(claim_id)
+def list_claim_judgments(
+    claim_id: str,
+    x_project_id: str = Header(..., alias="X-Project-Id"),
+    x_user_id: str = Header(..., alias="X-User-Id"),
+):
+    project_id, user_id = _require_scope_for_write_pilot(
+        x_project_id=x_project_id,
+        x_user_id=x_user_id,
+        endpoint="/claims/{claim_id}/judgments",
+    )
+    _require_project_membership_for_scope(project_id=project_id, user_id=user_id)
+    judgments = judgment_store.judgment_store.list_for_claim(
+        claim_id,
+        project_id=project_id,
+    )
     return {"judgments": judgments}
 
 
@@ -5830,10 +5947,20 @@ def list_judgments(
     doc_id: Optional[str] = None,
     include_drafts: bool = False,
     status: Optional[Literal["final", "draft", "all"]] = None,
+    x_project_id: str = Header(..., alias="X-Project-Id"),
+    x_user_id: str = Header(..., alias="X-User-Id"),
 ):
+    project_id, user_id = _require_scope_for_write_pilot(
+        x_project_id=x_project_id,
+        x_user_id=x_user_id,
+        endpoint="/judgments",
+    )
+    _require_project_membership_for_scope(project_id=project_id, user_id=user_id)
     effective = status or ("all" if include_drafts else "final")
     judgments = judgment_store.judgment_store.list_filtered(
-        status=effective, doc_id=doc_id
+        status=effective,
+        doc_id=doc_id,
+        project_id=project_id,
     )
     return {"judgments": judgments}
 
@@ -5844,18 +5971,28 @@ def export_judgments(
     format: Literal["json", "csv"] = "json",
     include_drafts: bool = False,
     mode: Literal["core", "verbose"] = "core",
+    x_project_id: str = Header(..., alias="X-Project-Id"),
+    x_user_id: str = Header(..., alias="X-User-Id"),
 ):
+    project_id, user_id = _require_scope_for_write_pilot(
+        x_project_id=x_project_id,
+        x_user_id=x_user_id,
+        endpoint="/judgments/export",
+    )
+    _require_project_membership_for_scope(project_id=project_id, user_id=user_id)
     if shape == "claim":
         payload = judgment_store.judgment_store.export_claims(
             include_drafts=include_drafts,
             mode=mode,
             format=format,
+            project_id=project_id,
         )
     else:
         payload = judgment_store.judgment_store.export_callouts(
             include_drafts=include_drafts,
             mode=mode,
             format=format,
+            project_id=project_id,
         )
 
     media_type = "application/json" if format == "json" else "text/csv"

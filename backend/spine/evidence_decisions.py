@@ -100,7 +100,7 @@ def _fingerprint(
     return hashlib.sha256(blob).hexdigest().lower()
 
 
-@dataclass(frozen=True)
+@dataclass
 class EvidenceDecisionConflict(RuntimeError):
     detail: str
     current_version: Optional[int] = None

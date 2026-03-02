@@ -5,12 +5,22 @@ from fastapi.testclient import TestClient
 from backend import main as backend_main
 
 
-def test_decisions_read_starts_empty() -> None:
+def _headers() -> dict[str, str]:
+    return {
+        "X-Project-Id": "proj-a",
+        "X-User-Id": "default",
+        "X-Reviewer-Uid": "default",
+    }
+
+
+def test_decisions_read_starts_empty(monkeypatch) -> None:
+    monkeypatch.setattr(backend_main, "has_project_membership", lambda **_: True)
     client = TestClient(backend_main.app)
 
     resp = client.get(
         "/claims/claim-decisions/evidence/decisions",
         params={"reviewer_uid": "default"},
+        headers=_headers(),
     )
 
     assert resp.status_code == 200
@@ -22,7 +32,8 @@ def test_decisions_read_starts_empty() -> None:
     assert data["pinned_targets"] == []
 
 
-def test_decision_pin_idempotency_occ_and_clear_noop() -> None:
+def test_decision_pin_idempotency_occ_and_clear_noop(monkeypatch) -> None:
+    monkeypatch.setattr(backend_main, "has_project_membership", lambda **_: True)
     client = TestClient(backend_main.app)
     claim_id = "claim-evt"
 
@@ -37,6 +48,7 @@ def test_decision_pin_idempotency_occ_and_clear_noop() -> None:
         f"/claims/{claim_id}/evidence/decisions/events",
         params={"reviewer_uid": "default"},
         json=payload,
+        headers=_headers(),
     )
     assert resp.status_code == 200
     data = resp.json()
@@ -49,6 +61,7 @@ def test_decision_pin_idempotency_occ_and_clear_noop() -> None:
         f"/claims/{claim_id}/evidence/decisions/events",
         params={"reviewer_uid": "default"},
         json=payload,
+        headers=_headers(),
     )
     assert replay.status_code == 200
     assert replay.json() == data
@@ -62,6 +75,7 @@ def test_decision_pin_idempotency_occ_and_clear_noop() -> None:
             "idempotency_key": "k2",
             "expected_version": 0,
         },
+        headers=_headers(),
     )
     assert stale.status_code == 409
     body = stale.json()
@@ -78,6 +92,7 @@ def test_decision_pin_idempotency_occ_and_clear_noop() -> None:
             "action": "clear",
             "payload": {"snippet": "Cleared"},
         },
+        headers=_headers(),
     )
     assert cleared.status_code == 200
     cleared_data = cleared.json()
@@ -93,6 +108,7 @@ def test_decision_pin_idempotency_occ_and_clear_noop() -> None:
             "expected_version": 2,
             "action": "clear",
         },
+        headers=_headers(),
     )
     assert cleared_again.status_code == 200
     again_data = cleared_again.json()
@@ -115,6 +131,7 @@ class _StubEvidenceService:
 def test_evidence_overlay_pinned_placeholder_when_missing(monkeypatch) -> None:
     stub = _StubEvidenceService()
     monkeypatch.setattr(backend_main, "evidence_service", stub)
+    monkeypatch.setattr(backend_main, "has_project_membership", lambda **_: True)
     client = TestClient(backend_main.app)
 
     claim_id = "claim-overlay"
@@ -128,12 +145,14 @@ def test_evidence_overlay_pinned_placeholder_when_missing(monkeypatch) -> None:
             "target": {"attachment_id": "att_dummy", "span_id": "span_dummy"},
             "payload": {"snippet": "Pinned snippet"},
         },
+        headers=_headers(),
     )
     assert pin.status_code == 200
 
     resp = client.get(
         f"/claims/{claim_id}/evidence",
         params={"reviewer_uid": "default", "pinned_only": True},
+        headers=_headers(),
     )
     assert resp.status_code == 200
     data = resp.json()
@@ -170,6 +189,7 @@ def test_evidence_overlay_annotates_candidates(monkeypatch) -> None:
 
     stub = Stub()
     monkeypatch.setattr(backend_main, "evidence_service", stub)
+    monkeypatch.setattr(backend_main, "has_project_membership", lambda **_: True)
     client = TestClient(backend_main.app)
 
     claim_id = "claim-annotate"
@@ -182,10 +202,13 @@ def test_evidence_overlay_annotates_candidates(monkeypatch) -> None:
             "action": "pin",
             "target": {"attachment_id": "att_dummy", "span_id": "span_dummy"},
         },
+        headers=_headers(),
     )
 
     resp = client.get(
-        f"/claims/{claim_id}/evidence", params={"reviewer_uid": "default"}
+        f"/claims/{claim_id}/evidence",
+        params={"reviewer_uid": "default"},
+        headers=_headers(),
     )
     assert resp.status_code == 200
     data = resp.json()

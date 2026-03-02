@@ -48,6 +48,7 @@ def _truncate_spine_backed_tables() -> None:
                   user_project_memberships,
                   confirmed_claims,
                   project_meta,
+                  graph_compaction_runs,
                   graph_edge_votes,
                   graph_edges,
                   graph_aliases,

@@ -1166,6 +1166,29 @@ _DDL_STATEMENTS: list[str] = [
       ON opinion_events(project_id, owner_uid, span_id)
       WHERE span_id IS NOT NULL;
     """,
+    # ---------------------------------------------------------------------
+    # Phase 10-04.5-03: Durable graph compaction journal
+    # ---------------------------------------------------------------------
+    """
+    CREATE TABLE IF NOT EXISTS graph_compaction_runs (
+      run_id text PRIMARY KEY,
+      project_id text NOT NULL DEFAULT 'default',
+      mode text NOT NULL,
+      status text NOT NULL,
+      strategy text NOT NULL DEFAULT 'doc-key-dedup-v1',
+      source_run_id text NULL,
+      summary_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+      snapshot_json jsonb NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      applied_at timestamptz NULL,
+      rolled_back_at timestamptz NULL,
+      updated_at timestamptz NOT NULL DEFAULT now()
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS graph_compaction_runs_project_created_idx
+      ON graph_compaction_runs(project_id, created_at DESC);
+    """,
 ]
 
 

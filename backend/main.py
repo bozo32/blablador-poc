@@ -117,6 +117,7 @@ from backend.spine.pdf_source import cleanup_temp_path, get_pdf_temp_path
 from backend.claim_store import claim_store
 from backend.reference_retrieval import build_retrieval_dossier
 from backend.graph_store import GraphStore
+from backend.graph_compaction import GraphCompactionService
 from backend.span_graph_store import SpanGraphStore
 from backend.spine.extraction_pool import SpineExtractionPool
 from backend import fallback_body
@@ -275,6 +276,7 @@ def _resolve_scope_observability(
 
 graph_store = GraphStore(settings=app_settings)
 span_graph_store = SpanGraphStore(settings=app_settings)
+graph_compaction_service = GraphCompactionService(settings=app_settings)
 
 spine_extract_pool = SpineExtractionPool(
     max_workers=max(1, int(getattr(app_settings, "INGEST_PIPELINE_WORKERS", 1) or 1)),
@@ -2634,6 +2636,7 @@ def _dev_wipe_tables() -> list[str]:
         "user_project_memberships",
         "user_active_projects",
         # 09.3-05: durable graph + span graph workboard state
+        "graph_compaction_runs",
         "graph_edge_votes",
         "graph_edges",
         "graph_aliases",
@@ -3939,6 +3942,38 @@ def compact_span_graph(payload: schemas.SpanGraphCompactRequest):
         dry_run=bool(payload.dry_run),
         aggressive=bool(payload.aggressive),
     )
+
+
+@app.post(
+    "/maintenance/graph/compact/dry-run",
+    response_model=schemas.GraphCompactionResponse,
+)
+def dry_run_graph_compaction(payload: schemas.GraphCompactionRequest):
+    return graph_compaction_service.run_dry_run(project_id=payload.project_id)
+
+
+@app.post(
+    "/maintenance/graph/compact/apply",
+    response_model=schemas.GraphCompactionResponse,
+)
+def apply_graph_compaction(payload: schemas.GraphCompactionRequest):
+    return graph_compaction_service.run_apply(project_id=payload.project_id)
+
+
+@app.post(
+    "/maintenance/graph/compact/rollback",
+    response_model=schemas.GraphCompactionResponse,
+)
+def rollback_graph_compaction(payload: schemas.GraphCompactionRollbackRequest):
+    try:
+        return graph_compaction_service.rollback(
+            run_id=payload.run_id,
+            project_id=payload.project_id,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 def _lexical_similarity(query: str, text: str) -> float:

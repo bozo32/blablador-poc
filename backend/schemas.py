@@ -1259,6 +1259,23 @@ class SpanGraphCompactResponse(BaseModel):
     deleted: int
 
 
+class GraphCompactionRequest(BaseModel):
+    project_id: Optional[str] = None
+
+
+class GraphCompactionRollbackRequest(BaseModel):
+    run_id: str
+    project_id: Optional[str] = None
+
+
+class GraphCompactionResponse(BaseModel):
+    run_id: str
+    mode: Literal["dry-run", "apply", "rollback"]
+    status: str
+    created_at: Optional[str] = None
+    report: Dict[str, Any] = Field(default_factory=dict)
+
+
 class NeighborhoodSearchRequest(BaseModel):
     span_id: str
     reviewer_uid: str = "default"

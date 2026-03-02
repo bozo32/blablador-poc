@@ -144,4 +144,4 @@ def test_empty_intake_copy_mentions_non_blocking_auto_route(monkeypatch) -> None
     stub = _StubStreamlit()
     monkeypatch.setattr(ui, "st", stub)
     ui.render_intake_panel(max_rows=None)
-    assert any("auto-route to Citing" in c for c in stub.captions)
+    assert any("non-blockingly auto-route" in c for c in stub.captions)

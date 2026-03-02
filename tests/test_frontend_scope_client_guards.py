@@ -12,6 +12,7 @@ from frontend import (
     ledger_api,
     opinion_api,
     project_api,
+    ui,
 )
 
 
@@ -304,3 +305,20 @@ def test_judgment_client_sends_strict_scope_identity_headers(
         "X-User-Id": "reviewer-a",
         "X-Reviewer-Uid": "reviewer-a",
     }
+
+
+def test_ui_prefers_canonical_ledger_stage_fields() -> None:
+    row = {
+        "canonical_extraction_status": "running",
+        "extraction_status": "complete",
+    }
+    snapshot = {"canonical_extraction_status": "error"}
+    assert (
+        ui._ledger_canonical_stage(
+            row,
+            snapshot,
+            stage="extraction",
+            field="status",
+        )
+        == "running"
+    )

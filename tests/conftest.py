@@ -44,6 +44,8 @@ def _truncate_spine_backed_tables() -> None:
                   evidence_runs,
                   evidence_selections,
                   judgments,
+                  user_active_projects,
+                  user_project_memberships,
                   confirmed_claims,
                   project_meta,
                   graph_edge_votes,

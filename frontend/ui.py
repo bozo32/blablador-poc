@@ -186,6 +186,9 @@ def init_session_state():
         "project_id": "",
         SCOPE_DRAFT_UID: "",
         SCOPE_DRAFT_PROJECT_ID: "",
+        "scope_new_project_name": "",
+        "scope_projects_last_uid": "",
+        "scope_projects_error": None,
         # Phase 10-04.5: unified Intake drop + inbox.
         "intake_inbox": [],
         "intake_blobs": {},
@@ -2260,12 +2263,80 @@ def render_scope_selector_block() -> None:
         placeholder="reviewer-a",
         help="Draft only until Apply/Switch.",
     )
-    st.text_input(
-        "Project ID",
-        key=SCOPE_DRAFT_PROJECT_ID,
-        placeholder="project-a",
-        help="Draft only until Apply/Switch.",
-    )
+    draft_uid = scope_lock.get_draft_uid()
+    draft_project_id = scope_lock.get_draft_project_id()
+
+    project_options: list[str] = []
+    active_project_id = ""
+    if draft_uid:
+        try:
+            listing = project_api.list_projects(user_id=draft_uid)
+            projects = listing.get("projects") or []
+            project_options = [
+                str((row or {}).get("project_id") or "").strip()
+                for row in projects
+                if str((row or {}).get("project_id") or "").strip()
+            ]
+            active_project_id = str(listing.get("active_project_id") or "").strip()
+            st.session_state["scope_projects_error"] = None
+            st.session_state["scope_projects_last_uid"] = draft_uid
+        except project_api.ProjectApiError as exc:
+            st.session_state["scope_projects_error"] = str(exc)
+
+    if not draft_project_id and active_project_id:
+        st.session_state[SCOPE_DRAFT_PROJECT_ID] = active_project_id
+        draft_project_id = active_project_id
+
+    if project_options:
+        select_options = [""] + sorted(set(project_options))
+        if draft_project_id and draft_project_id not in select_options:
+            select_options.append(draft_project_id)
+        select_index = select_options.index(draft_project_id) if draft_project_id in select_options else 0
+        selected_project = st.selectbox(
+            "Project",
+            options=select_options,
+            index=select_index,
+            key="scope-project-select",
+            format_func=lambda v: "Select project…" if not v else v,
+        )
+        st.session_state[SCOPE_DRAFT_PROJECT_ID] = str(selected_project or "").strip()
+    else:
+        st.text_input(
+            "Project ID",
+            key=SCOPE_DRAFT_PROJECT_ID,
+            placeholder="project-a",
+            help="Draft only until Apply/Switch.",
+        )
+
+    create_cols = st.columns([3, 1], gap="small")
+    with create_cols[0]:
+        st.text_input(
+            "New project name",
+            key="scope_new_project_name",
+            placeholder="Create new project…",
+            label_visibility="collapsed",
+        )
+    with create_cols[1]:
+        if st.button("Create", key="scope-create-project", use_container_width=True):
+            if not draft_uid:
+                st.warning("Enter User ID before creating a project.")
+            else:
+                try:
+                    created = project_api.create_project(
+                        user_id=draft_uid,
+                        name=str(st.session_state.get("scope_new_project_name") or "").strip() or None,
+                    )
+                    created_project_id = str(
+                        created.get("active_project_id")
+                        or ((created.get("project") or {}).get("project_id"))
+                        or ""
+                    ).strip()
+                    if created_project_id:
+                        st.session_state[SCOPE_DRAFT_PROJECT_ID] = created_project_id
+                        st.session_state["scope_new_project_name"] = ""
+                        st.success(f"Created project {created_project_id}")
+                except project_api.ProjectApiError as exc:
+                    st.error(str(exc))
 
     draft_uid = scope_lock.get_draft_uid()
     draft_project_id = scope_lock.get_draft_project_id()
@@ -2282,8 +2353,11 @@ def render_scope_selector_block() -> None:
         use_container_width=True,
     ):
         try:
+            project_api.select_project(user_id=draft_uid, project_id=draft_project_id)
             scope_lock.apply_draft_scope()
         except ValueError as exc:
+            st.warning(str(exc))
+        except project_api.ProjectApiError as exc:
             st.warning(str(exc))
         else:
             # Scope switched: invalidate loaded scope-cached resources.
@@ -2295,6 +2369,10 @@ def render_scope_selector_block() -> None:
             st.session_state.pop("_followed_citations_cache", None)
             st.session_state.pop("graph_nav_contexts_cache", None)
             _rerun()
+
+    scope_err = st.session_state.get("scope_projects_error")
+    if scope_err:
+        st.caption(f"Project list unavailable: {scope_err}")
 
     st.caption(_applied_scope_badge())
 

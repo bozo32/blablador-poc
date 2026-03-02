@@ -13,6 +13,13 @@ class ProjectApiError(RuntimeError):
     pass
 
 
+def _require_user_header(*, user_id: Optional[str]) -> Dict[str, str]:
+    uid = str(user_id or "").strip()
+    if not uid:
+        raise ProjectApiError("project API request requires user_id")
+    return {"X-User-Id": uid}
+
+
 def _require_project_headers(
     *,
     project_id: Optional[str],
@@ -155,3 +162,60 @@ def wipe_everything(*, confirm: str) -> Dict[str, Any]:
         if detail:
             msg = f"{msg} ({detail})"
         raise ProjectApiError(msg) from exc
+
+
+def list_projects(*, user_id: Optional[str]) -> Dict[str, Any]:
+    url = f"{_api_root()}/projects"
+    headers = _require_user_header(user_id=user_id)
+    try:
+        resp = requests.get(url, headers=headers, timeout=DEFAULT_TIMEOUT)
+        resp.raise_for_status()
+        return resp.json() if resp.text else {}
+    except requests.RequestException as exc:
+        raise ProjectApiError(str(exc)) from exc
+
+
+def create_project(
+    *,
+    user_id: Optional[str],
+    name: Optional[str] = None,
+    project_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    url = f"{_api_root()}/projects"
+    headers = _require_user_header(user_id=user_id)
+    payload: Dict[str, Any] = {}
+    if str(name or "").strip():
+        payload["name"] = str(name).strip()
+    if str(project_id or "").strip():
+        payload["project_id"] = str(project_id).strip()
+    try:
+        resp = requests.post(url, json=payload, headers=headers, timeout=DEFAULT_TIMEOUT)
+        resp.raise_for_status()
+        return resp.json() if resp.text else {}
+    except requests.RequestException as exc:
+        raise ProjectApiError(str(exc)) from exc
+
+
+def select_project(*, user_id: Optional[str], project_id: str) -> Dict[str, Any]:
+    url = f"{_api_root()}/projects/select"
+    headers = _require_user_header(user_id=user_id)
+    payload = {"project_id": str(project_id or "").strip()}
+    if not payload["project_id"]:
+        raise ProjectApiError("project API request requires project_id")
+    try:
+        resp = requests.post(url, json=payload, headers=headers, timeout=DEFAULT_TIMEOUT)
+        resp.raise_for_status()
+        return resp.json() if resp.text else {}
+    except requests.RequestException as exc:
+        raise ProjectApiError(str(exc)) from exc
+
+
+def get_active_project(*, user_id: Optional[str]) -> Dict[str, Any]:
+    url = f"{_api_root()}/projects/active"
+    headers = _require_user_header(user_id=user_id)
+    try:
+        resp = requests.get(url, headers=headers, timeout=DEFAULT_TIMEOUT)
+        resp.raise_for_status()
+        return resp.json() if resp.text else {}
+    except requests.RequestException as exc:
+        raise ProjectApiError(str(exc)) from exc

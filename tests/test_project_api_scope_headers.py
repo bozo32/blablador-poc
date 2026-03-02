@@ -93,3 +93,46 @@ def test_project_api_headers_require_project_id() -> None:
 def test_project_api_headers_require_user_for_scoped_endpoints() -> None:
     with pytest.raises(project_api.ProjectApiError, match="user_id"):
         project_api.get_meta(project_id="proj-a", user_id=None)
+
+
+def test_project_membership_endpoints_require_user_and_send_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def _fake_get(url: str, **kwargs):
+        captured["get"] = {"url": url, **kwargs}
+        if url.endswith("/projects/active"):
+            return _FakeResponse({"active_project_id": "proj-a"})
+        return _FakeResponse({"projects": [], "active_project_id": "proj-a"})
+
+    def _fake_post(url: str, **kwargs):
+        captured.setdefault("posts", []).append({"url": url, **kwargs})
+        if url.endswith("/projects/select"):
+            return _FakeResponse({"ok": True, "active_project_id": "proj-b"})
+        return _FakeResponse(
+            {
+                "project": {"project_id": "proj-b"},
+                "active_project_id": "proj-b",
+            }
+        )
+
+    monkeypatch.setattr(project_api, "_api_root", lambda: "http://api")
+    monkeypatch.setattr(project_api.requests, "get", _fake_get)
+    monkeypatch.setattr(project_api.requests, "post", _fake_post)
+
+    listing = project_api.list_projects(user_id="user-a")
+    assert listing["active_project_id"] == "proj-a"
+    assert captured["get"]["headers"] == {"X-User-Id": "user-a"}
+
+    created = project_api.create_project(user_id="user-a", name="Project B")
+    assert created["active_project_id"] == "proj-b"
+
+    selected = project_api.select_project(user_id="user-a", project_id="proj-b")
+    assert selected["ok"] is True
+
+    active = project_api.get_active_project(user_id="user-a")
+    assert active["active_project_id"] == "proj-a"
+
+    with pytest.raises(project_api.ProjectApiError, match="user_id"):
+        project_api.list_projects(user_id=None)

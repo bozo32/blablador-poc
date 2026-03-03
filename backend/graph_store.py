@@ -832,7 +832,15 @@ class GraphStore:
                 continue
             node_id = self.resolve_alias(f"ingest:{ingest_id}", project_id=pid)
             if not node_id:
-                continue
+                # Backfill legacy projects where spine ingests exist but graph
+                # projection rows were never created (or were pruned).
+                try:
+                    self.index_ingest_upload(doc)
+                except Exception:
+                    pass
+                node_id = self.resolve_alias(f"ingest:{ingest_id}", project_id=pid)
+                if not node_id:
+                    continue
 
             extraction = doc.get("extraction") if isinstance(doc.get("extraction"), dict) else {}
             body_extraction = (
@@ -1018,6 +1026,64 @@ class GraphStore:
                 "properties": props,
             }
 
+        # Collapse duplicate document nodes that represent the same uploaded ingest.
+        # This can happen when a cited reference node (doi/bib) later gets uploaded
+        # as a full work (sha-based node). For ledger counts, both nodes should
+        # behave as one logical work.
+        ingest_groups: Dict[str, List[str]] = {}
+        for node_id, doc in docs.items():
+            ingest_ids = (doc.get("properties") or {}).get("ingest_ids") or []
+            ingest_id = ""
+            if isinstance(ingest_ids, list) and ingest_ids:
+                ingest_id = str(ingest_ids[0] or "").strip()
+            group_key = f"ingest:{ingest_id}" if ingest_id else f"node:{node_id}"
+            ingest_groups.setdefault(group_key, []).append(node_id)
+
+        def _is_sha_node(node_id: str) -> bool:
+            nid = str(node_id or "").strip().lower()
+            return nid.startswith("doc:sha")
+
+        canonical_for_node: Dict[str, str] = {}
+        canonical_docs: Dict[str, dict] = {}
+        for members in ingest_groups.values():
+            ordered = sorted(
+                members,
+                key=lambda nid: (
+                    0 if _is_sha_node(nid) else 1,
+                    int((docs.get(nid) or {}).get("num") or 0),
+                    str(nid),
+                ),
+            )
+            canonical_id = ordered[0]
+            for nid in members:
+                canonical_for_node[nid] = canonical_id
+
+            merged = dict(docs.get(canonical_id) or {})
+            merged_props = dict((merged.get("properties") or {}))
+            for nid in ordered[1:]:
+                other = docs.get(nid) or {}
+                other_props = other.get("properties") or {}
+                for key in (
+                    "title",
+                    "authors",
+                    "year",
+                    "filename",
+                    "raw_reference",
+                    "doi",
+                ):
+                    if merged_props.get(key) in (None, "", []) and other_props.get(key) not in (
+                        None,
+                        "",
+                        [],
+                    ):
+                        merged_props[key] = other_props.get(key)
+                if not merged.get("label") and other.get("label"):
+                    merged["label"] = other.get("label")
+            merged["properties"] = merged_props
+            canonical_docs[canonical_id] = merged
+
+        docs = canonical_docs
+
         anchored_nodes = {
             node_id
             for node_id, doc in docs.items()
@@ -1041,8 +1107,8 @@ class GraphStore:
         outgoing_suggested: Dict[str, set[str]] = {k: set() for k in docs.keys()}
         incoming_suggested: Dict[str, set[str]] = {k: set() for k in docs.keys()}
         for src, tgt, enabled, props_raw in cite_rows:
-            src2 = str(src)
-            tgt2 = str(tgt)
+            src2 = canonical_for_node.get(str(src), str(src))
+            tgt2 = canonical_for_node.get(str(tgt), str(tgt))
             props = props_raw if isinstance(props_raw, dict) else {}
             if props_raw is not None and not isinstance(props_raw, dict):
                 try:

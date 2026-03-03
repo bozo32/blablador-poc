@@ -8,15 +8,17 @@ from typing import Any, Dict, MutableMapping, Optional
 import requests
 import streamlit as st
 
+from frontend import scope_lock
+
 DEFAULT_TIMEOUT = 45
 
 
 def _strict_scope_headers(*, reviewer_uid: Optional[str] = None) -> Dict[str, str]:
-    pid = str(st.session_state.get("project_id") or "").strip()
+    pid = str(scope_lock.get_applied_project_id() or "").strip()
     if not pid:
         raise EvidenceApiError("evidence request requires project_id")
 
-    session_uid = str(st.session_state.get("active_reviewer_uid") or "").strip()
+    session_uid = str(scope_lock.get_applied_uid() or "").strip()
     reviewer = str(reviewer_uid or "").strip() or session_uid
     user_id = session_uid or reviewer
     if not user_id:
@@ -105,7 +107,7 @@ def _request(
     headers = kwargs.pop("headers", {})
     headers = {**_auth_headers(), **headers}
     if str(path or "").startswith("/attachments"):
-        pid = str(st.session_state.get("project_id") or "").strip()
+        pid = str(scope_lock.get_applied_project_id() or "").strip()
         if not pid:
             raise EvidenceApiError("evidence request requires project_id")
         headers = {"X-Project-Id": pid, **headers}

@@ -194,6 +194,105 @@ def test_ingestion_mutation_sends_scope_identity_headers(
     }
 
 
+def test_ingestion_citation_context_fails_fast_without_project_or_user() -> None:
+    with pytest.raises(RuntimeError, match="project_id"):
+        ingestion_api.get_citation_context(
+            "http://api",
+            "doc-1",
+            0,
+            project_id=None,
+            user_id="reviewer-a",
+        )
+
+    with pytest.raises(RuntimeError, match="user_id"):
+        ingestion_api.get_citation_context(
+            "http://api",
+            "doc-1",
+            0,
+            project_id="proj-a",
+            user_id=None,
+        )
+
+
+def test_ingestion_citation_context_sends_scope_identity_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def _fake_get(url: str, **kwargs):
+        captured["url"] = url
+        captured.update(kwargs)
+        return _FakeResponse({"context": {"citing_sentence": "x"}})
+
+    monkeypatch.setattr(ingestion_api.requests, "get", _fake_get)
+
+    payload = ingestion_api.get_citation_context(
+        "http://api",
+        "doc-1",
+        2,
+        target_id="ref-1",
+        project_id="proj-a",
+        user_id="reviewer-a",
+    )
+    assert payload["context"]["citing_sentence"] == "x"
+    assert captured["headers"] == {
+        "X-Project-Id": "proj-a",
+        "X-User-Id": "reviewer-a",
+    }
+
+
+def test_ingestion_citation_graph_fails_fast_without_project_or_user() -> None:
+    with pytest.raises(RuntimeError, match="project_id"):
+        ingestion_api.get_citation_graph(
+            "http://api",
+            "doc-1",
+            "ref-1",
+            1,
+            25,
+            project_id=None,
+            user_id="reviewer-a",
+        )
+
+    with pytest.raises(RuntimeError, match="user_id"):
+        ingestion_api.get_citation_graph(
+            "http://api",
+            "doc-1",
+            "ref-1",
+            1,
+            25,
+            project_id="proj-a",
+            user_id=None,
+        )
+
+
+def test_ingestion_citation_graph_sends_scope_identity_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def _fake_get(url: str, **kwargs):
+        captured["url"] = url
+        captured.update(kwargs)
+        return _FakeResponse({"nodes": [], "edges": []})
+
+    monkeypatch.setattr(ingestion_api.requests, "get", _fake_get)
+
+    payload = ingestion_api.get_citation_graph(
+        "http://api",
+        "doc-1",
+        "ref-1",
+        1,
+        25,
+        project_id="proj-a",
+        user_id="reviewer-a",
+    )
+    assert payload == {"nodes": [], "edges": []}
+    assert captured["headers"] == {
+        "X-Project-Id": "proj-a",
+        "X-User-Id": "reviewer-a",
+    }
+
+
 def test_graph_mutation_fails_fast_without_scope_identity() -> None:
     with pytest.raises(graph_api.GraphApiError, match="project_id"):
         graph_api.reindex_docs(project_id=None, user_id="reviewer-a")
@@ -244,18 +343,18 @@ def test_evidence_client_sends_strict_scope_identity_headers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, Any] = {}
-    stub = type(
-        "_Stub",
-        (),
-        {
-            "session_state": {
-                "project_id": "proj-a",
-                "active_reviewer_uid": "reviewer-a",
-                "api_url": "http://api",
-            }
-        },
-    )()
+    stub = type("_Stub", (), {"session_state": {"api_url": "http://api"}})()
     monkeypatch.setattr(evidence_api, "st", stub)
+    monkeypatch.setattr(
+        evidence_api.scope_lock,
+        "get_applied_project_id",
+        lambda: "proj-a",
+    )
+    monkeypatch.setattr(
+        evidence_api.scope_lock,
+        "get_applied_uid",
+        lambda: "reviewer-a",
+    )
 
     def _fake_request(method: str, path: str, **kwargs):
         captured["method"] = method
@@ -281,8 +380,6 @@ def test_judgment_client_sends_strict_scope_identity_headers(
         (),
         {
             "session_state": {
-                "project_id": "proj-a",
-                "active_reviewer_uid": "reviewer-a",
                 "api_url": "http://api",
             },
             "toast": lambda *_args, **_kwargs: None,
@@ -290,6 +387,16 @@ def test_judgment_client_sends_strict_scope_identity_headers(
         },
     )()
     monkeypatch.setattr(judgment_api, "st", stub)
+    monkeypatch.setattr(
+        judgment_api.scope_lock,
+        "get_applied_project_id",
+        lambda: "proj-a",
+    )
+    monkeypatch.setattr(
+        judgment_api.scope_lock,
+        "get_applied_uid",
+        lambda: "reviewer-a",
+    )
 
     def _fake_request(method: str, url: str, **kwargs):
         captured["method"] = method

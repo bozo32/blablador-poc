@@ -15,7 +15,7 @@ import requests
 import streamlit as st
 
 from backend.settings import AppSettings
-from frontend import claim_queue
+from frontend import claim_queue, scope_lock
 
 
 QUEUE_KEY = "attachment_queue"
@@ -117,16 +117,11 @@ def _api_url() -> str:
 
 
 def _project_id() -> str:
-    pid = str(st.session_state.get("project_id") or "").strip()
-    return pid
+    return str(scope_lock.get_applied_project_id() or "").strip()
 
 
 def _active_scope_identity() -> str:
-    reviewer = str(st.session_state.get("active_reviewer_uid") or "").strip()
-    if reviewer:
-        return reviewer
-    meta = st.session_state.get("project_meta") or {}
-    return str(meta.get("active_reviewer_uid") or "").strip()
+    return str(scope_lock.get_applied_uid() or "").strip()
 
 
 def _attachment_headers(

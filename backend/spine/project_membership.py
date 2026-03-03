@@ -63,6 +63,38 @@ def list_projects_for_user(*, user_id: str) -> list[dict[str, Any]]:
     return out
 
 
+def list_known_user_ids(*, limit: int = 200) -> list[str]:
+    max_rows = max(1, min(int(limit), 1000))
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT user_id
+                  FROM (
+                        SELECT user_id, MAX(updated_at) AS touched_at
+                          FROM user_project_memberships
+                         GROUP BY user_id
+                        UNION ALL
+                        SELECT user_id, MAX(updated_at) AS touched_at
+                          FROM user_scope_sessions
+                         GROUP BY user_id
+                       ) users
+                 GROUP BY user_id
+                 ORDER BY MAX(touched_at) DESC NULLS LAST, user_id ASC
+                 LIMIT %s
+                """,
+                (max_rows,),
+            )
+            rows = cur.fetchall() or []
+
+    out: list[str] = []
+    for row in rows:
+        user_id = str((row or [""])[0] or "").strip()
+        if user_id:
+            out.append(user_id)
+    return out
+
+
 def get_active_project_for_user(*, user_id: str) -> str | None:
     uid = _clean_text(user_id, field="user_id")
     with connect() as conn:

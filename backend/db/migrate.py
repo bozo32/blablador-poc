@@ -329,6 +329,28 @@ _DDL_STATEMENTS: list[str] = [
       ON user_active_projects(project_id);
     """,
     """
+    CREATE TABLE IF NOT EXISTS user_scope_sessions (
+      user_id text PRIMARY KEY,
+      project_id text NULL,
+      reviewer_uid text NULL,
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      updated_by_user_id text NOT NULL DEFAULT 'local'
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS user_scope_sessions_project_id_idx
+      ON user_scope_sessions(project_id);
+    """,
+    """
+    INSERT INTO user_scope_sessions(user_id, project_id, reviewer_uid, updated_by_user_id)
+    SELECT a.user_id,
+           a.project_id,
+           a.user_id,
+           a.updated_by_user_id
+      FROM user_active_projects a
+    ON CONFLICT(user_id) DO NOTHING;
+    """,
+    """
     INSERT INTO user_project_memberships(user_id, project_id, role, created_by_user_id)
     VALUES ('default', 'default', 'owner', 'local')
     ON CONFLICT(user_id, project_id) DO NOTHING;

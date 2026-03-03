@@ -135,7 +135,7 @@ def test_auto_routed_unknown_hides_route_choice_controls(monkeypatch) -> None:
             "stage": "uploading",
             "last_event_at": "2026-01-01T00:00:00Z",
             "error": "",
-            "note": "",
+            "note": "Intent unclear; metadata processing runs first, then placement can be refined.",
             "doc_id": "doc-1",
             "source_queue_item_ids": [],
         }
@@ -149,10 +149,11 @@ def test_auto_routed_unknown_hides_route_choice_controls(monkeypatch) -> None:
     assert "Route as Citing" not in stub.button_labels
     assert "Route as Source" not in stub.button_labels
     assert "Attach now" not in stub.button_labels
-    assert any(
-        "Intent unclear; metadata processing runs first, then placement can be refined." in c
+    assert sum(
+        1
         for c in stub.captions
-    )
+        if "Intent unclear; metadata processing runs first, then placement can be refined." in c
+    ) == 1
 
 
 def test_empty_intake_copy_mentions_metadata_first_policy(monkeypatch) -> None:
@@ -174,3 +175,44 @@ def test_sources_empty_copy_no_longer_mentions_unclear_handoff(monkeypatch) -> N
     ui.render_sources_panel(max_rows=None)
 
     assert any("No sources yet. Upload via Drop PDFs." in c for c in stub.captions)
+
+
+def test_unapplied_scope_cleanup_clears_stale_center_context(monkeypatch) -> None:
+    stub = _StubStreamlit()
+    stub.session_state.update(
+        {
+            "selected_doc_id": "doc-1",
+            "active_document": {"id": "doc-1"},
+            "citation_context": {"snippet": "x"},
+            "citation_context_cache": {"k": "v"},
+            "graph_nav_contexts_cache": {"k": "v"},
+        }
+    )
+    monkeypatch.setattr(ui, "st", stub)
+
+    ui._clear_unapplied_scope_workspace_state()
+
+    assert stub.session_state["selected_doc_id"] == ""
+    assert stub.session_state["active_document"] is None
+    assert "citation_context" not in stub.session_state
+    assert "graph_nav_contexts_cache" not in stub.session_state
+
+
+def test_scope_cache_invalidation_clears_ledger_payload(monkeypatch) -> None:
+    stub = _StubStreamlit()
+    stub.session_state.update(
+        {
+            "ledger_payload": {"rows": []},
+            "project_meta": {"name": "x"},
+            "selected_doc_id": "doc-1",
+            "active_document": {"id": "doc-1"},
+            "_followed_citations_cache": ["x"],
+        }
+    )
+    monkeypatch.setattr(ui, "st", stub)
+
+    ui._invalidate_scope_cached_state()
+
+    assert "ledger_payload" not in stub.session_state
+    assert stub.session_state["project_meta"] is None
+    assert stub.session_state["selected_doc_id"] == ""

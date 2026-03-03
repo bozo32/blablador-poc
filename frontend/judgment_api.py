@@ -11,6 +11,8 @@ from typing import Any, Dict, MutableMapping, Optional
 import requests
 import streamlit as st
 
+from frontend import scope_lock
+
 DEFAULT_TIMEOUT = 45
 
 
@@ -50,11 +52,11 @@ def _normalize_reviewer_uid(value: Optional[str]) -> str:
 
 
 def _strict_scope_headers(*, reviewer_uid: Optional[str] = None) -> Dict[str, str]:
-    pid = str(_session_state().get("project_id") or "").strip()
+    pid = str(scope_lock.get_applied_project_id() or "").strip()
     if not pid:
         raise JudgmentApiError("judgment request requires project_id")
 
-    session_uid = str(_session_state().get("active_reviewer_uid") or "").strip()
+    session_uid = str(scope_lock.get_applied_uid() or "").strip()
     reviewer = _normalize_reviewer_uid(reviewer_uid) or session_uid
     user_id = session_uid or reviewer
     if not user_id:

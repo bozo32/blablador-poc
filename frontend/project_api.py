@@ -208,6 +208,16 @@ def list_projects(*, user_id: Optional[str]) -> Dict[str, Any]:
         raise ProjectApiError(str(exc)) from exc
 
 
+def list_users() -> Dict[str, Any]:
+    url = f"{_api_root()}/projects/users"
+    try:
+        resp = requests.get(url, timeout=DEFAULT_TIMEOUT)
+        resp.raise_for_status()
+        return resp.json() if resp.text else {}
+    except requests.RequestException as exc:
+        raise ProjectApiError(str(exc)) from exc
+
+
 def create_project(
     *,
     user_id: Optional[str],
@@ -248,6 +258,42 @@ def get_active_project(*, user_id: Optional[str]) -> Dict[str, Any]:
     headers = _require_user_header(user_id=user_id)
     try:
         resp = requests.get(url, headers=headers, timeout=DEFAULT_TIMEOUT)
+        resp.raise_for_status()
+        return resp.json() if resp.text else {}
+    except requests.RequestException as exc:
+        raise ProjectApiError(str(exc)) from exc
+
+
+def get_scope_session(*, user_id: Optional[str]) -> Dict[str, Any]:
+    url = f"{_api_root()}/scope/session"
+    headers = _require_user_header(user_id=user_id)
+    try:
+        resp = requests.get(url, headers=headers, timeout=DEFAULT_TIMEOUT)
+        resp.raise_for_status()
+        return resp.json() if resp.text else {}
+    except requests.RequestException as exc:
+        raise ProjectApiError(str(exc)) from exc
+
+
+def put_scope_session(
+    *,
+    user_id: Optional[str],
+    active_project_id: Optional[str] = None,
+    active_reviewer_uid: Optional[str] = None,
+) -> Dict[str, Any]:
+    url = f"{_api_root()}/scope/session"
+    headers = _require_user_header(user_id=user_id)
+    payload: Dict[str, Any] = {}
+    project_id = str(active_project_id or "").strip()
+    reviewer_uid = str(active_reviewer_uid or "").strip()
+    if project_id:
+        payload["active_project_id"] = project_id
+    if reviewer_uid:
+        payload["active_reviewer_uid"] = reviewer_uid
+    if not payload:
+        raise ProjectApiError("scope session update requires project_id or reviewer_uid")
+    try:
+        resp = requests.put(url, json=payload, headers=headers, timeout=DEFAULT_TIMEOUT)
         resp.raise_for_status()
         return resp.json() if resp.text else {}
     except requests.RequestException as exc:

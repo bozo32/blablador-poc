@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from backend.spine import project_membership
+from backend.spine import project_membership, scope_session
 
 
 def test_create_list_and_select_active_project() -> None:
@@ -46,3 +46,21 @@ def test_create_project_generates_id_when_missing() -> None:
     )
     assert created["project_id"]
     assert len(created["project_id"]) >= 8
+
+
+def test_list_known_user_ids_includes_scope_session_only_users() -> None:
+    project_membership.create_project_for_user(
+        user_id="member-user",
+        actor_user_id="member-user",
+        project_id="proj-a",
+    )
+    scope_session.set_scope_session_for_user(
+        user_id="scope-only-user",
+        actor_user_id="scope-only-user",
+        active_project_id=None,
+        active_reviewer_uid="scope-only-user",
+    )
+
+    users = project_membership.list_known_user_ids(limit=200)
+    assert "member-user" in users
+    assert "scope-only-user" in users

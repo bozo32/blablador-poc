@@ -77,3 +77,18 @@ def test_require_project_id_for_upload_supports_dev_default_and_counts(
 
     snapshot = backend_main._scope_fallback_snapshot()
     assert int(snapshot.get("/test/upload") or 0) == 1
+
+
+def test_scope_observability_runtime_stamp_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(backend_main.app_settings, "API_RUNTIME_STAMP", "api-runtime-2026")
+    monkeypatch.setattr(backend_main.app_settings, "API_GIT_SHA", "abcdef1234567890")
+    monkeypatch.setattr(backend_main.app_settings, "API_IMAGE_TAG", "app-api:test")
+
+    client = TestClient(backend_main.app)
+    resp = client.get("/scope/observability/runtime-stamp")
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["api_runtime_stamp"] == "api-runtime-2026"
+    assert payload["api_git_sha"] == "abcdef1234567890"
+    assert payload["api_image_tag"] == "app-api:test"

@@ -32,6 +32,24 @@ def _require_mutation_headers(
     }
 
 
+def _require_scoped_read_headers(
+    *,
+    project_id: Optional[str],
+    user_id: Optional[str],
+    operation: str,
+) -> Dict[str, str]:
+    pid = str(project_id or "").strip()
+    uid = str(user_id or "").strip()
+    if not pid:
+        raise RuntimeError(f"{operation} requires project_id")
+    if not uid:
+        raise RuntimeError(f"{operation} requires user_id")
+    return {
+        "X-Project-Id": pid,
+        "X-User-Id": uid,
+    }
+
+
 def _parse_response(response: requests.Response) -> Optional[dict]:
     try:
         response.raise_for_status()
@@ -187,6 +205,7 @@ def get_citation_context(
     target_id: Optional[str] = None,
     *,
     project_id: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> dict:
     """Fetch citation context (sentence + neighbors) for a callout."""
     url = f"{api_url.rstrip('/')}/ingest/{doc_id}/citation-context"
@@ -196,7 +215,11 @@ def get_citation_context(
     try:
         response = requests.get(
             url,
-            headers=_ingest_headers(project_id),
+            headers=_require_scoped_read_headers(
+                project_id=project_id,
+                user_id=user_id,
+                operation="citation context lookup",
+            ),
             params=params,
             timeout=DEFAULT_TIMEOUT,
         )
@@ -214,6 +237,7 @@ def get_citation_graph(
     doi: Optional[str] = None,
     *,
     project_id: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> dict:
     """Fetch citation graph data for the selected cited work."""
     url = f"{api_url.rstrip('/')}/ingest/{doc_id}/citation-graph"
@@ -228,7 +252,11 @@ def get_citation_graph(
     try:
         response = requests.get(
             url,
-            headers=_ingest_headers(project_id),
+            headers=_require_scoped_read_headers(
+                project_id=project_id,
+                user_id=user_id,
+                operation="citation graph lookup",
+            ),
             params=params,
             timeout=DEFAULT_TIMEOUT,
         )

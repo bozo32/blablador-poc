@@ -138,8 +138,13 @@ from backend.spine.project_membership import (
     create_project_for_user,
     get_active_project_for_user,
     has_project_membership,
+    list_known_user_ids,
     list_projects_for_user,
     set_active_project_for_user,
+)
+from backend.spine.scope_session import (
+    get_scope_session_for_user,
+    set_scope_session_for_user,
 )
 
 # Configure logging.
@@ -355,6 +360,20 @@ def get_scope_observability_fallbacks():
         "fallback_counts_by_endpoint": counts,
         "total_fallbacks": int(sum(counts.values())),
     }
+
+
+@app.get("/scope/observability/runtime-stamp")
+def get_scope_observability_runtime_stamp():
+    payload: dict[str, str] = {
+        "api_runtime_stamp": str(getattr(app_settings, "API_RUNTIME_STAMP", "") or ""),
+    }
+    git_sha = str(getattr(app_settings, "API_GIT_SHA", "") or "").strip()
+    image_tag = str(getattr(app_settings, "API_IMAGE_TAG", "") or "").strip()
+    if git_sha:
+        payload["api_git_sha"] = git_sha
+    if image_tag:
+        payload["api_image_tag"] = image_tag
+    return payload
 
 
 app.add_middleware(
@@ -1353,6 +1372,20 @@ def _require_projects_user_id(
     return user_id
 
 
+def _sync_scope_session_project(*, user_id: str, project_id: str) -> None:
+    try:
+        current = get_scope_session_for_user(user_id=user_id)
+        reviewer_uid = str(current.get("active_reviewer_uid") or "").strip() or user_id
+        set_scope_session_for_user(
+            user_id=user_id,
+            actor_user_id=user_id,
+            active_project_id=project_id,
+            active_reviewer_uid=reviewer_uid,
+        )
+    except Exception:
+        logger.exception("Failed to sync scope session for user=%s", user_id)
+
+
 def _require_project_membership_for_scope(*, project_id: str, user_id: str) -> None:
     if not has_project_membership(user_id=user_id, project_id=project_id):
         raise HTTPException(status_code=403, detail="User is not a member of this project")
@@ -1419,11 +1452,75 @@ def _apply_canonical_ledger_status(rows: list[dict], by_ingest: dict[str, dict])
 def _build_ledger_response(*, project_id: str, reconcile: bool = False) -> dict:
     scoped_store = _scoped_graph_store(project_id)
     by_ingest = _list_spine_ingests_by_id(project_id)
+
+    def _projection_is_sparse() -> bool:
+        try:
+            with connect() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT count(*) FROM graph_nodes WHERE project_id=%s AND kind='document'",
+                        (str(project_id),),
+                    )
+                    node_count = int((cur.fetchone() or [0])[0] or 0)
+                    cur.execute(
+                        "SELECT count(*) FROM graph_edges WHERE project_id=%s AND kind='CITES' AND enabled=true",
+                        (str(project_id),),
+                    )
+                    edge_count = int((cur.fetchone() or [0])[0] or 0)
+        except Exception:
+            return False
+        expected_docs = len(by_ingest)
+        if expected_docs <= 0:
+            return False
+        return node_count < expected_docs or edge_count == 0
+
+    def _backfill_projection_from_spine() -> None:
+        for ingest_id in list(by_ingest.keys()):
+            try:
+                full = build_ingested_document_from_spine(
+                    work_id=str(ingest_id),
+                    project_id=str(project_id),
+                    include_extraction_data=True,
+                )
+            except Exception:
+                full = None
+            if not isinstance(full, dict):
+                continue
+            try:
+                scoped_store.index_ingest_upload(full)
+            except Exception:
+                continue
+
+            extraction_data = ((full.get("extraction") or {}).get("data"))
+            if isinstance(extraction_data, dict) and extraction_data:
+                try:
+                    scoped_store.index_extraction(
+                        ingest_meta=full,
+                        extraction_data=extraction_data,
+                    )
+                except Exception:
+                    pass
+
+            resolution_data = ((full.get("resolution") or {}).get("data"))
+            if isinstance(resolution_data, list) and resolution_data:
+                try:
+                    scoped_store.index_resolution(
+                        ingest_meta=full,
+                        resolution_data=resolution_data,
+                    )
+                except Exception:
+                    pass
+
     if reconcile and by_ingest:
         try:
             scoped_store.reconcile_ingest_projection(ingest_docs=list(by_ingest.values()))
         except Exception:
             logger.exception("Ledger reconciliation failed")
+        if _projection_is_sparse():
+            try:
+                _backfill_projection_from_spine()
+            except Exception:
+                logger.exception("Ledger graph backfill from spine failed")
 
     rows = scoped_store.ledger_rows()
     options = scoped_store.ledger_options()
@@ -1595,6 +1692,11 @@ def list_projects(
     }
 
 
+@app.get("/projects/users", response_model=schemas.ProjectUserListResponse)
+def list_project_users():
+    return {"users": list_known_user_ids(limit=200)}
+
+
 @app.post("/projects", response_model=schemas.ProjectMembershipCreateResponse)
 def create_project(
     payload: schemas.ProjectMembershipCreateRequest,
@@ -1628,6 +1730,7 @@ def create_project(
         project_id=project_id,
         actor_user_id=user_id,
     )
+    _sync_scope_session_project(user_id=user_id, project_id=project_id)
     return {
         "project": {
             "project_id": project_id,
@@ -1662,6 +1765,7 @@ def select_project(
             status_code=403,
             detail="User is not a member of this project",
         )
+    _sync_scope_session_project(user_id=user_id, project_id=project_id)
     return {"ok": True, "active_project_id": project_id}
 
 
@@ -1673,7 +1777,56 @@ def get_active_project(
         x_user_id=x_user_id,
         endpoint="/projects/active",
     )
-    return {"active_project_id": get_active_project_for_user(user_id=user_id)}
+    try:
+        session = get_scope_session_for_user(user_id=user_id)
+        active_project_id = str(session.get("active_project_id") or "").strip() or None
+    except Exception:
+        active_project_id = None
+    if not active_project_id:
+        active_project_id = get_active_project_for_user(user_id=user_id)
+    return {"active_project_id": active_project_id}
+
+
+@app.get("/scope/session", response_model=schemas.ScopeSessionResponse)
+def get_scope_session(
+    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
+):
+    user_id = _require_projects_user_id(x_user_id=x_user_id, endpoint="/scope/session")
+    try:
+        return get_scope_session_for_user(user_id=user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.put("/scope/session", response_model=schemas.ScopeSessionResponse)
+def put_scope_session(
+    payload: schemas.ScopeSessionUpdateRequest,
+    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
+):
+    user_id = _require_projects_user_id(x_user_id=x_user_id, endpoint="/scope/session")
+    active_project_id = str(payload.active_project_id or "").strip() or None
+    active_reviewer_uid = str(payload.active_reviewer_uid or "").strip() or None
+    if active_project_id is None and active_reviewer_uid is None:
+        raise HTTPException(
+            status_code=422,
+            detail="active_project_id or active_reviewer_uid is required",
+        )
+
+    try:
+        return set_scope_session_for_user(
+            user_id=user_id,
+            actor_user_id=user_id,
+            active_project_id=active_project_id,
+            active_reviewer_uid=active_reviewer_uid,
+        )
+    except ValueError as exc:
+        if "not a member" in str(exc):
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @app.get("/project", response_model=schemas.ProjectMeta)

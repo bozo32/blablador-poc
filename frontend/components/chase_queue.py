@@ -17,18 +17,15 @@ except ImportError:  # pragma: no cover
 
 import requests
 
+from frontend import scope_lock
+
 
 def _project_id() -> str:
-    pid = str(st.session_state.get("project_id") or "").strip()
-    return pid
+    return str(scope_lock.get_applied_project_id() or "").strip()
 
 
 def _active_reviewer_uid() -> str:
-    direct = str(st.session_state.get("active_reviewer_uid") or "").strip()
-    if direct:
-        return direct
-    meta = st.session_state.get("project_meta") or {}
-    return str(meta.get("active_reviewer_uid") or "").strip()
+    return str(scope_lock.get_applied_uid() or "").strip()
 
 
 def _project_headers() -> Dict[str, str]:

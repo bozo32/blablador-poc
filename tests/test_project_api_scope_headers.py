@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from frontend import project_api
+from frontend import project_api, ui
 
 
 class _FakeResponse:
@@ -104,6 +104,8 @@ def test_project_membership_endpoints_require_user_and_send_headers(
         captured["get"] = {"url": url, **kwargs}
         if url.endswith("/projects/active"):
             return _FakeResponse({"active_project_id": "proj-a"})
+        if url.endswith("/projects/users"):
+            return _FakeResponse({"users": ["user-a"]})
         return _FakeResponse({"projects": [], "active_project_id": "proj-a"})
 
     def _fake_post(url: str, **kwargs):
@@ -125,6 +127,9 @@ def test_project_membership_endpoints_require_user_and_send_headers(
     assert listing["active_project_id"] == "proj-a"
     assert captured["get"]["headers"] == {"X-User-Id": "user-a"}
 
+    users = project_api.list_users()
+    assert users == {"users": ["user-a"]}
+
     created = project_api.create_project(user_id="user-a", name="Project B")
     assert created["active_project_id"] == "proj-b"
 
@@ -136,3 +141,63 @@ def test_project_membership_endpoints_require_user_and_send_headers(
 
     with pytest.raises(project_api.ProjectApiError, match="user_id"):
         project_api.list_projects(user_id=None)
+
+
+def test_scope_session_endpoints_require_user_and_send_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def _fake_get(url: str, **kwargs):
+        captured["get"] = {"url": url, **kwargs}
+        return _FakeResponse(
+            {
+                "user_id": "user-a",
+                "active_project_id": "proj-a",
+                "active_reviewer_uid": "reviewer-a",
+            }
+        )
+
+    def _fake_put(url: str, **kwargs):
+        captured["put"] = {"url": url, **kwargs}
+        return _FakeResponse(
+            {
+                "user_id": "user-a",
+                "active_project_id": "proj-b",
+                "active_reviewer_uid": "reviewer-b",
+            }
+        )
+
+    monkeypatch.setattr(project_api, "_api_root", lambda: "http://api")
+    monkeypatch.setattr(project_api.requests, "get", _fake_get)
+    monkeypatch.setattr(project_api.requests, "put", _fake_put)
+
+    session = project_api.get_scope_session(user_id="user-a")
+    assert session["active_project_id"] == "proj-a"
+    assert captured["get"]["headers"] == {"X-User-Id": "user-a"}
+
+    updated = project_api.put_scope_session(
+        user_id="user-a",
+        active_project_id="proj-b",
+        active_reviewer_uid="reviewer-b",
+    )
+    assert updated["active_project_id"] == "proj-b"
+    assert captured["put"]["headers"] == {"X-User-Id": "user-a"}
+    assert captured["put"]["json"] == {
+        "active_project_id": "proj-b",
+        "active_reviewer_uid": "reviewer-b",
+    }
+
+    with pytest.raises(project_api.ProjectApiError, match="scope session update"):
+        project_api.put_scope_session(user_id="user-a")
+
+
+def test_scope_user_discovery_normalizes_malformed_payload_shapes() -> None:
+    assert ui._normalize_scope_user_ids({"users": [" user-a ", "", None, "user-a"]}) == [
+        "user-a"
+    ]
+    assert ui._normalize_scope_user_ids({"users": [{"user_id": "user-b"}, {"id": "user-c"}]}) == [
+        "user-b",
+        "user-c",
+    ]
+    assert ui._normalize_scope_user_ids("bad-payload") == []

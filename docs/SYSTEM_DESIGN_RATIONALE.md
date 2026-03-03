@@ -1,6 +1,6 @@
 # System Design Rationale
 
-Status: explanatory design intent for engineers and technical stakeholders (updated 2026-03-02)
+Status: explanatory design intent for engineers and technical stakeholders (updated 2026-03-03)
 
 This document answers a practical question: "Why is the system built this way, and what does that buy us?"
 
@@ -31,7 +31,7 @@ The system is designed as a durable review workflow, not a transient UI demo: th
 ### 1.1 Spine-first persistence
 
 - Durable state belongs to backend persistence layers (Postgres + object store).
-- UI session state is orchestrational, not authoritative.
+- UI session state is orchestrational/cache-only, not authoritative.
 - Reason: this minimizes state drift and supports eventual multi-user concurrency.
 
 ### 1.2 Explicit workflow transitions
@@ -42,8 +42,14 @@ The system is designed as a durable review workflow, not a transient UI demo: th
 ### 1.3 Scope-first API model
 
 - Project scope and actor identity are progressively required for critical routes.
-- Membership state is persisted and active project can be server-truth-backed.
+- Membership state is persisted and active scope is server-truth-backed via scope session APIs.
 - Reason: prevents silent cross-project contamination and supports collaborative tenancy.
+
+### 1.5 Client replaceability by contract
+
+- Workflow authority is in backend contracts, not Streamlit widget/session behavior.
+- New clients (hackathon UIs, SPA, mobile) should integrate by calling the same scope/workflow APIs.
+- Reason: allows rapid UI evolution while keeping the spine stable and auditable.
 
 ### 1.4 Graph as architecture
 

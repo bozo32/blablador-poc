@@ -969,6 +969,10 @@ class ProjectMembershipListResponse(BaseModel):
     active_project_id: Optional[str] = None
 
 
+class ProjectUserListResponse(BaseModel):
+    users: List[str] = Field(default_factory=list)
+
+
 class ProjectMembershipCreateRequest(BaseModel):
     project_id: Optional[str] = None
     name: Optional[str] = None
@@ -990,6 +994,18 @@ class ProjectMembershipSelectResponse(BaseModel):
 
 class ProjectMembershipActiveResponse(BaseModel):
     active_project_id: Optional[str] = None
+
+
+class ScopeSessionUpdateRequest(BaseModel):
+    active_project_id: Optional[str] = None
+    active_reviewer_uid: Optional[str] = None
+
+
+class ScopeSessionResponse(BaseModel):
+    user_id: str
+    active_project_id: Optional[str] = None
+    active_reviewer_uid: Optional[str] = None
+    updated_at: Optional[str] = None
 
 
 class AutoPlaceRequest(BaseModel):

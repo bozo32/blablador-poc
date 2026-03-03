@@ -1,6 +1,6 @@
 # Identity, Scope, and Visibility Contract
 
-Status: active POC contract (updated 2026-03-02)
+Status: active POC contract (updated 2026-03-03)
 
 This document is intentionally written for two readers:
 
@@ -21,7 +21,7 @@ This document is intentionally written for two readers:
 ### What is now true
 
 - Project membership exists in the backend (`/projects`, `/projects/select`, `/projects/active`).
-- Active project can persist per user.
+- Canonical scope session is backend-owned (`/scope/session`) and persists per user.
 - Most sensitive write paths are strict-scoped and reject missing identity/scope.
 - Visibility states exist for opinion events:
   - `private`
@@ -54,7 +54,8 @@ This POC now demonstrates project/member-aware workflow control, explicit scope 
 
 - UI maintains draft vs applied scope states.
 - Activity is gated until scope is applied.
-- Applied scope is authoritative for API calls; draft scope is not.
+- Applied scope is a projection of backend scope session; draft scope is not authoritative.
+- Client local state is cache/view only and must not become source-of-truth for cross-project behavior.
 
 ### 1.3 Project membership invariants
 
@@ -67,7 +68,8 @@ This POC now demonstrates project/member-aware workflow control, explicit scope 
 - Membership authority:
   - `user_project_memberships`
 - Active project authority:
-  - `user_active_projects`
+  - `user_scope_sessions` (canonical)
+  - `user_active_projects` (compatibility mirror while migration is active)
 - Project metadata:
   - `project_meta` (metadata only; not membership authority)
 - Opinion visibility data:
@@ -75,7 +77,16 @@ This POC now demonstrates project/member-aware workflow control, explicit scope 
 
 ## 3) API Contract (Current)
 
-### 3.1 Project membership endpoints
+### 3.1 Scope session endpoints (canonical)
+
+- `GET /scope/session`
+  - Requires `X-User-Id`
+  - Returns canonical scope session (`user_id`, `active_project_id`, `active_reviewer_uid`, `updated_at`).
+- `PUT /scope/session`
+  - Requires `X-User-Id`
+  - Updates canonical scope session, validates membership for project switches.
+
+### 3.2 Project membership endpoints (supporting)
 
 - `GET /projects`
   - Requires `X-User-Id`
@@ -90,13 +101,13 @@ This POC now demonstrates project/member-aware workflow control, explicit scope 
   - Requires `X-User-Id`
   - Returns current active project.
 
-### 3.2 Scoped workspace routes
+### 3.3 Scoped workspace routes
 
 - Pilot write paths are strictified (ledger, attachment mutation family, opinion append path).
 - Additional high-risk scoped paths were strictified in follow-up batches.
 - Remaining deferred routes are tracked in phase prune/verification docs.
 
-### 3.3 Visibility semantics (opinion stream)
+### 3.4 Visibility semantics (opinion stream)
 
 - Canonical values: `private`, `selectable`, `public`.
 - Alias handling: legacy `shared` maps to `selectable`.

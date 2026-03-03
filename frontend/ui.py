@@ -105,6 +105,7 @@ settings = AppSettings()
 
 
 DEFAULT_BACKEND_URL = (settings.BACKEND_URL or "http://localhost:8000").strip()
+RUNTIME_STAMP_CACHE_TTL_SECONDS = 15
 
 
 def get_api_url() -> str:
@@ -186,7 +187,9 @@ def init_session_state():
         "project_id": "",
         SCOPE_DRAFT_UID: "",
         SCOPE_DRAFT_PROJECT_ID: "",
-        "scope_new_project_name": "",
+        "scope_new_uid": "",
+        "scope_new_project_id": "",
+        "scope_users_error": None,
         "scope_projects_last_uid": "",
         "scope_projects_error": None,
         # Phase 10-04.5: unified Intake drop + inbox.
@@ -694,9 +697,15 @@ def _citation_href(
     span_key: Optional[str] = None,
 ) -> str:
     target = normalize_target_id(target_id)
+    scope_uid = scope_lock.get_applied_uid()
+    scope_project = scope_lock.get_applied_project_id()
     base = (
         f"?doc={doc_id}&cite={citation_index}" if doc_id else f"?cite={citation_index}"
     )
+    if scope_uid:
+        base += f"&uid={scope_uid}"
+    if scope_project:
+        base += f"&project={scope_project}"
     if span_key:
         base += f"&sid={span_key}"
     if target:
@@ -2025,10 +2034,6 @@ def render_documents_panel(*, max_rows: Optional[int] = None) -> None:
             tooltip_lines.append(f"Resolution error: {resolution_error}")
 
         row_icon = chips[0] if chips else status_icon
-        open_href = (
-            f"?doc={ingest_id}&docnum={int(num)}" if ingest_id else f"?docnum={int(num)}"
-        )
-
         cols = st.columns([0.7, 6.3, 0.9, 0.7], gap="small")
         with cols[0]:
             st.markdown(f":material/{row_icon}:")
@@ -2036,19 +2041,38 @@ def render_documents_panel(*, max_rows: Optional[int] = None) -> None:
             selected = bool(
                 int(st.session_state.get("documents_selected_num") or 0) == int(num)
             )
-            row_class = "ledger-label ledger-label--link"
+            label = f"{short}{title_hint}"
             if selected:
-                row_class += " ledger-label--selected"
-            tooltip_text = html.escape("\n".join(tooltip_lines))
-            st.markdown(
-                (
-                    f"<a class='{row_class}' href='{html.escape(open_href)}' target='_self' "
-                    f"title='{tooltip_text}'>"
-                    f"{html.escape(short)}{html.escape(title_hint)}"
-                    "</a>"
-                ),
-                unsafe_allow_html=True,
-            )
+                label = f"[selected] {label}"
+            if st.button(
+                label,
+                key=f"ledger-open-{int(num)}",
+                use_container_width=True,
+                help="\n".join(tooltip_lines),
+            ):
+                st.session_state["documents_selected_num"] = int(num)
+                if ingest_id:
+                    st.session_state["selected_doc_id"] = str(ingest_id)
+                    load_selected_document(show_error=False)
+                payload = {"docnum": str(int(num))}
+                if ingest_id:
+                    payload["doc"] = str(ingest_id)
+                scope_uid = scope_lock.get_applied_uid()
+                scope_project = scope_lock.get_applied_project_id()
+                if scope_uid:
+                    payload["uid"] = scope_uid
+                if scope_project:
+                    payload["project"] = scope_project
+                try:
+                    st.query_params.clear()  # type: ignore[attr-defined]
+                    for key, value in payload.items():
+                        st.query_params[key] = value  # type: ignore[attr-defined]
+                except Exception:
+                    try:
+                        st.experimental_set_query_params(**payload)
+                    except Exception:
+                        pass
+                _rerun()
         with cols[2]:
             st.markdown(deg_html, unsafe_allow_html=True)
         with cols[3]:
@@ -2312,22 +2336,257 @@ def _applied_scope_badge() -> str:
     return "Scope: unapplied"
 
 
+def _runtime_stamp_token(*, stamp: str, git_sha: str, image_tag: str) -> str:
+    value = str(stamp or "").strip() or "unknown"
+    sha = str(git_sha or "").strip()
+    tag = str(image_tag or "").strip()
+    if sha:
+        value = f"{value}@{sha[:12]}"
+    if tag:
+        value = f"{value} ({tag})"
+    return value
+
+
+def _ui_runtime_stamp_token() -> str:
+    return _runtime_stamp_token(
+        stamp=str(getattr(settings, "UI_RUNTIME_STAMP", "") or ""),
+        git_sha=str(getattr(settings, "UI_GIT_SHA", "") or ""),
+        image_tag=str(getattr(settings, "UI_IMAGE_TAG", "") or ""),
+    )
+
+
+def _api_runtime_stamp_token(*, api_url: str) -> str:
+    now = float(time.time())
+    cache = st.session_state.get("_api_runtime_stamp_cache")
+    if isinstance(cache, dict):
+        age = now - float(cache.get("fetched_at") or 0.0)
+        if str(cache.get("api_url") or "") == str(api_url or "") and age <= float(
+            RUNTIME_STAMP_CACHE_TTL_SECONDS
+        ):
+            cached_value = str(cache.get("token") or "").strip()
+            if cached_value:
+                return cached_value
+
+    token = "unavailable"
+    try:
+        resp = requests.get(
+            f"{str(api_url).rstrip('/')}/scope/observability/runtime-stamp",
+            timeout=3,
+        )
+        resp.raise_for_status()
+        raw_payload = resp.json()
+        payload = raw_payload if isinstance(raw_payload, dict) else {}
+        token = _runtime_stamp_token(
+            stamp=str(payload.get("api_runtime_stamp") or ""),
+            git_sha=str(payload.get("api_git_sha") or ""),
+            image_tag=str(payload.get("api_image_tag") or ""),
+        )
+    except Exception:
+        token = "unavailable"
+
+    st.session_state["_api_runtime_stamp_cache"] = {
+        "api_url": str(api_url or ""),
+        "fetched_at": now,
+        "token": token,
+    }
+    return token
+
+
+def _runtime_stamp_line() -> str:
+    ui_token = _ui_runtime_stamp_token()
+    api_token = _api_runtime_stamp_token(api_url=get_api_url())
+    return f"Runtime: ui={ui_token} • api={api_token}"
+
+
+def _render_scope_runtime_block() -> None:
+    st.caption(_applied_scope_badge())
+    st.caption(_runtime_stamp_line())
+
+
+def _normalize_scope_user_ids(payload: Any) -> list[str]:
+    raw_users: list[Any] = []
+    if isinstance(payload, dict):
+        candidate = payload.get("users")
+        if isinstance(candidate, list):
+            raw_users = candidate
+    elif isinstance(payload, list):
+        raw_users = payload
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for row in raw_users:
+        if isinstance(row, dict):
+            candidate = row.get("user_id") or row.get("id")
+        else:
+            candidate = row
+        user_id = str(candidate or "").strip()
+        if not user_id or user_id in seen:
+            continue
+        normalized.append(user_id)
+        seen.add(user_id)
+    return normalized
+
+
+def _clear_unapplied_scope_workspace_state() -> None:
+    for key in (
+        "selected_doc_id",
+        "active_document",
+        "citation_selected_index",
+        "citation_selected_target",
+        "citation_selected_sentence_id",
+        "selected_callout_tuple",
+        "pending_citation_selection",
+        "workflow_active_citation",
+        "citation_context_key",
+        "citation_context",
+        "citation_context_error",
+        "citation_last_context_request",
+        "citation_graph_key",
+        "citation_graph",
+        "citation_graph_error",
+        "citation_last_graph_request",
+        "citation_context_cache",
+        "graph_nav_contexts_cache",
+    ):
+        st.session_state.pop(key, None)
+    st.session_state["selected_doc_id"] = ""
+    st.session_state["active_document"] = None
+
+
+def _invalidate_scope_cached_state() -> None:
+    st.session_state["project_meta"] = None
+    st.session_state["ingested_docs"] = None
+    st.session_state["_ingested_docs_loaded"] = False
+    st.session_state.pop("ledger_payload", None)
+    st.session_state["selected_doc_id"] = ""
+    st.session_state["active_document"] = None
+    st.session_state.pop("_followed_citations_cache", None)
+    st.session_state.pop("graph_nav_contexts_cache", None)
+
+
 def render_scope_selector_block() -> None:
     scope_lock.ensure_seeded()
-    if bool(st.session_state.pop("_scope_clear_new_project_name", False)):
-        st.session_state["scope_new_project_name"] = ""
-    pending_project_id = str(st.session_state.pop("_scope_set_project_id", "") or "").strip()
-    if pending_project_id:
-        st.session_state[SCOPE_DRAFT_PROJECT_ID] = pending_project_id
+
+    def _read_scope_params() -> tuple[str, str]:
+        try:
+            raw = st.query_params  # type: ignore[attr-defined]
+            uid_raw = raw.get("uid")
+            project_raw = raw.get("project")
+        except Exception:
+            try:
+                raw2 = st.experimental_get_query_params()
+                uid_raw = raw2.get("uid")
+                project_raw = raw2.get("project")
+            except Exception:
+                uid_raw = None
+                project_raw = None
+        if isinstance(uid_raw, list):
+            uid_raw = uid_raw[0] if uid_raw else None
+        if isinstance(project_raw, list):
+            project_raw = project_raw[0] if project_raw else None
+        return str(uid_raw or "").strip(), str(project_raw or "").strip()
+
+    qp_uid, qp_project = _read_scope_params()
+    st.session_state.setdefault("scope_bootstrap_error", None)
+    scope_lock.sync_from_backend(preferred_user=qp_uid)
+    sync_error = str(st.session_state.get("scope_sync_error") or "").strip()
+    if sync_error and qp_uid and not scope_lock.has_applied_scope():
+        st.session_state["scope_bootstrap_error"] = (
+            f"Unable to sync scope session for {qp_uid}: {sync_error}"
+        )
+        _clear_unapplied_scope_workspace_state()
+
+    if not scope_lock.has_applied_scope():
+        if qp_uid and qp_project:
+            st.session_state[SCOPE_DRAFT_UID] = qp_uid
+            st.session_state[SCOPE_DRAFT_PROJECT_ID] = qp_project
+            try:
+                project_api.select_project(user_id=qp_uid, project_id=qp_project)
+                scope_lock.apply_draft_scope(persist_backend=True)
+                st.session_state["scope_bootstrap_error"] = None
+            except Exception as exc:
+                st.session_state["scope_bootstrap_error"] = (
+                    "Failed to apply scope from URL parameters; "
+                    "open Scope selector and click Apply/Switch with valid membership "
+                    f"(details: {exc})"
+                )
+                _clear_unapplied_scope_workspace_state()
+
+    NEW_USER_OPTION = "__scope_new_user__"
+    NEW_PROJECT_OPTION = "__scope_new_project__"
+
+    def _project_label(pid: str, pname: str) -> str:
+        pid_text = str(pid or "").strip()
+        name_text = str(pname or "").strip()
+        if name_text and name_text != pid_text:
+            return f"{name_text} ({pid_text})"
+        if len(pid_text) >= 32 and "-" in pid_text:
+            return f"Untitled ({pid_text[:8]})"
+        return pid_text
+
     st.markdown("**Scope selector**")
     st.caption("Set draft scope and click Apply/Switch to unlock activity.")
 
-    st.text_input(
+    draft_uid = scope_lock.get_draft_uid()
+    draft_project_id = scope_lock.get_draft_project_id()
+
+    user_options: list[str] = []
+    try:
+        user_listing = project_api.list_users()
+        user_options = _normalize_scope_user_ids(user_listing)
+        if isinstance(user_listing, (dict, list)):
+            st.session_state["scope_users_error"] = None
+        else:
+            st.session_state["scope_users_error"] = "invalid user-list payload"
+    except project_api.ProjectApiError as exc:
+        st.session_state["scope_users_error"] = str(exc)
+    except Exception as exc:
+        st.session_state["scope_users_error"] = str(exc)
+
+    for fallback_uid in (
+        scope_lock.get_applied_uid(),
+        draft_uid,
+        str(st.session_state.get("scope_new_uid") or "").strip(),
+    ):
+        if fallback_uid and fallback_uid not in user_options:
+            user_options.append(fallback_uid)
+
+    user_select_options = [""] + sorted(set(user_options)) + [NEW_USER_OPTION]
+    if draft_uid and draft_uid in user_options:
+        user_index = user_select_options.index(draft_uid)
+    elif draft_uid:
+        st.session_state["scope_new_uid"] = draft_uid
+        user_index = user_select_options.index(NEW_USER_OPTION)
+    else:
+        user_index = 0
+
+    selected_user = st.selectbox(
         "User ID",
-        key=SCOPE_DRAFT_UID,
-        placeholder="reviewer-a",
-        help="Draft only until Apply/Switch.",
+        options=user_select_options,
+        index=user_index,
+        format_func=lambda value: (
+            "Select user..."
+            if value == ""
+            else "+ New user..."
+            if value == NEW_USER_OPTION
+            else str(value)
+        ),
     )
+    if selected_user == NEW_USER_OPTION:
+        st.text_input(
+            "New user ID",
+            key="scope_new_uid",
+            placeholder="reviewer-a",
+            help="Draft only until Apply/Switch.",
+        )
+        st.session_state[SCOPE_DRAFT_UID] = str(
+            st.session_state.get("scope_new_uid") or ""
+        ).strip()
+    else:
+        st.session_state[SCOPE_DRAFT_UID] = str(selected_user or "").strip()
+        if selected_user:
+            st.session_state["scope_new_uid"] = ""
+
     draft_uid = scope_lock.get_draft_uid()
     draft_project_id = scope_lock.get_draft_project_id()
 
@@ -2350,7 +2609,7 @@ def render_scope_selector_block() -> None:
                 if not pid:
                     continue
                 pname = str((row or {}).get("name") or "").strip()
-                project_labels[pid] = f"{pname} ({pid})" if pname and pname != pid else pid
+                project_labels[pid] = _project_label(pid, pname)
             active_project_id = str(listing.get("active_project_id") or "").strip()
             st.session_state["scope_projects_error"] = None
             st.session_state["scope_projects_last_uid"] = draft_uid
@@ -2361,59 +2620,52 @@ def render_scope_selector_block() -> None:
         st.session_state[SCOPE_DRAFT_PROJECT_ID] = active_project_id
         draft_project_id = active_project_id
 
-    if project_options:
-        select_options = [""] + sorted(set(project_options))
-        if draft_project_id and draft_project_id not in select_options:
-            select_options.append(draft_project_id)
-        select_index = select_options.index(draft_project_id) if draft_project_id in select_options else 0
+    if draft_uid:
+        select_options = [""] + sorted(set(project_options)) + [NEW_PROJECT_OPTION]
+        if draft_project_id and draft_project_id in project_options:
+            select_index = select_options.index(draft_project_id)
+        elif draft_project_id:
+            st.session_state["scope_new_project_id"] = draft_project_id
+            select_index = select_options.index(NEW_PROJECT_OPTION)
+        else:
+            select_index = 0
         selected_project = st.selectbox(
-            "Project",
+            "Project ID",
             options=select_options,
             index=select_index,
-            key="scope-project-select",
             format_func=lambda v: (
-                "Select project…" if not v else project_labels.get(str(v), str(v))
+                "Select project..."
+                if not v
+                else "+ New project..."
+                if str(v) == NEW_PROJECT_OPTION
+                else project_labels.get(str(v), str(v))
             ),
         )
-        st.session_state[SCOPE_DRAFT_PROJECT_ID] = str(selected_project or "").strip()
+        if str(selected_project) == NEW_PROJECT_OPTION:
+            st.text_input(
+                "New project ID",
+                key="scope_new_project_id",
+                placeholder="project-a",
+                help="Draft only until Apply/Switch.",
+            )
+            st.session_state[SCOPE_DRAFT_PROJECT_ID] = str(
+                st.session_state.get("scope_new_project_id") or ""
+            ).strip()
+        else:
+            st.session_state[SCOPE_DRAFT_PROJECT_ID] = str(selected_project or "").strip()
+            if selected_project:
+                st.session_state["scope_new_project_id"] = ""
+        explicit_new_project_intent = str(selected_project) == NEW_PROJECT_OPTION
     else:
-        st.text_input(
+        st.selectbox(
             "Project ID",
-            key=SCOPE_DRAFT_PROJECT_ID,
-            placeholder="project-a",
-            help="Draft only until Apply/Switch.",
+            options=[""],
+            index=0,
+            format_func=lambda _value: "Select a user first",
+            disabled=True,
         )
-
-    create_cols = st.columns([3, 1], gap="small")
-    with create_cols[0]:
-        st.text_input(
-            "New project name",
-            key="scope_new_project_name",
-            placeholder="Create new project…",
-            label_visibility="collapsed",
-        )
-    with create_cols[1]:
-        if st.button("Create", key="scope-create-project", use_container_width=True):
-            if not draft_uid:
-                st.warning("Enter User ID before creating a project.")
-            else:
-                try:
-                    created = project_api.create_project(
-                        user_id=draft_uid,
-                        name=str(st.session_state.get("scope_new_project_name") or "").strip() or None,
-                    )
-                    created_project_id = str(
-                        created.get("active_project_id")
-                        or ((created.get("project") or {}).get("project_id"))
-                        or ""
-                    ).strip()
-                    if created_project_id:
-                        st.session_state["_scope_set_project_id"] = created_project_id
-                        st.session_state["_scope_clear_new_project_name"] = True
-                        st.success(f"Created project {created_project_id}")
-                        _rerun()
-                except project_api.ProjectApiError as exc:
-                    st.error(str(exc))
+        st.session_state[SCOPE_DRAFT_PROJECT_ID] = ""
+        explicit_new_project_intent = False
 
     draft_uid = scope_lock.get_draft_uid()
     draft_project_id = scope_lock.get_draft_project_id()
@@ -2430,28 +2682,48 @@ def render_scope_selector_block() -> None:
         use_container_width=True,
     ):
         try:
-            project_api.select_project(user_id=draft_uid, project_id=draft_project_id)
-            scope_lock.apply_draft_scope()
-        except ValueError as exc:
-            st.warning(str(exc))
-        except project_api.ProjectApiError as exc:
+            try:
+                project_api.select_project(user_id=draft_uid, project_id=draft_project_id)
+                scope_lock.apply_draft_scope(persist_backend=True)
+            except project_api.ProjectApiError:
+                if not explicit_new_project_intent:
+                    raise
+                created = project_api.create_project(
+                    user_id=draft_uid,
+                    project_id=draft_project_id,
+                )
+                created_project_id = str(
+                    created.get("active_project_id")
+                    or ((created.get("project") or {}).get("project_id"))
+                    or ""
+                ).strip()
+                if not created_project_id:
+                    raise project_api.ProjectApiError(
+                        "project creation did not return project_id"
+                    )
+                st.session_state[SCOPE_DRAFT_PROJECT_ID] = created_project_id
+                st.success(f"Created project {created_project_id}")
+                scope_lock.apply_draft_scope(persist_backend=True)
+        except (ValueError, project_api.ProjectApiError) as exc:
             st.warning(str(exc))
         else:
-            # Scope switched: invalidate loaded scope-cached resources.
-            st.session_state["project_meta"] = None
-            st.session_state["ingested_docs"] = None
-            st.session_state["_ingested_docs_loaded"] = False
-            st.session_state["selected_doc_id"] = ""
-            st.session_state["active_document"] = None
-            st.session_state.pop("_followed_citations_cache", None)
-            st.session_state.pop("graph_nav_contexts_cache", None)
+            st.session_state["scope_bootstrap_error"] = None
+            _invalidate_scope_cached_state()
             _rerun()
 
     scope_err = st.session_state.get("scope_projects_error")
     if scope_err:
         st.caption(f"Project list unavailable: {scope_err}")
 
-    st.caption(_applied_scope_badge())
+    users_err = st.session_state.get("scope_users_error")
+    if users_err:
+        st.caption(f"User list unavailable: {users_err}")
+
+    bootstrap_err = str(st.session_state.get("scope_bootstrap_error") or "").strip()
+    if bootstrap_err:
+        st.warning(bootstrap_err)
+
+    _render_scope_runtime_block()
 
 
 def render_project_panel() -> None:
@@ -2489,7 +2761,7 @@ def render_project_panel() -> None:
                 st.error(str(exc))
 
     st.markdown("**Current applied scope**")
-    st.caption(_applied_scope_badge())
+    _render_scope_runtime_block()
 
     st.divider()
     st.markdown("**Current user**")
@@ -3741,6 +4013,7 @@ def render_evidence_panel() -> None:
                             claim_text=active_claim_text_payload,
                             note="auto-place",
                         )
+                        st.session_state.pop("ledger_payload", None)
                         _rerun()
                 log_url = latest.get("log_url") or latest.get("artifact_path")
                 if log_url:
@@ -5745,9 +6018,6 @@ def render_intake_panel(*, max_rows: Optional[int] = None) -> None:
                     "Intent: unknown (auto-routed to "
                     f"{routed_intent}) • Stage: {stage} • Size: {size_label}"
                 )
-                st.caption(
-                    "Intent unclear; metadata processing runs first, then placement can be refined."
-                )
             else:
                 st.caption(f"Intent: {intent} • Stage: {stage} • Size: {size_label}")
             note = str(item.get("note") or "").strip()
@@ -5881,6 +6151,7 @@ def render_workspace_left_pane() -> None:
         st.toggle("Dense", key=WORKSPACE_DENSE_MODE)
 
     if not scope_lock.has_applied_scope():
+        _clear_unapplied_scope_workspace_state()
         st.info("Apply a user + project scope to unlock workspace activity.")
         return
 
@@ -5991,7 +6262,7 @@ def draw_workspace() -> None:
 
     # Top banner - outside columns
     st.markdown('<div class="app-banner">os-ERIN</div>', unsafe_allow_html=True)
-    st.caption(_applied_scope_badge())
+    _render_scope_runtime_block()
     
     # CSS for all panes
     st.markdown("""
@@ -6094,10 +6365,14 @@ def draw_workspace() -> None:
         draw_ingestion_panel(center=center_pane, right=right_pane)
         render_activity_console_strip()
     else:
+        _clear_unapplied_scope_workspace_state()
         with center_pane:
-            st.info("Select draft scope on the left and click Apply to unlock activity.")
+            st.info(
+                "Workspace is locked until a valid user + project scope is applied. "
+                "Use Scope selector and click Apply/Switch."
+            )
         with right_pane:
-            st.info("Activity is gated until scope is applied.")
+            st.info("Activity remains gated until scope apply succeeds.")
 
 
 def draw_ingestion_panel(*, center, right) -> None:
@@ -6237,6 +6512,8 @@ def draw_ingestion_panel(*, center, right) -> None:
                 doc_id,
                 int(citation_index),
                 target_id=normalize_target_id(target_id),
+                project_id=get_project_id(),
+                user_id=_active_reviewer_uid(),
             )
             context = response.get("context") or {}
         except RuntimeError as exc:
@@ -6262,7 +6539,11 @@ def draw_ingestion_panel(*, center, right) -> None:
     paragraphs: list[dict] = []
     if extraction_complete:
         try:
-            body_payload = get_document_body(api_url, doc_id)
+            body_payload = get_document_body(
+                api_url,
+                doc_id,
+                project_id=get_project_id(),
+            )
         except RuntimeError as exc:
             body_error = str(exc)
             extraction_complete = False
@@ -6367,6 +6648,8 @@ def draw_ingestion_panel(*, center, right) -> None:
                 request["doc_id"],
                 request["citation_index"],
                 target_id=request.get("target_id"),
+                project_id=get_project_id(),
+                user_id=_active_reviewer_uid(),
             )
         except RuntimeError as exc:
             st.session_state["citation_context_error"] = str(exc)
@@ -6398,6 +6681,8 @@ def draw_ingestion_panel(*, center, right) -> None:
                 request["depth"],
                 request["max_nodes"],
                 doi=request.get("doi"),
+                project_id=get_project_id(),
+                user_id=_active_reviewer_uid(),
             )
         except RuntimeError as exc:
             st.session_state["citation_graph_error"] = str(exc)
@@ -6413,6 +6698,12 @@ def draw_ingestion_panel(*, center, right) -> None:
         *, doc: str, cite: Optional[int], target: Optional[str]
     ) -> None:
         payload: dict = {"doc": doc}
+        scope_uid = scope_lock.get_applied_uid()
+        scope_project = scope_lock.get_applied_project_id()
+        if scope_uid:
+            payload["uid"] = scope_uid
+        if scope_project:
+            payload["project"] = scope_project
         if cite is not None:
             payload["cite"] = str(int(cite))
         if target:

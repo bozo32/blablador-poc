@@ -139,6 +139,31 @@ class AppSettings(PydanticBaseSettings):
         description="Default user scope for single-user/POC mode",
     )
 
+    API_RUNTIME_STAMP: str = Field(
+        "dev",
+        description="Operator-visible API runtime stamp for stale image detection",
+    )
+    API_GIT_SHA: str = Field(
+        "",
+        description="Optional API git SHA reported in runtime stamp observability",
+    )
+    API_IMAGE_TAG: str = Field(
+        "",
+        description="Optional API container image tag for runtime observability",
+    )
+    UI_RUNTIME_STAMP: str = Field(
+        "dev",
+        description="Operator-visible UI runtime stamp for stale image detection",
+    )
+    UI_GIT_SHA: str = Field(
+        "",
+        description="Optional UI git SHA shown in runtime stamp observability",
+    )
+    UI_IMAGE_TAG: str = Field(
+        "",
+        description="Optional UI container image tag shown in runtime observability",
+    )
+
     GROBID_CONSOLIDATE_CITATIONS: bool = Field(
         False,
         description="Ask GROBID to consolidate citations (calls external services)",

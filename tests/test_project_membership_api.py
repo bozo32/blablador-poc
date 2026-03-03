@@ -12,6 +12,38 @@ def test_projects_endpoints_require_x_user_id() -> None:
     assert client.post("/projects", json={"name": "A"}).status_code == 400
     assert client.post("/projects/select", json={"project_id": "proj-a"}).status_code == 400
     assert client.get("/projects/active").status_code == 400
+    assert client.get("/scope/session").status_code == 400
+    assert client.put("/scope/session", json={"active_project_id": "proj-a"}).status_code == 400
+
+
+def test_projects_users_list(monkeypatch) -> None:
+    monkeypatch.setattr(backend_main, "list_known_user_ids", lambda **_kwargs: ["user-a", "user-b"])
+    client = TestClient(backend_main.app)
+
+    resp = client.get("/projects/users")
+    assert resp.status_code == 200
+    assert resp.json() == {"users": ["user-a", "user-b"]}
+
+
+def test_projects_users_list_includes_scope_session_only_users() -> None:
+    backend_main.create_project_for_user(
+        user_id="member-user",
+        actor_user_id="member-user",
+        project_id="proj-a",
+    )
+    backend_main.set_scope_session_for_user(
+        user_id="scope-only-user",
+        actor_user_id="scope-only-user",
+        active_project_id=None,
+        active_reviewer_uid="scope-only-user",
+    )
+
+    client = TestClient(backend_main.app)
+    resp = client.get("/projects/users")
+    assert resp.status_code == 200
+    users = set(resp.json().get("users") or [])
+    assert "member-user" in users
+    assert "scope-only-user" in users
 
 
 def test_projects_list_and_active(monkeypatch) -> None:
@@ -101,3 +133,52 @@ def test_select_project_returns_403_without_membership(monkeypatch) -> None:
         headers={"X-User-Id": "user-a"},
     )
     assert resp.status_code == 403
+
+
+def test_scope_session_endpoints_read_and_write(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        backend_main,
+        "get_scope_session_for_user",
+        lambda **kwargs: {
+            "user_id": kwargs["user_id"],
+            "active_project_id": "proj-a",
+            "active_reviewer_uid": "reviewer-a",
+            "updated_at": "2026-03-03T00:00:00Z",
+        },
+    )
+
+    def _fake_set_scope_session_for_user(**kwargs):
+        captured.update(kwargs)
+        return {
+            "user_id": kwargs["user_id"],
+            "active_project_id": kwargs.get("active_project_id"),
+            "active_reviewer_uid": kwargs.get("active_reviewer_uid") or kwargs["user_id"],
+            "updated_at": "2026-03-03T00:00:00Z",
+        }
+
+    monkeypatch.setattr(backend_main, "set_scope_session_for_user", _fake_set_scope_session_for_user)
+
+    client = TestClient(backend_main.app)
+
+    get_resp = client.get("/scope/session", headers={"X-User-Id": "reviewer-a"})
+    assert get_resp.status_code == 200
+    assert get_resp.json()["active_project_id"] == "proj-a"
+
+    put_resp = client.put(
+        "/scope/session",
+        json={"active_project_id": "proj-b", "active_reviewer_uid": "reviewer-b"},
+        headers={"X-User-Id": "reviewer-a"},
+    )
+    assert put_resp.status_code == 200
+    assert put_resp.json()["active_project_id"] == "proj-b"
+    assert captured["user_id"] == "reviewer-a"
+    assert captured["active_project_id"] == "proj-b"
+    assert captured["active_reviewer_uid"] == "reviewer-b"
+
+
+def test_scope_session_put_requires_payload_values() -> None:
+    client = TestClient(backend_main.app)
+    resp = client.put("/scope/session", json={}, headers={"X-User-Id": "reviewer-a"})
+    assert resp.status_code == 422

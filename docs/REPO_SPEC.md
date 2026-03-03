@@ -16,7 +16,7 @@ Design intent and architecture tradeoffs are documented in: `docs/SYSTEM_DESIGN_
 
 ### Actors
 - **Reviewer (human)**: chooses callouts, edits claims, selects evidence, finalizes judgments.
-- **UI (Streamlit)**: workspace, panels, state, calls backend APIs.
+- **UI (Streamlit)**: workspace/panels that render backend state and issue backend commands; not a source of domain truth.
 - **API (FastAPI)**: orchestrates ingestion, reference resolution, graph, attachments, evidence reruns, judgments.
 - **GROBID**: primary PDF→TEI conversion and reference extraction.
 - **Spine (Postgres + S3/MinIO)**: durable system-of-record for PDFs, attempts/jobs, artifacts, attachments, evidence runs/selections, and judgments.
@@ -197,6 +197,7 @@ Design intent and architecture tradeoffs are documented in: `docs/SYSTEM_DESIGN_
 
 **Project + operational**
 - `GET/PUT /project`, `GET /project/export`, `POST /project/import`
+- `GET/PUT /scope/session` (canonical user scope session)
 - `GET/POST /spine/settings`, `GET/POST /spine/workflows`, locator endpoints
 - `GET/POST /background/*` pause/resume for background work gating
 

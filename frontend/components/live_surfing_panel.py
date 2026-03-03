@@ -246,7 +246,7 @@ def _resolve_reference_targets(
             resp = graph_api.resolve_references(
                 citing_doc_id=citing_doc_id,
                 reference_ids=missing,
-                project_id=str(st.session_state.get("project_id") or "").strip() or None,
+                project_id=_active_project_id(),
             )
         except Exception:
             resp = {}
@@ -1593,7 +1593,7 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
         if wid not in work_by_id:
             continue
         try:
-            body = get_document_body(api_url, wid)
+            body = get_document_body(api_url, wid, project_id=_active_project_id())
         except Exception:
             continue
         paragraphs = body.get("paragraphs") or []
@@ -2370,7 +2370,7 @@ def render(*, api_url: str, seed_doc_id: str) -> None:
                 ):
                     try:
                         graph_api.reindex_docs(
-                            project_id=str(st.session_state.get("project_id") or "").strip() or None,
+                            project_id=_active_project_id(),
                             user_id=_active_reviewer_uid(),
                         )
                     except Exception:

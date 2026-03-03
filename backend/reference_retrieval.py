@@ -13,7 +13,6 @@ import re
 from typing import Any, Dict, Optional
 
 from backend import schemas
-from backend.settings import settings
 from backend.spine.ingest_view import build_ingested_document_from_spine
 
 
@@ -29,14 +28,16 @@ class RetrievalSource:
     source: Optional[str]
 
 
-def _load_document(doc_id: str) -> Dict[str, Any]:
+def _load_document(doc_id: str, *, project_id: str) -> Dict[str, Any]:
     did = str(doc_id or "").strip()
     if not did:
         raise FileNotFoundError("Document id is required")
-    project_id = str(settings.DEFAULT_PROJECT_ID)
+    pid = str(project_id or "").strip()
+    if not pid:
+        raise FileNotFoundError("Project id is required")
     document = build_ingested_document_from_spine(
         work_id=did,
-        project_id=project_id,
+        project_id=pid,
         include_extraction_data=True,
     )
     if not document:
@@ -44,13 +45,13 @@ def _load_document(doc_id: str) -> Dict[str, Any]:
     return document
 
 
-def get_ingested_document(doc_id: str) -> Dict[str, Any]:
+def get_ingested_document(doc_id: str, *, project_id: str) -> Dict[str, Any]:
     """Backward-compatible hook for tests and callers.
 
     Historically this module loaded documents via the legacy ingestion store.
     In spine mode we resolve the ingested document via the spine view.
     """
-    return _load_document(doc_id)
+    return _load_document(doc_id, project_id=project_id)
 
 
 def _find_reference_entry(
@@ -231,10 +232,10 @@ def _resolve_sources(
 
 
 def build_retrieval_dossier(
-    doc_id: str, reference_id: str
+    doc_id: str, reference_id: str, *, project_id: str
 ) -> schemas.ReferenceRetrievalResponse:
     # Indirection allows tests to monkeypatch document loading.
-    document = get_ingested_document(doc_id)
+    document = get_ingested_document(doc_id, project_id=project_id)
     resolution_entry = _find_resolution_entry(document, reference_id)
 
     # Best-effort: older extractions or fallback-only bodies may omit references.

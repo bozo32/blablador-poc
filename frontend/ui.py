@@ -2460,6 +2460,7 @@ def _invalidate_scope_cached_state() -> None:
     st.session_state.pop("ledger_payload", None)
     st.session_state["selected_doc_id"] = ""
     st.session_state["active_document"] = None
+    st.session_state.pop("retrieval_cache", None)
     st.session_state.pop("_followed_citations_cache", None)
     st.session_state.pop("graph_nav_contexts_cache", None)
 

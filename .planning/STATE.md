@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: in_progress
-last_updated: "2026-03-03T12:25:00Z"
+last_updated: "2026-03-03T19:05:00Z"
 progress:
   total_phases: 3
   completed_phases: 0
@@ -25,9 +25,9 @@ Planning index: `.planning/PRIORITIES.md`
 ## Current Position
 
 Phase: 10 of 12 (Contracts + core workflow simplification)
-Plan: 10-04.5-08 (scope/workflow regression hardening)
-Status: In progress (10-04.5-07 and 10-04.5-08 patch set implemented locally; manual walkthrough pending)
-Last activity: 2026-03-03 — Added runtime stamp observability, backend-owned scope session API/storage path, and scope/workflow regression hardening (user discovery robustness, explicit project-create intent, ledger invalidation, bootstrap failure visibility)
+Plan: 10-04.5-09 complete (retrieval-scope regression fix + verification gates)
+Status: In progress (Phase 10 continues; 10-04.5-09 backend/frontend fixes and Gate 3.1-3.4 verification completed)
+Last activity: 2026-03-03 — Completed two-project retrieval-scope verification matrix on rebuilt compose stack; strict retrieval contract and cross-project fail-closed behavior confirmed.
 
 Progress: ██████████░ 80%
 
@@ -149,6 +149,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-03-03T12:25:00Z
-Stopped at: 10-04.5-08 implementation checkpoint (tests green; awaiting manual walkthrough)
-Resume file: .planning/phases/10-contracts-core-workflow-simplification/10-04.5-08-PLAN.md
+Last session: 2026-03-03T19:14:23Z
+Stopped at: 10-04.5-09 verification complete (manual matrix + release gate recorded)
+Resume file: .planning/phases/10-contracts-core-workflow-simplification/10-04.5-09-VERIFICATION.md

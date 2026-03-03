@@ -889,7 +889,11 @@ def _render_nav_surfing(*, api_url: str, seed_doc_id: str) -> None:
         else:
             try:
                 dossier = nav_api.get_reference_retrieval(
-                    api_url, doc_id=citing_doc_id, reference_id=reference_id
+                    api_url,
+                    doc_id=citing_doc_id,
+                    reference_id=reference_id,
+                    project_id=project_id,
+                    user_id=reviewer_uid,
                 )
             except Exception as exc:
                 dossier = {"error": str(exc)}

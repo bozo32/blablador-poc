@@ -24,6 +24,24 @@ def _request_error_message(url: str, exc: requests.RequestException) -> str:
     return f"Failed to reach API at {url}"
 
 
+def _require_scope_headers(
+    *,
+    project_id: Optional[str],
+    user_id: Optional[str],
+    operation: str,
+) -> dict[str, str]:
+    pid = str(project_id or "").strip()
+    uid = str(user_id or "").strip()
+    if not pid:
+        raise RuntimeError(f"{operation} requires project_id")
+    if not uid:
+        raise RuntimeError(f"{operation} requires user_id")
+    return {
+        "X-Project-Id": pid,
+        "X-User-Id": uid,
+    }
+
+
 def get_nav_graph(
     api_url: str,
     *,
@@ -89,14 +107,29 @@ def get_work_contexts(
     return _parse_response(response) or {}
 
 
-def get_reference_retrieval(api_url: str, *, doc_id: str, reference_id: str) -> dict:
+def get_reference_retrieval(
+    api_url: str,
+    *,
+    doc_id: str,
+    reference_id: str,
+    project_id: Optional[str],
+    user_id: Optional[str],
+) -> dict:
     did = str(doc_id or "").strip()
     rid = str(reference_id or "").strip()
     if not did or not rid:
         return {}
     url = f"{api_url.rstrip('/')}/references/{did}/{rid}/retrieval"
     try:
-        response = requests.get(url, timeout=DEFAULT_TIMEOUT)
+        response = requests.get(
+            url,
+            headers=_require_scope_headers(
+                project_id=project_id,
+                user_id=user_id,
+                operation="reference retrieval",
+            ),
+            timeout=DEFAULT_TIMEOUT,
+        )
     except requests.RequestException as exc:
         raise RuntimeError(_request_error_message(url, exc)) from exc
     return _parse_response(response) or {}

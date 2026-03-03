@@ -5509,9 +5509,26 @@ def retry_attachment(
     "/references/{doc_id}/{reference_id}/retrieval",
     response_model=schemas.ReferenceRetrievalResponse,
 )
-def get_reference_retrieval(doc_id: str, reference_id: str):
+def get_reference_retrieval(
+    doc_id: str,
+    reference_id: str,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
+):
+    project_id, user_id, _scope_source = _resolve_scope_observability(
+        endpoint="/references/{doc_id}/{reference_id}/retrieval",
+        x_project_id=x_project_id,
+        x_user_id=x_user_id,
+        require_project=True,
+        require_user=True,
+        allow_dev_project_default=False,
+        include_user=True,
+    )
+    assert user_id is not None
+    _require_project_membership_for_scope(project_id=project_id, user_id=user_id)
+
     try:
-        return build_retrieval_dossier(doc_id, reference_id)
+        return build_retrieval_dossier(doc_id, reference_id, project_id=project_id)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

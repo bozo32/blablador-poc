@@ -207,6 +207,7 @@ def test_scope_cache_invalidation_clears_ledger_payload(monkeypatch) -> None:
             "selected_doc_id": "doc-1",
             "active_document": {"id": "doc-1"},
             "_followed_citations_cache": ["x"],
+            "retrieval_cache": {"retrieval__proj-a__user-a__doc-1__ref-1": {}},
         }
     )
     monkeypatch.setattr(ui, "st", stub)
@@ -214,5 +215,6 @@ def test_scope_cache_invalidation_clears_ledger_payload(monkeypatch) -> None:
     ui._invalidate_scope_cached_state()
 
     assert "ledger_payload" not in stub.session_state
+    assert "retrieval_cache" not in stub.session_state
     assert stub.session_state["project_meta"] is None
     assert stub.session_state["selected_doc_id"] == ""

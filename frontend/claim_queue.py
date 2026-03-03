@@ -12,6 +12,7 @@ import streamlit as st
 from frontend import evidence_store
 from frontend.clipboard import render_copy_to_clipboard
 from frontend.ingestion_api import get_reference_retrieval
+from frontend import scope_lock
 
 
 CLAIM_REGISTRY_KEY = "claim_queue_records"
@@ -260,8 +261,8 @@ def _score_claim_match(record: dict, queue_item: dict) -> float:
     return min(score, 1.0)
 
 
-def _cache_key(doc_id: str, reference_id: str) -> str:
-    return f"retrieval__{doc_id}__{reference_id}"
+def _cache_key(project_id: str, user_id: str, doc_id: str, reference_id: str) -> str:
+    return f"retrieval__{project_id}__{user_id}__{doc_id}__{reference_id}"
 
 
 def _get_cached_dossier(
@@ -269,10 +270,18 @@ def _get_cached_dossier(
     doc_id: str,
     reference_id: str,
 ) -> Optional[dict]:
+    project_id = str(scope_lock.get_applied_project_id() or "").strip()
+    user_id = str(scope_lock.get_applied_uid() or "").strip()
     cache: Dict[str, dict] = st.session_state.setdefault("retrieval_cache", {})
-    key = _cache_key(doc_id, reference_id)
+    key = _cache_key(project_id, user_id, doc_id, reference_id)
     if key not in cache:
-        cache[key] = get_reference_retrieval(api_url, doc_id, reference_id)
+        cache[key] = get_reference_retrieval(
+            api_url,
+            doc_id,
+            reference_id,
+            project_id=project_id,
+            user_id=user_id,
+        )
     return cache.get(key)
 
 
@@ -284,7 +293,11 @@ def render_retrieval_instructions(
     resolved_ingest_id: Optional[str] = None,
     key_prefix: str = "",
 ) -> None:
-    dossier = _get_cached_dossier(api_url, doc_id, reference_id)
+    try:
+        dossier = _get_cached_dossier(api_url, doc_id, reference_id)
+    except RuntimeError as exc:
+        st.error(str(exc))
+        return
     if not dossier:
         st.error("No retrieval data available yet. Resolve references to continue.")
         return

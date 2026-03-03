@@ -5,6 +5,7 @@ from backend import reference_retrieval
 
 DOC_ID = "doc-1"
 REFERENCE_ID = "ref-1"
+PROJECT_ID = "proj-1"
 
 
 def _base_document():
@@ -63,8 +64,9 @@ def _base_document():
 def mock_ingestion(monkeypatch):
     doc = _base_document()
 
-    def _get_ingested_document(doc_id):
+    def _get_ingested_document(doc_id, *, project_id):
         assert doc_id == DOC_ID
+        assert project_id == PROJECT_ID
         return doc
 
     monkeypatch.setattr(
@@ -74,7 +76,9 @@ def mock_ingestion(monkeypatch):
 
 
 def test_builds_happy_path_dossier(mock_ingestion):
-    dossier = reference_retrieval.build_retrieval_dossier(DOC_ID, REFERENCE_ID)
+    dossier = reference_retrieval.build_retrieval_dossier(
+        DOC_ID, REFERENCE_ID, project_id=PROJECT_ID
+    )
 
     assert dossier.document_id == DOC_ID
     assert dossier.reference_id == REFERENCE_ID
@@ -96,14 +100,18 @@ def test_missing_links_emit_manual_instructions(mock_ingestion):
     mock_ingestion["extraction"]["data"]["references"][0]["grobid"]["url"] = None
     mock_ingestion["extraction"]["data"]["references"][0]["doi"] = None
 
-    dossier = reference_retrieval.build_retrieval_dossier(DOC_ID, REFERENCE_ID)
+    dossier = reference_retrieval.build_retrieval_dossier(
+        DOC_ID, REFERENCE_ID, project_id=PROJECT_ID
+    )
 
     assert dossier.primary_url is None
     assert dossier.manual_instructions.startswith("No direct link available")
 
 
 def test_resolver_confidence_serialized(mock_ingestion):
-    dossier = reference_retrieval.build_retrieval_dossier(DOC_ID, REFERENCE_ID)
+    dossier = reference_retrieval.build_retrieval_dossier(
+        DOC_ID, REFERENCE_ID, project_id=PROJECT_ID
+    )
 
     assert dossier.resolver_confidence == pytest.approx(0.92)
     # Ensure individual source confidences are preserved
@@ -111,3 +119,26 @@ def test_resolver_confidence_serialized(mock_ingestion):
     assert confidence_map["Grobid"] is None
     assert confidence_map["Crossref"] == pytest.approx(0.88)
     assert confidence_map["Openalex"] == pytest.approx(0.75)
+
+
+def test_build_retrieval_dossier_passes_project_id_to_document_loader(monkeypatch):
+    captured = {}
+
+    def _fake_get_ingested_document(doc_id, *, project_id):
+        captured["doc_id"] = doc_id
+        captured["project_id"] = project_id
+        return _base_document()
+
+    monkeypatch.setattr(
+        reference_retrieval,
+        "get_ingested_document",
+        _fake_get_ingested_document,
+    )
+
+    dossier = reference_retrieval.build_retrieval_dossier(
+        DOC_ID,
+        REFERENCE_ID,
+        project_id="proj-custom",
+    )
+    assert dossier.document_id == DOC_ID
+    assert captured == {"doc_id": DOC_ID, "project_id": "proj-custom"}

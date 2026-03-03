@@ -368,11 +368,22 @@ def get_reference_retrieval(
     api_url: str,
     doc_id: str,
     reference_id: str,
+    *,
+    project_id: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> dict:
     """Fetch retrieval dossier for a reference."""
     url = f"{api_url.rstrip('/')}/references/{doc_id}/{reference_id}/retrieval"
     try:
-        response = requests.get(url, timeout=DEFAULT_TIMEOUT)
+        response = requests.get(
+            url,
+            headers=_require_scoped_read_headers(
+                project_id=project_id,
+                user_id=user_id,
+                operation="reference retrieval",
+            ),
+            timeout=DEFAULT_TIMEOUT,
+        )
     except requests.RequestException as exc:
         raise RuntimeError(_request_error_message(url, exc)) from exc
     return _parse_response(response) or {}

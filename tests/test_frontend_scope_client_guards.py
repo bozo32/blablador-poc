@@ -10,6 +10,7 @@ from frontend import (
     ingestion_api,
     judgment_api,
     ledger_api,
+    nav_api,
     opinion_api,
     project_api,
     ui,
@@ -287,6 +288,98 @@ def test_ingestion_citation_graph_sends_scope_identity_headers(
         user_id="reviewer-a",
     )
     assert payload == {"nodes": [], "edges": []}
+    assert captured["headers"] == {
+        "X-Project-Id": "proj-a",
+        "X-User-Id": "reviewer-a",
+    }
+
+
+def test_ingestion_reference_retrieval_fails_fast_without_project_or_user() -> None:
+    with pytest.raises(RuntimeError, match="project_id"):
+        ingestion_api.get_reference_retrieval(
+            "http://api",
+            "doc-1",
+            "ref-1",
+            project_id=None,
+            user_id="reviewer-a",
+        )
+
+    with pytest.raises(RuntimeError, match="user_id"):
+        ingestion_api.get_reference_retrieval(
+            "http://api",
+            "doc-1",
+            "ref-1",
+            project_id="proj-a",
+            user_id=None,
+        )
+
+
+def test_ingestion_reference_retrieval_sends_scope_identity_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def _fake_get(url: str, **kwargs):
+        captured["url"] = url
+        captured.update(kwargs)
+        return _FakeResponse({"reference_id": "ref-1", "sources": []})
+
+    monkeypatch.setattr(ingestion_api.requests, "get", _fake_get)
+
+    payload = ingestion_api.get_reference_retrieval(
+        "http://api",
+        "doc-1",
+        "ref-1",
+        project_id="proj-a",
+        user_id="reviewer-a",
+    )
+    assert payload["reference_id"] == "ref-1"
+    assert captured["headers"] == {
+        "X-Project-Id": "proj-a",
+        "X-User-Id": "reviewer-a",
+    }
+
+
+def test_nav_reference_retrieval_fails_fast_without_project_or_user() -> None:
+    with pytest.raises(RuntimeError, match="project_id"):
+        nav_api.get_reference_retrieval(
+            "http://api",
+            doc_id="doc-1",
+            reference_id="ref-1",
+            project_id=None,
+            user_id="reviewer-a",
+        )
+
+    with pytest.raises(RuntimeError, match="user_id"):
+        nav_api.get_reference_retrieval(
+            "http://api",
+            doc_id="doc-1",
+            reference_id="ref-1",
+            project_id="proj-a",
+            user_id=None,
+        )
+
+
+def test_nav_reference_retrieval_sends_scope_identity_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def _fake_get(url: str, **kwargs):
+        captured["url"] = url
+        captured.update(kwargs)
+        return _FakeResponse({"reference_id": "ref-1", "sources": []})
+
+    monkeypatch.setattr(nav_api.requests, "get", _fake_get)
+
+    payload = nav_api.get_reference_retrieval(
+        "http://api",
+        doc_id="doc-1",
+        reference_id="ref-1",
+        project_id="proj-a",
+        user_id="reviewer-a",
+    )
+    assert payload["reference_id"] == "ref-1"
     assert captured["headers"] == {
         "X-Project-Id": "proj-a",
         "X-User-Id": "reviewer-a",

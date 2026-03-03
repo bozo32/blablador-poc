@@ -9,6 +9,9 @@ This file is the fast handoff for the next model pass. Read this first, then jum
 - Phase plans added/executed for walkthrough regressions:
   - `.planning/phases/10-contracts-core-workflow-simplification/10-04.5-07-PLAN.md`
   - `.planning/phases/10-contracts-core-workflow-simplification/10-04.5-08-PLAN.md`
+- Retrieval-scope regression plan set added and partially executed:
+  - `.planning/phases/10-contracts-core-workflow-simplification/10-04.5-09-INDEX.md`
+  - `.planning/phases/10-contracts-core-workflow-simplification/10-04.5-09-VERIFICATION.md`
 - Runtime/version visibility added in UI/API so stale images are easier to detect.
 - Scope/workflow hardening landed around:
   - user discovery robustness in scope selector
@@ -20,10 +23,11 @@ This file is the fast handoff for the next model pass. Read this first, then jum
 ## 2) Read order (minimum)
 
 1. `.planning/phases/10-contracts-core-workflow-simplification/10-INDEX.md`
-2. `.planning/phases/10-contracts-core-workflow-simplification/10-04.5-08-PLAN.md`
-3. `.planning/phases/10-contracts-core-workflow-simplification/deferred-items.md`
-4. `.planning/phases/10-contracts-core-workflow-simplification/10-04.5-PRUNE-CANDIDATES.md`
-5. `docs/WORKFLOW_PROTOCOL.md`
+2. `.planning/phases/10-contracts-core-workflow-simplification/10-04.5-09-INDEX.md`
+3. `.planning/phases/10-contracts-core-workflow-simplification/10-04.5-09-VERIFICATION.md`
+4. `.planning/phases/10-contracts-core-workflow-simplification/deferred-items.md`
+5. `.planning/phases/10-contracts-core-workflow-simplification/10-04.5-PRUNE-CANDIDATES.md`
+6. `docs/WORKFLOW_PROTOCOL.md`
 
 ## 3) Current debugging stance
 

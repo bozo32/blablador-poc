@@ -55,3 +55,42 @@ def test_get_claim_options_truncates_labels():
     assert options[0]["id"] == "c3"
     assert options[0]["label"].startswith("(Baz 2022)")
     assert options[0]["label"].endswith("…")
+
+
+def test_cached_dossier_is_isolated_by_project_and_user(monkeypatch):
+    calls = []
+
+    def _fake_get_reference_retrieval(
+        api_url,
+        doc_id,
+        reference_id,
+        *,
+        project_id,
+        user_id,
+    ):
+        calls.append((api_url, doc_id, reference_id, project_id, user_id))
+        return {
+            "doc_id": doc_id,
+            "reference_id": reference_id,
+            "project_id": project_id,
+            "user_id": user_id,
+        }
+
+    monkeypatch.setattr(claim_queue, "get_reference_retrieval", _fake_get_reference_retrieval)
+    monkeypatch.setattr(claim_queue.scope_lock, "get_applied_project_id", lambda: "proj-a")
+    monkeypatch.setattr(claim_queue.scope_lock, "get_applied_uid", lambda: "user-a")
+
+    first = claim_queue._get_cached_dossier("http://api", "doc-1", "ref-1")
+    second = claim_queue._get_cached_dossier("http://api", "doc-1", "ref-1")
+
+    assert first == second
+    assert len(calls) == 1
+
+    monkeypatch.setattr(claim_queue.scope_lock, "get_applied_project_id", lambda: "proj-b")
+    monkeypatch.setattr(claim_queue.scope_lock, "get_applied_uid", lambda: "user-b")
+    third = claim_queue._get_cached_dossier("http://api", "doc-1", "ref-1")
+
+    assert len(calls) == 2
+    assert third is not None
+    assert third["project_id"] == "proj-b"
+    assert third["user_id"] == "user-b"

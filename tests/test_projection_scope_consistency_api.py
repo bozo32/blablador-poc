@@ -106,3 +106,107 @@ def test_attachment_clone_uses_scoped_graph_writes(monkeypatch) -> None:
         "project_id": "proj-scope",
     }
     assert captured["reconcile_kwargs"]["project_id"] == "proj-scope"
+
+
+def test_reference_retrieval_requires_project_header(monkeypatch) -> None:
+    monkeypatch.setattr(
+        backend_main,
+        "_require_project_membership_for_scope",
+        lambda **_kwargs: None,
+    )
+
+    client = TestClient(backend_main.app)
+    resp = client.get(
+        "/references/doc-1/ref-1/retrieval",
+        headers={"X-User-Id": "user-a"},
+    )
+
+    assert resp.status_code == 400
+    assert "X-Project-Id header is required" in resp.text
+
+
+def test_reference_retrieval_requires_user_header(monkeypatch) -> None:
+    monkeypatch.setattr(
+        backend_main,
+        "_require_project_membership_for_scope",
+        lambda **_kwargs: None,
+    )
+
+    client = TestClient(backend_main.app)
+    resp = client.get(
+        "/references/doc-1/ref-1/retrieval",
+        headers={"X-Project-Id": "proj-a"},
+    )
+
+    assert resp.status_code == 400
+    assert "X-User-Id header is required" in resp.text
+
+
+def test_reference_retrieval_uses_resolved_scope_project(monkeypatch) -> None:
+    captured: dict[str, str] = {}
+
+    monkeypatch.setattr(
+        backend_main,
+        "_require_project_membership_for_scope",
+        lambda **_kwargs: None,
+    )
+
+    def _fake_build(doc_id: str, reference_id: str, *, project_id: str) -> dict:
+        captured["doc_id"] = doc_id
+        captured["reference_id"] = reference_id
+        captured["project_id"] = project_id
+        return {
+            "document_id": doc_id,
+            "reference_id": reference_id,
+            "canonical_citation": "Some citation",
+            "doi": None,
+            "primary_url": None,
+            "manual_instructions": None,
+            "resolver_status": None,
+            "resolver_confidence": None,
+            "sources": [],
+        }
+
+    monkeypatch.setattr(backend_main, "build_retrieval_dossier", _fake_build)
+
+    client = TestClient(backend_main.app)
+    resp = client.get(
+        "/references/doc-1/ref-1/retrieval",
+        headers={"X-Project-Id": "proj-a", "X-User-Id": "user-a"},
+    )
+
+    assert resp.status_code == 200
+    assert captured == {
+        "doc_id": "doc-1",
+        "reference_id": "ref-1",
+        "project_id": "proj-a",
+    }
+
+
+def test_reference_retrieval_wrong_project_returns_404(monkeypatch) -> None:
+    monkeypatch.setattr(
+        backend_main,
+        "_require_project_membership_for_scope",
+        lambda **_kwargs: None,
+    )
+
+    def _fake_build(_doc_id: str, _reference_id: str, *, project_id: str) -> dict:
+        if project_id != "proj-a":
+            raise FileNotFoundError("Document doc-1 not found")
+        return {
+            "document_id": "doc-1",
+            "reference_id": "ref-1",
+            "canonical_citation": "Some citation",
+            "sources": [],
+        }
+
+    monkeypatch.setattr(backend_main, "build_retrieval_dossier", _fake_build)
+
+    client = TestClient(backend_main.app)
+    resp = client.get(
+        "/references/doc-1/ref-1/retrieval",
+        headers={"X-Project-Id": "proj-b", "X-User-Id": "user-a"},
+    )
+
+    assert resp.status_code == 404
+    assert "Document doc-1 not found" in resp.text

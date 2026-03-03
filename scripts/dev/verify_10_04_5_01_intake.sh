@@ -20,6 +20,17 @@ if [ "${1:-}" = "--phase" ]; then
   shift 2 || true
 fi
 
+PYTHON_BIN="${PYTHON_BIN:-}"
+if [ -z "${PYTHON_BIN}" ]; then
+  if [ -x ".venv/bin/python" ]; then
+    PYTHON_BIN=".venv/bin/python"
+  elif command -v python3 >/dev/null 2>&1; then
+    PYTHON_BIN="python3"
+  else
+    PYTHON_BIN="python"
+  fi
+fi
+
 STATE_FILE="${STATE_FILE:-/tmp/verify_10_04_5_01_intake_state.json}"
 
 API_URL="${API_URL:-http://127.0.0.1:8000}"
@@ -30,6 +41,7 @@ SOURCE_PDF_PATH="${SOURCE_PDF_PATH:-corpus/workflow/hicks-chatgpt-is-bullshit.pd
 
 P1="${P1:-proj-a}"
 P2="${P2:-proj-b}"
+USER_ID="${USER_ID:-default}"
 
 wait_api() {
   local url="$1"
@@ -39,7 +51,7 @@ wait_api() {
   for _ in $(seq 1 120); do
     code=$(curl -s --max-time 2 -o "${tmp}" -w "%{http_code}" "${url}/openapi.json" || true)
     if [ "${code}" = "200" ]; then
-      if python - "${tmp}" >/dev/null 2>&1 <<'PYCHECK'; then
+      if "${PYTHON_BIN}" - "${tmp}" >/dev/null 2>&1 <<'PYCHECK'; then
 import json,sys
 raw=open(sys.argv[1],'r',encoding='utf-8',errors='replace').read() or ''
 p=json.loads(raw)
@@ -80,6 +92,7 @@ ingest_upload() {
     -o "${body}" \
     -w "%{http_code}" \
     -H "X-Project-Id: ${project_id}" \
+    -H "X-User-Id: ${USER_ID}" \
     -F "file=@${pdf_path};type=application/pdf" \
     "${API_URL}/ingest?auto_process=true" 2>"${err}")
   rc=$?
@@ -110,7 +123,7 @@ ingest_upload() {
     return 2
   fi
 
-  python - "${body}" <<'PY'
+  "${PYTHON_BIN}" - "${body}" <<'PY'
 import json,sys
 raw=open(sys.argv[1],'r',encoding='utf-8',errors='replace').read() or ''
 try:
@@ -154,6 +167,7 @@ attachments_upload() {
     -o "${body}" \
     -w "%{http_code}" \
     -H "X-Project-Id: ${project_id}" \
+    -H "X-User-Id: ${USER_ID}" \
     -F "file=@${pdf_path};type=application/pdf" \
     "${API_URL}/attachments/upload" 2>"${err}")
   rc=$?
@@ -184,7 +198,7 @@ attachments_upload() {
     return 2
   fi
 
-  python - "${body}" <<'PY'
+  "${PYTHON_BIN}" - "${body}" <<'PY'
 import json,sys
 raw=open(sys.argv[1],'r',encoding='utf-8',errors='replace').read() or ''
 try:
@@ -214,7 +228,7 @@ poll_attachment_terminal() {
   local att_id="$2"
   local timeout_s="${3:-180}"
 
-  python - <<'PY' "${API_URL}" "${project_id}" "${att_id}" "${timeout_s}"
+  "${PYTHON_BIN}" - <<'PY' "${API_URL}" "${project_id}" "${att_id}" "${timeout_s}"
 import sys,time
 import requests
 api_url, pid, att_id, timeout_s = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
@@ -238,7 +252,7 @@ PY
 if [ "${PHASE}" = "post" ]; then
   test -f "${STATE_FILE}" || fail "state file missing: ${STATE_FILE} (run without --phase post first)"
 
-  API_URL_FROM_STATE=$(python - <<'PY' "${STATE_FILE}"
+  API_URL_FROM_STATE=$("${PYTHON_BIN}" - <<'PY' "${STATE_FILE}"
 import json,sys
 p=json.loads(open(sys.argv[1],'r',encoding='utf-8').read())
 print(p.get('api_url') or '')
@@ -250,13 +264,13 @@ PY
 
   wait_api "${API_URL}" || fail "api not ready"
 
-  DOC1=$(python - <<'PY' "${STATE_FILE}"
+  DOC1=$("${PYTHON_BIN}" - <<'PY' "${STATE_FILE}"
 import json,sys
 p=json.loads(open(sys.argv[1],'r',encoding='utf-8').read())
 print(p['doc1'])
 PY
 )
-  ATT1=$(python - <<'PY' "${STATE_FILE}"
+  ATT1=$("${PYTHON_BIN}" - <<'PY' "${STATE_FILE}"
 import json,sys
 p=json.loads(open(sys.argv[1],'r',encoding='utf-8').read())
 print(p['att1'])
@@ -290,10 +304,10 @@ DOC1=$(ingest_upload "${P1}" "${CITING_PDF_PATH}")
 [ -n "${DOC1}" ] || fail "citing upload did not return doc id"
 pass "citing upload returned doc_id=${DOC1}"
 
-ingest_get "${P1}" "${DOC1}" | python -c 'import json,sys; p=json.load(sys.stdin); text=json.dumps(p, sort_keys=True); assert "local_path" not in text; print("ok")'
+ingest_get "${P1}" "${DOC1}" | "${PYTHON_BIN}" -c 'import json,sys; p=json.load(sys.stdin); text=json.dumps(p, sort_keys=True); assert "local_path" not in text; print("ok")'
 pass "citing ingest contract does not include local_path"
 
-curl_json -H "X-Project-Id: ${P1}" "${API_URL}/ingest" | python -c 'import json,sys; p=json.load(sys.stdin); docs=p.get("documents") or []; ids={d.get("id") for d in docs if isinstance(d,dict)}; assert sys.argv[1] in ids; print("ok")' "${DOC1}"
+curl_json -H "X-Project-Id: ${P1}" "${API_URL}/ingest" | "${PYTHON_BIN}" -c 'import json,sys; p=json.load(sys.stdin); docs=p.get("documents") or []; ids={d.get("id") for d in docs if isinstance(d,dict)}; assert sys.argv[1] in ids; print("ok")' "${DOC1}"
 pass "/ingest list contains doc in project"
 
 code=$(curl -s -o /dev/null -w "%{http_code}" -H "X-Project-Id: ${P2}" "${API_URL}/ingest/${DOC1}" || true)
@@ -323,19 +337,21 @@ ATT_B=$(attachments_upload "${P2}" "${SOURCE_PDF_PATH}")
 pass "cross-project uploads do not dedupe across projects"
 
 CL1=$(curl_json -H "X-Project-Id: ${P1}" -X POST "${API_URL}/attachments/${ATT1}/clone" \
+  -H "X-User-Id: ${USER_ID}" \
   -H "Content-Type: application/json" \
   -d '{"doc_id":"doc-a"}' \
-  | python -c 'import json,sys; p=json.load(sys.stdin); print(((p.get("attachment") or {}).get("id") or ""))'
+  | "${PYTHON_BIN}" -c 'import json,sys; p=json.load(sys.stdin); print(((p.get("attachment") or {}).get("id") or ""))'
 )
 CL2=$(curl_json -H "X-Project-Id: ${P1}" -X POST "${API_URL}/attachments/${ATT1}/clone" \
+  -H "X-User-Id: ${USER_ID}" \
   -H "Content-Type: application/json" \
   -d '{"doc_id":"doc-b"}' \
-  | python -c 'import json,sys; p=json.load(sys.stdin); print(((p.get("attachment") or {}).get("id") or ""))'
+  | "${PYTHON_BIN}" -c 'import json,sys; p=json.load(sys.stdin); print(((p.get("attachment") or {}).get("id") or ""))'
 )
 [ -n "${CL1}" ] && [ -n "${CL2}" ] || fail "clone ids missing"
 [ "${CL1}" != "${CL2}" ] || fail "expected distinct clone ids"
 
-attachments_get "${P1}" "${ATT1}" | python -c 'import json,sys; p=json.load(sys.stdin); a=p.get("attachment") or {}; ok=(not a.get("doc_id") and not a.get("claim_id") and not a.get("target_id") and a.get("citation_index") is None); assert ok, a; print("ok")'
+attachments_get "${P1}" "${ATT1}" | "${PYTHON_BIN}" -c 'import json,sys; p=json.load(sys.stdin); a=p.get("attachment") or {}; ok=(not a.get("doc_id") and not a.get("claim_id") and not a.get("target_id") and a.get("citation_index") is None); assert ok, a; print("ok")'
 pass "clone is non-mutating for global source"
 
 code=$(curl -s -o /dev/null -w "%{http_code}" -H "X-Project-Id: ${P2}" "${API_URL}/attachments/${ATT1}" || true)
@@ -372,7 +388,7 @@ if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 && command -
 
   pass "restart persistence + isolation (docker compose)"
 else
-  python - <<'PY' "${STATE_FILE}" "${API_URL}" "${DOC1}" "${ATT1}"
+  "${PYTHON_BIN}" - <<'PY' "${STATE_FILE}" "${API_URL}" "${DOC1}" "${ATT1}"
 import json,sys
 state_path, api_url, doc1, att1 = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 with open(state_path, 'w', encoding='utf-8') as f:

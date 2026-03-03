@@ -54,7 +54,18 @@ curl_json -X POST "${API_URL}/dev/wipe" \
 
 export API_URL
 
-python - <<'PY'
+PYTHON_BIN="${PYTHON_BIN:-}"
+if [ -z "${PYTHON_BIN}" ]; then
+  if [ -x ".venv/bin/python" ]; then
+    PYTHON_BIN=".venv/bin/python"
+  elif command -v python3 >/dev/null 2>&1; then
+    PYTHON_BIN="python3"
+  else
+    PYTHON_BIN="python"
+  fi
+fi
+
+"${PYTHON_BIN}" - <<'PY'
 from __future__ import annotations
 
 import os
@@ -68,20 +79,56 @@ from scripts.dev import e2e_flow
 
 API_URL = os.environ.get("API_URL", "http://127.0.0.1:8000").rstrip("/")
 e2e_flow.API_URL = API_URL
+PROJECT_ID = os.environ.get("P1", "default").strip() or "default"
+USER_ID = os.environ.get("USER_ID", "default").strip() or "default"
+
+
+def _scope_headers(*, reviewer_uid: str = "default") -> dict[str, str]:
+    reviewer = str(reviewer_uid or "").strip() or USER_ID
+    return {
+        "X-Project-Id": PROJECT_ID,
+        "X-User-Id": USER_ID,
+        "X-Reviewer-Uid": reviewer,
+    }
 
 
 def req(method: str, path: str, **kwargs):
     url = f"{API_URL}{path}"
-    resp = requests.request(method, url, timeout=kwargs.pop("timeout", 60), **kwargs)
+    headers = kwargs.pop("headers", None)
+    merged_headers = dict(_scope_headers())
+    if isinstance(headers, dict):
+        merged_headers.update(headers)
+    resp = requests.request(
+        method,
+        url,
+        headers=merged_headers,
+        timeout=kwargs.pop("timeout", 60),
+        **kwargs,
+    )
     if resp.status_code >= 400:
         return resp
     return resp
+
+
+def ensure_project_membership() -> None:
+    resp = requests.post(
+        f"{API_URL}/projects",
+        headers={"X-User-Id": USER_ID},
+        json={"project_id": PROJECT_ID},
+        timeout=30,
+    )
+    if resp.status_code >= 400:
+        raise RuntimeError(
+            f"failed ensuring project membership: {resp.status_code} {resp.text[:200]}"
+        )
 
 
 repo = Path(".").resolve()
 sample = repo / "fixtures" / "text-1.pdf"
 if not sample.exists():
     raise RuntimeError(f"missing fixture: {sample}")
+
+ensure_project_membership()
 
 doc_id = e2e_flow.upload_pdf(sample)
 e2e_flow.trigger_extract(doc_id)
@@ -174,6 +221,8 @@ wipe = req(
     headers={"Content-Type": "application/json"},
 )
 assert wipe.status_code == 200
+
+ensure_project_membership()
 
 files = {"file": ("project.zip", zip_blob, "application/zip")}
 imp = req("POST", "/project/import", params={"overwrite": True}, files=files)

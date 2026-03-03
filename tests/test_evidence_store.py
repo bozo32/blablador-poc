@@ -100,6 +100,16 @@ def test_api_stub_request_limit(stub_streamlit, monkeypatch):
         "_request",
         lambda method, path, **kwargs: copy.deepcopy(sample_payload),
     )
+    monkeypatch.setattr(
+        evidence_api.scope_lock,
+        "get_applied_project_id",
+        lambda: "proj-a",
+    )
+    monkeypatch.setattr(
+        evidence_api.scope_lock,
+        "get_applied_uid",
+        lambda: "reviewer-a",
+    )
 
     response = evidence_api.list_evidence("claim-1")
 

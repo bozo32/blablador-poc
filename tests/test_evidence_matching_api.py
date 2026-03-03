@@ -372,9 +372,23 @@ class _StubEvidenceService:
 def test_service_api_list_endpoint_returns_payload(monkeypatch):
     stub = _StubEvidenceService()
     monkeypatch.setattr(backend_main, "evidence_service", stub)
+    monkeypatch.setattr(
+        backend_main,
+        "_require_project_membership_for_scope",
+        lambda **_kwargs: None,
+    )
     client = TestClient(backend_main.app)
+    headers = {
+        "X-Project-Id": "proj-a",
+        "X-User-Id": "reviewer-a",
+        "X-Reviewer-Uid": "reviewer-a",
+    }
 
-    response = client.get("/claims/claim-api/evidence", params={"label": "entails"})
+    response = client.get(
+        "/claims/claim-api/evidence",
+        params={"label": "entails"},
+        headers=headers,
+    )
 
     assert response.status_code == 200
     data = response.json()
@@ -386,10 +400,22 @@ def test_service_api_list_endpoint_returns_payload(monkeypatch):
 def test_service_api_accepts_claim_text(monkeypatch):
     stub = _StubEvidenceService()
     monkeypatch.setattr(backend_main, "evidence_service", stub)
+    monkeypatch.setattr(
+        backend_main,
+        "_require_project_membership_for_scope",
+        lambda **_kwargs: None,
+    )
     client = TestClient(backend_main.app)
+    headers = {
+        "X-Project-Id": "proj-a",
+        "X-User-Id": "reviewer-a",
+        "X-Reviewer-Uid": "reviewer-a",
+    }
 
     response = client.get(
-        "/claims/claim-text/evidence", params={"claim_text": "Fresh claim"}
+        "/claims/claim-text/evidence",
+        params={"claim_text": "Fresh claim"},
+        headers=headers,
     )
 
     assert response.status_code == 200

@@ -10,11 +10,42 @@ import requests
 
 
 API_URL = os.environ.get("API_URL", "http://app-api:8000").rstrip("/")
+DEFAULT_PROJECT_ID = (
+    os.environ.get("P1")
+    or os.environ.get("PROJECT_ID")
+    or "default"
+)
+DEFAULT_USER_ID = os.environ.get("USER_ID", "default")
+DEFAULT_REVIEWER_UID = os.environ.get("REVIEWER_UID", DEFAULT_USER_ID)
+
+
+def _scope_headers() -> Dict[str, str]:
+    pid = str(DEFAULT_PROJECT_ID or "").strip()
+    uid = str(DEFAULT_USER_ID or "").strip()
+    reviewer = str(DEFAULT_REVIEWER_UID or "").strip() or uid
+    headers: Dict[str, str] = {}
+    if pid:
+        headers["X-Project-Id"] = pid
+    if uid:
+        headers["X-User-Id"] = uid
+    if reviewer:
+        headers["X-Reviewer-Uid"] = reviewer
+    return headers
 
 
 def _req(method: str, path: str, **kwargs) -> requests.Response:
     url = f"{API_URL}{path}"
-    resp = requests.request(method, url, timeout=kwargs.pop("timeout", 60), **kwargs)
+    headers = kwargs.pop("headers", None)
+    merged_headers = _scope_headers()
+    if isinstance(headers, dict):
+        merged_headers.update({str(k): str(v) for k, v in headers.items()})
+    resp = requests.request(
+        method,
+        url,
+        headers=merged_headers,
+        timeout=kwargs.pop("timeout", 60),
+        **kwargs,
+    )
     return resp
 
 

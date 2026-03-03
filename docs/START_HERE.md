@@ -20,6 +20,9 @@ This is the single entry point for reading project intent, contracts, and execut
 - `read docs/OS_ERIN-usecase-bughunt-chasing.md`
   - Active Chasing bug-hunt mode.
 
+- `read docs/OS_ERIN-usecase-bughunt-surfing-graph.md`
+  - Dedicated Surfing/Cytoscape graph bug-hunt mode.
+
 - `read docs/OS_ERIN-usecase-bughunt-reading.md`
   - Reading phase data-quality mode.
 
@@ -46,6 +49,7 @@ This is the single entry point for reading project intent, contracts, and execut
 ## Full Map
 
 - `docs/DOC_INDEX.md`
+- `docs/CYTOSCAPE_COMPACT.md`
 - `docs/DOC_GOVERNANCE_MATRIX.md`
 - `docs/DOC_ARCHIVE_PLAN.md`
 

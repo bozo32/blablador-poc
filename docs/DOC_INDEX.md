@@ -16,6 +16,7 @@ This index groups project docs into one coherent reading model.
 - `docs/START_HERE.md` — single road in.
 - `docs/OS_ERIN-compact.md` — compact orientation.
 - `docs/OS_ERIN-usecase-*.md` — mode-specific startup packs.
+- `docs/CYTOSCAPE_COMPACT.md` — graph/Surfing Cytoscape compact manual.
 
 ## Governance Controls
 

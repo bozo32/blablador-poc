@@ -45,6 +45,7 @@ Primary protocol: `docs/WORKFLOW_PROTOCOL.md`.
 Pick one use-case pack:
 
 - `docs/OS_ERIN-usecase-bughunt-chasing.md`
+- `docs/OS_ERIN-usecase-bughunt-surfing-graph.md`
 - `docs/OS_ERIN-usecase-bughunt-reading.md`
 - `docs/OS_ERIN-usecase-contract-validation.md`
 - `docs/OS_ERIN-usecase-phase-execution.md`

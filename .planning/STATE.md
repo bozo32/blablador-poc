@@ -2,8 +2,8 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: unknown
-last_updated: "2026-03-02T18:20:58.178Z"
+status: in_progress
+last_updated: "2026-03-03T12:25:00Z"
 progress:
   total_phases: 3
   completed_phases: 0
@@ -25,9 +25,9 @@ Planning index: `.planning/PRIORITIES.md`
 ## Current Position
 
 Phase: 10 of 12 (Contracts + core workflow simplification)
-Plan: 7 of 7 (10-04.5 Opinion layer)
-Status: In progress (10-04.5-04 complete; next 10-05)
-Last activity: 2026-03-02 — Completed 10-04.5-04; removed intake route-choice prompts and auto-routed unclear uploads to Stray/source flow
+Plan: 10-04.5-08 (scope/workflow regression hardening)
+Status: In progress (10-04.5-07 and 10-04.5-08 patch set implemented locally; manual walkthrough pending)
+Last activity: 2026-03-03 — Added runtime stamp observability, backend-owned scope session API/storage path, and scope/workflow regression hardening (user discovery robustness, explicit project-create intent, ledger invalidation, bootstrap failure visibility)
 
 Progress: ██████████░ 80%
 
@@ -149,6 +149,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-03-02T18:20:25Z
-Stopped at: Completed 10-04.5-04-PLAN.md
-Resume file: None
+Last session: 2026-03-03T12:25:00Z
+Stopped at: 10-04.5-08 implementation checkpoint (tests green; awaiting manual walkthrough)
+Resume file: .planning/phases/10-contracts-core-workflow-simplification/10-04.5-08-PLAN.md

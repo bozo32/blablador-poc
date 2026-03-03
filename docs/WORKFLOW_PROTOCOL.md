@@ -122,6 +122,17 @@ Common failures and remediation:
 
 - empty graph: confirm extraction succeeded and graph indexing ran.
 - missing contexts: verify reference->ingest linking and ledger edge construction.
+- `GET /ingest/{doc_id}/citation-context` reports missing `X-User-Id` even though strict scope code/tests expect it: classify this as stale `app-ui` image/bundle, rebuild and restart UI, then re-test.
+
+```bash
+docker compose build app-ui && docker compose up -d app-ui
+```
+
+If the runtime stamp also indicates stale API bits, refresh both services:
+
+```bash
+docker compose build app-api app-ui && docker compose up -d app-api app-ui
+```
 
 ## Pruning Discipline (10-04.5)
 

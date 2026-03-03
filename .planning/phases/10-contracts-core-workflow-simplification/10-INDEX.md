@@ -24,6 +24,8 @@ Plans:
 - `10-04.5-01-07-04-PLAN.md` — Export/import: include opinion_events.ndjson in project zip
 - `10-04.5-03-PLAN.md` — UX follow-up: duplicate queue keys + non-blocking intake auto-routing
 - `10-04.5-04-PLAN.md` — Intake policy hardening: remove route prompts and send unclear uploads to Stray flow
+- `10-04.5-07-PLAN.md` — Walkthrough fixes: runtime stamp + ledger cache invalidation + stale app-ui rebuild guidance
+- `10-04.5-08-PLAN.md` — Scope/workflow regression fixes: robust user discovery, explicit-only project creation, note dedupe, stale counter refresh, bootstrap failure visibility
 - `10-05-PLAN.md` — Demo + trace replay (reproducible E2E)
 - `10-06-PLAN.md` — Optional add-ons (hosted inference, tri-level assessment)
 - `10-07-PLAN.md` — Deprioritized ops/cloud direction (doc-only backlog)

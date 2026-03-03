@@ -1,5 +1,15 @@
 # Workflow Protocol (Stage A-F)
 
+## Governance Metadata
+
+- Doc role: operational protocol
+- Authority tier: 2 (protocol)
+- Status: active
+- Owner: repo maintainers
+- Last reviewed: 2026-03-03
+- Canonical for: stage verification flow and expected operator checks
+- Must not redefine: behavioral contracts owned by `docs/IDENTITY_SCOPE_VISIBILITY_CONTRACT.md`
+
 This protocol is the operational definition of the "spine-only" workflow: all durable state lives in Postgres + object store; the UI is never the source of truth.
 
 Primary verifier runner:

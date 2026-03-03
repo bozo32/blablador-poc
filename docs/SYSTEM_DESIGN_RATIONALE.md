@@ -1,6 +1,14 @@
 # System Design Rationale
 
-Status: explanatory design intent for engineers and technical stakeholders (updated 2026-03-03)
+## Governance Metadata
+
+- Doc role: architecture rationale
+- Authority tier: 3 (spec rationale)
+- Status: active
+- Owner: repo maintainers
+- Last reviewed: 2026-03-03
+- Canonical for: design tradeoffs and long-horizon posture
+- Defers to: contract/protocol docs for runtime invariants
 
 This document answers a practical question: "Why is the system built this way, and what does that buy us?"
 

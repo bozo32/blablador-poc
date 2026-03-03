@@ -1,5 +1,15 @@
 # Graph Compaction Rollback Runbook
 
+## Governance Metadata
+
+- Doc role: runbook
+- Authority tier: protocol extension (domain-specific operations)
+- Status: active
+- Owner: repo maintainers
+- Last reviewed: 2026-03-03
+- Canonical for: graph compaction rollback procedure
+- Defers to: contract docs for scope/identity requirements
+
 ## Scope
 
 This runbook covers rollback for Stage 3 durable graph compaction (`doc-key-dedup-v1`) backed by:

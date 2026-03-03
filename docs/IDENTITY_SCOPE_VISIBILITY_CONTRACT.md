@@ -1,6 +1,13 @@
 # Identity, Scope, and Visibility Contract
 
-Status: active POC contract (updated 2026-03-03)
+## Governance Metadata
+
+- Doc role: behavioral contract
+- Authority tier: 1 (highest normative contract)
+- Status: active POC contract
+- Owner: repo maintainers
+- Last reviewed: 2026-03-03
+- Canonical for: identity/scope/visibility invariants and fail-closed behavior
 
 This document is intentionally written for two readers:
 

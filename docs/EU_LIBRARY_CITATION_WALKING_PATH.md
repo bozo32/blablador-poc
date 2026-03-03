@@ -1,6 +1,14 @@
 # EU Library Citation Walking Path
 
-Status: strategic direction document for the POC (updated 2026-03-02)
+## Governance Metadata
+
+- Doc role: strategic direction
+- Authority tier: rationale/support (non-normative)
+- Status: active direction note
+- Owner: repo maintainers
+- Last reviewed: 2026-03-03
+- Canonical for: target-use narrative and gap framing
+- Must not override: active contracts/protocol/spec
 
 This document is intentionally written for two readers:
 

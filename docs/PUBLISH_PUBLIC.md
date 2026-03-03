@@ -1,5 +1,14 @@
 # Publishing From Private Repo To Public Repo
 
+## Governance Metadata
+
+- Doc role: publication runbook
+- Authority tier: process/support
+- Status: active
+- Owner: repo maintainers
+- Last reviewed: 2026-03-03
+- Canonical for: private->public publication workflow only
+
 You work in the private repo (`blablador-poc`) and selectively publish code/docs to the public repo (`os-ERIN`).
 
 ## One-Time Remote Setup

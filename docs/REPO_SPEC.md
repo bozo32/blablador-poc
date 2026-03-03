@@ -1,5 +1,15 @@
 # OS-ERIN (`blablador-poc`) — Functional Description + Technical Spec
 
+## Governance Metadata
+
+- Doc role: product and technical specification
+- Authority tier: 3 (spec)
+- Status: active
+- Owner: repo maintainers
+- Last reviewed: 2026-03-03
+- Canonical for: end-to-end product behavior and architecture baseline
+- Defers to: `docs/IDENTITY_SCOPE_VISIBILITY_CONTRACT.md`, `docs/WORKFLOW_PROTOCOL.md`
+
 ## High-level overview (1 paragraph)
 
 OS-ERIN is a local-first citation validation web app: a reviewer uploads an academic PDF (“citing” paper), navigates in-text citation callouts, follows a chosen citation to a target reference, segments the citing sentence into reviewable claim text, attaches the cited-source PDF, and then runs an evidence pipeline that retrieves and ranks candidate spans from the cited source and labels them (support/contradict/neutral) using NLI—after which the reviewer records a judgment and exports those judgments for downstream analysis.

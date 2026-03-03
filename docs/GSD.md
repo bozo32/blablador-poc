@@ -1,5 +1,14 @@
 # GSD (Get Shit Done) Setup
 
+## Governance Metadata
+
+- Doc role: workflow tooling guide
+- Authority tier: support (process/tooling)
+- Status: active
+- Owner: repo maintainers
+- Last reviewed: 2026-03-03
+- Canonical for: repo-local GSD command usage
+
 This repo vendors the OpenCode GSD workflow under `.opencode/` so phase planning and execution work on any machine without relying on `~/.opencode`.
 
 ## Install / Update

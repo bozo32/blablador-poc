@@ -1,5 +1,15 @@
 # Workflow Stages: Backend Notes (WIP)
 
+## Governance Metadata
+
+- Doc role: implementation notes
+- Authority tier: reference-only (non-normative)
+- Status: provisional/WIP
+- Owner: repo maintainers
+- Last reviewed: 2026-03-03
+- Canonical for: historical backend-change notes only
+- Superseded by: `docs/WORKFLOW_PROTOCOL.md` and phase verification artifacts when conflicts exist
+
 This document captures backend-only structural changes found in a recent demo-driven working tree, and reframes them as stage-by-stage workflow outcomes.
 
 Baseline reference:

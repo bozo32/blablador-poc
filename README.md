@@ -56,6 +56,7 @@ This repo runs as multiple services under Compose (see `docker-compose.yml`):
 
 ## Specs
 
+- Start here (single entry point): `docs/START_HERE.md`
 - Repo functional description + technical spec: `docs/REPO_SPEC.md`
 - Identity/scope/visibility contract: `docs/IDENTITY_SCOPE_VISIBILITY_CONTRACT.md`
 - EU library citation-walking direction and gaps: `docs/EU_LIBRARY_CITATION_WALKING_PATH.md`

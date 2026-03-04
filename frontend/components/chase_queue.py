@@ -159,6 +159,7 @@ def render_requested_works_queue(
     *,
     api_url: str,
     run_id: str,
+    project_id: str,
     claim_id: str,
     citing_doc_id: str,
     reviewer_uid: str,
@@ -173,7 +174,11 @@ def render_requested_works_queue(
 
     data = {}
     try:
-        data = workflow_api.get_run_status(api_url, run_id=rid)
+        data = workflow_api.get_run_status(
+            api_url,
+            run_id=rid,
+            project_id=project_id,
+        )
     except Exception as exc:
         st.warning(f"Workflow status unavailable: {exc}")
         return
@@ -321,7 +326,11 @@ def render_requested_works_queue(
                         or attachment_id
                     )
 
-                    _ = workflow_api.resume_run(api_url, run_id=rid)
+                    _ = workflow_api.resume_run(
+                        api_url,
+                        run_id=rid,
+                        project_id=project_id,
+                    )
                     st.caption("Assigned via clone; resuming run...")
                 except Exception as exc:
                     st.warning(f"Assign failed: {exc}")

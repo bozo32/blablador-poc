@@ -531,6 +531,7 @@ def render(
                     claim_id=str(claim_id),
                     reviewer_uid=str(reviewer_label),
                     citing_doc_id=str(doc_id),
+                    project_id=str(project_id),
                 )
                 run_id = str((out or {}).get("run_id") or "").strip() or None
                 if run_id:
@@ -606,6 +607,7 @@ def render(
                         api_url,
                         claim_id=claim_id,
                         reviewer_uid=reviewer_label,
+                        project_id=project_id,
                     )
                 except Exception:
                     latest = None
@@ -624,7 +626,11 @@ def render(
                     )
                 else:
                     try:
-                        cached = workflow_api.get_run_status(api_url, run_id=run_id)
+                        cached = workflow_api.get_run_status(
+                            api_url,
+                            run_id=run_id,
+                            project_id=project_id,
+                        )
                         status_cache[run_id] = cached
                         run_state = str(
                             ((cached.get("run") or {}).get("state")) or run_state
@@ -655,6 +661,7 @@ def render(
             chase_queue_component.render_requested_works_queue(
                 api_url=api_url,
                 run_id=str(selected_run_id),
+                project_id=str(project_id),
                 claim_id=str(selected_claim_id),
                 citing_doc_id=str(doc_id),
                 reviewer_uid=reviewer_label,

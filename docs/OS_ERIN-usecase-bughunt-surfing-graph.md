@@ -35,6 +35,7 @@ Use this lane when debugging Cytoscape graph behavior in Surfing.
 ## Verify First
 
 - `bash scripts/dev/verify_10_03_graph_nav.sh`
+- `python3 scripts/dev/smoke_multi_project_scope.py --user <reviewer_uid> --project-a <project_a> --doc-a <doc_id_in_project_a> --project-b <project_b> --doc-b <doc_id_in_project_b> --claim-id cite:shared-doc:0:<reviewer_uid>:seg-1`
 - `./.venv/bin/pytest -q tests/test_nav_graph_api.py`
 - `./.venv/bin/pytest -q tests/test_span_graph_rebuild.py`
 

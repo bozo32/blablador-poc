@@ -2553,18 +2553,32 @@ def render_scope_selector_block() -> None:
             user_options.append(fallback_uid)
 
     user_select_options = [""] + sorted(set(user_options)) + [NEW_USER_OPTION]
+    user_select_key = "scope_user_select"
+    pending_new_uid = str(st.session_state.get("scope_new_uid") or "").strip()
     if draft_uid and draft_uid in user_options:
-        user_index = user_select_options.index(draft_uid)
+        selected_user_default = draft_uid
     elif draft_uid:
         st.session_state["scope_new_uid"] = draft_uid
-        user_index = user_select_options.index(NEW_USER_OPTION)
+        selected_user_default = NEW_USER_OPTION
+    elif pending_new_uid:
+        if pending_new_uid not in user_options:
+            user_options.append(pending_new_uid)
+            user_select_options = [""] + sorted(set(user_options)) + [NEW_USER_OPTION]
+        st.session_state[SCOPE_DRAFT_UID] = pending_new_uid
+        selected_user_default = pending_new_uid
     else:
-        user_index = 0
+        selected_user_default = ""
+
+    if str(selected_user_default) not in user_select_options:
+        selected_user_default = ""
+    current_user_value = st.session_state.get(user_select_key)
+    if str(current_user_value or "") not in user_select_options:
+        st.session_state[user_select_key] = selected_user_default
 
     selected_user = st.selectbox(
         "User ID",
         options=user_select_options,
-        index=user_index,
+        key=user_select_key,
         format_func=lambda value: (
             "Select user..."
             if value == ""
@@ -2623,17 +2637,34 @@ def render_scope_selector_block() -> None:
 
     if draft_uid:
         select_options = [""] + sorted(set(project_options)) + [NEW_PROJECT_OPTION]
+        project_select_key = "scope_project_select"
+        pending_new_project_id = str(
+            st.session_state.get("scope_new_project_id") or ""
+        ).strip()
         if draft_project_id and draft_project_id in project_options:
-            select_index = select_options.index(draft_project_id)
+            selected_project_default = draft_project_id
         elif draft_project_id:
             st.session_state["scope_new_project_id"] = draft_project_id
-            select_index = select_options.index(NEW_PROJECT_OPTION)
+            selected_project_default = NEW_PROJECT_OPTION
+        elif pending_new_project_id:
+            if pending_new_project_id not in project_options:
+                project_options.append(pending_new_project_id)
+                select_options = [""] + sorted(set(project_options)) + [NEW_PROJECT_OPTION]
+            st.session_state[SCOPE_DRAFT_PROJECT_ID] = pending_new_project_id
+            selected_project_default = pending_new_project_id
         else:
-            select_index = 0
+            selected_project_default = ""
+
+        if str(selected_project_default) not in select_options:
+            selected_project_default = ""
+        current_project_value = st.session_state.get(project_select_key)
+        if str(current_project_value or "") not in select_options:
+            st.session_state[project_select_key] = selected_project_default
+
         selected_project = st.selectbox(
             "Project ID",
             options=select_options,
-            index=select_index,
+            key=project_select_key,
             format_func=lambda v: (
                 "Select project..."
                 if not v
@@ -2658,6 +2689,7 @@ def render_scope_selector_block() -> None:
                 st.session_state["scope_new_project_id"] = ""
         explicit_new_project_intent = str(selected_project) == NEW_PROJECT_OPTION
     else:
+        st.session_state["scope_project_select"] = ""
         st.selectbox(
             "Project ID",
             options=[""],
@@ -3784,6 +3816,7 @@ def render_evidence_panel() -> None:
                                     claim_id=str(selected_claim),
                                     reviewer_uid=str(active_reviewer_uid),
                                     citing_doc_id=str(provenance.get("doc_id") or ""),
+                                    project_id=get_project_id(),
                                     judgment_snapshot=dict(stored or {}),
                                     rollup_label=rollup,
                                     by_target=None,

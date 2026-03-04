@@ -25,7 +25,7 @@ from backend.settings import settings as app_settings
 from backend.span_graph_store import SpanGraphStore
 from backend.spine.ids import work_id_from_doc_id
 from backend.spine.pipeline_artifacts import StageArtifactAlreadyExists
-from backend.spine import pipeline_run_scopes, pipeline_run_status
+from backend.spine import pipeline_run_scopes, pipeline_run_status, pipeline_runs
 
 from .builders import build_citespans_data, build_extract_data
 
@@ -157,7 +157,14 @@ class HappyPathOrchestrator:
         if not rid:
             return
 
-        run = pipeline_run_status.get_run_status(rid)
+        run_record = pipeline_runs.get_run(rid)
+        if run_record is None:
+            return
+        project_id = str(run_record.get("project_id") or "").strip()
+        if not project_id:
+            return
+        created_by_user_id = str(run_record.get("created_by_user_id") or "").strip()
+        run = pipeline_run_status.get_run_status(rid, project_id=project_id)
         if run is None:
             return
 
@@ -168,6 +175,8 @@ class HappyPathOrchestrator:
         if not scope_id or not citing_doc_id:
             pipeline_run_status.upsert_run_status(
                 rid,
+                project_id=project_id,
+                created_by_user_id=created_by_user_id or reviewer_uid,
                 scope_type=scope_type,
                 scope_id=scope_id or "(missing)",
                 reviewer_uid=reviewer_uid,
@@ -183,6 +192,8 @@ class HappyPathOrchestrator:
         if background_state.get_state().get("paused"):
             pipeline_run_status.upsert_run_status(
                 rid,
+                project_id=project_id,
+                created_by_user_id=created_by_user_id or reviewer_uid,
                 scope_type=scope_type,
                 scope_id=scope_id,
                 reviewer_uid=reviewer_uid,
@@ -190,13 +201,18 @@ class HappyPathOrchestrator:
                 state="blocked",
             )
             pipeline_run_status.append_event(
-                rid, type="run_blocked", payload={"reason": "paused"}
+                rid,
+                project_id=project_id,
+                type="run_blocked",
+                payload={"reason": "paused"},
             )
             return
 
         started_at = _utcnow_z()
         pipeline_run_status.upsert_run_status(
             rid,
+            project_id=project_id,
+            created_by_user_id=created_by_user_id or reviewer_uid,
             scope_type=scope_type,
             scope_id=scope_id,
             reviewer_uid=reviewer_uid,
@@ -204,11 +220,19 @@ class HappyPathOrchestrator:
             state="running",
             started_at=str(run.get("started_at") or "").strip() or started_at,
         )
-        pipeline_run_status.append_event(rid, type="run_started", payload={})
+        pipeline_run_status.append_event(
+            rid,
+            project_id=project_id,
+            type="run_started",
+            payload={},
+        )
 
         # Build/write extract and citespans (write-once).
         extract_started = _utcnow_z()
-        extract_data = build_extract_data(citing_doc_id=citing_doc_id)
+        extract_data = build_extract_data(
+            citing_doc_id=citing_doc_id,
+            project_id=project_id,
+        )
         try:
             pipeline_contracts_service.store_stage(
                 run_id=rid,
@@ -246,7 +270,7 @@ class HappyPathOrchestrator:
             pass
         citespans_finished = _utcnow_z()
 
-        targets = pipeline_run_status.list_target_status(rid)
+        targets = pipeline_run_status.list_target_status(rid, project_id=project_id)
         for tgt in targets:
             tid = str(tgt.get("target_id") or "").strip()
             if not tid:
@@ -256,6 +280,7 @@ class HappyPathOrchestrator:
             pipeline_run_status.upsert_target_status(
                 rid,
                 tid,
+                project_id=project_id,
                 state=str(tgt.get("state") or "requested"),
                 citation_index=tgt.get("citation_index"),
                 reference_id=tgt.get("reference_id"),
@@ -270,6 +295,7 @@ class HappyPathOrchestrator:
             pipeline_run_status.upsert_target_status(
                 rid,
                 tid,
+                project_id=project_id,
                 state=str(tgt.get("state") or "requested"),
                 citation_index=tgt.get("citation_index"),
                 reference_id=tgt.get("reference_id"),
@@ -283,7 +309,7 @@ class HappyPathOrchestrator:
             )
 
         # Refresh attachment availability for all targets.
-        targets = pipeline_run_status.list_target_status(rid)
+        targets = pipeline_run_status.list_target_status(rid, project_id=project_id)
         missing = 0
         for tgt in targets:
             tid = str(tgt.get("target_id") or "").strip()
@@ -302,6 +328,7 @@ class HappyPathOrchestrator:
                 pipeline_run_status.upsert_target_status(
                     rid,
                     tid,
+                    project_id=project_id,
                     state=next_state or "available",
                     citation_index=tgt.get("citation_index"),
                     reference_id=tgt.get("reference_id"),
@@ -312,6 +339,7 @@ class HappyPathOrchestrator:
                 pipeline_run_status.upsert_target_status(
                     rid,
                     tid,
+                    project_id=project_id,
                     state=str(tgt.get("state") or "requested") or "requested",
                     citation_index=tgt.get("citation_index"),
                     reference_id=tgt.get("reference_id"),
@@ -326,6 +354,8 @@ class HappyPathOrchestrator:
         if missing > 0:
             pipeline_run_status.upsert_run_status(
                 rid,
+                project_id=project_id,
+                created_by_user_id=created_by_user_id or reviewer_uid,
                 scope_type=scope_type,
                 scope_id=scope_id,
                 reviewer_uid=reviewer_uid,
@@ -334,6 +364,7 @@ class HappyPathOrchestrator:
             )
             pipeline_run_status.append_event(
                 rid,
+                project_id=project_id,
                 type="run_blocked",
                 payload={"missing_attachments": int(missing)},
             )
@@ -342,6 +373,8 @@ class HappyPathOrchestrator:
         # TODO(10-02): Run candidate stages when all targets are runnable.
         pipeline_run_status.upsert_run_status(
             rid,
+            project_id=project_id,
+            created_by_user_id=created_by_user_id or reviewer_uid,
             scope_type=scope_type,
             scope_id=scope_id,
             reviewer_uid=reviewer_uid,
@@ -349,7 +382,12 @@ class HappyPathOrchestrator:
             state="complete",
             finished_at=_utcnow_z(),
         )
-        pipeline_run_status.append_event(rid, type="run_finished", payload={})
+        pipeline_run_status.append_event(
+            rid,
+            project_id=project_id,
+            type="run_finished",
+            payload={},
+        )
 
 
 _ORCH = HappyPathOrchestrator(
@@ -358,7 +396,7 @@ _ORCH = HappyPathOrchestrator(
 
 
 def start_run_for_claimspan(
-    *, claim_id: str, reviewer_uid: str, citing_doc_id: str
+    *, claim_id: str, reviewer_uid: str, citing_doc_id: str, project_id: str
 ) -> dict:
     cid = str(claim_id or "").strip()
     ruid = str(reviewer_uid or "").strip() or "default"
@@ -367,14 +405,24 @@ def start_run_for_claimspan(
         raise ValueError("claim_id is required")
     if not doc_id:
         raise ValueError("citing_doc_id is required")
+    pid = str(project_id or "").strip()
+    if not pid:
+        raise ValueError("project_id is required")
 
     work_id = work_id_from_doc_id(doc_id)
-    run = pipeline_contracts_service.create_run(work_id=work_id, note="happy-path")
+    run = pipeline_contracts_service.create_run(
+        work_id=work_id,
+        project_id=pid,
+        created_by_user_id=ruid,
+        note="happy-path",
+    )
     run_id = str(run.get("run_id") or "").strip()
     if not run_id:
         raise RuntimeError("create_run did not return run_id")
 
     pipeline_run_scopes.insert_scope(
+        project_id=pid,
+        created_by_user_id=ruid,
         scope_type=_SCOPE_TYPE,
         scope_id=cid,
         reviewer_uid=ruid,
@@ -383,6 +431,8 @@ def start_run_for_claimspan(
     )
     pipeline_run_status.upsert_run_status(
         run_id,
+        project_id=pid,
+        created_by_user_id=ruid,
         scope_type=_SCOPE_TYPE,
         scope_id=cid,
         reviewer_uid=ruid,
@@ -391,7 +441,7 @@ def start_run_for_claimspan(
     )
 
     citation_index = _parse_citation_index(cid)
-    extract_data = build_extract_data(citing_doc_id=doc_id)
+    extract_data = build_extract_data(citing_doc_id=doc_id, project_id=pid)
     anchors = list(extract_data.get("citation_anchors") or [])
     if citation_index is not None:
         anchors = [
@@ -423,16 +473,25 @@ def start_run_for_claimspan(
         pipeline_run_status.upsert_target_status(
             run_id,
             target_id,
+            project_id=pid,
             state=state,
             citation_index=anchor.get("citation_index"),
             reference_id=reference_id,
             attachment_id=attachment_id,
         )
 
-    pipeline_run_status.append_event(run_id, type="run_queued", payload={})
+    pipeline_run_status.append_event(
+        run_id,
+        project_id=pid,
+        type="run_queued",
+        payload={},
+    )
     if background_state.get_state().get("paused"):
         pipeline_run_status.append_event(
-            run_id, type="run_blocked", payload={"reason": "paused"}
+            run_id,
+            project_id=pid,
+            type="run_blocked",
+            payload={"reason": "paused"},
         )
         return {"run_id": run_id}
 
@@ -440,16 +499,21 @@ def start_run_for_claimspan(
     return {"run_id": run_id}
 
 
-def resume_run(run_id: str) -> dict:
+def resume_run(run_id: str, *, project_id: str) -> dict:
     rid = str(run_id or "").strip()
     if not rid:
         raise ValueError("run_id is required")
-    run = pipeline_run_status.get_run_status(rid)
+    pid = str(project_id or "").strip()
+    if not pid:
+        raise ValueError("project_id is required")
+    run = pipeline_run_status.get_run_status(rid, project_id=pid)
     if run is None:
         raise KeyError("run not found")
     if background_state.get_state().get("paused"):
         pipeline_run_status.upsert_run_status(
             rid,
+            project_id=pid,
+            created_by_user_id=str(run.get("created_by_user_id") or "default"),
             scope_type=str(run.get("scope_type") or _SCOPE_TYPE),
             scope_id=str(run.get("scope_id") or ""),
             reviewer_uid=str(run.get("reviewer_uid") or "default"),
@@ -459,18 +523,25 @@ def resume_run(run_id: str) -> dict:
         return {"run_id": rid, "blocked": True}
     pipeline_run_status.upsert_run_status(
         rid,
+        project_id=pid,
+        created_by_user_id=str(run.get("created_by_user_id") or "default"),
         scope_type=str(run.get("scope_type") or _SCOPE_TYPE),
         scope_id=str(run.get("scope_id") or ""),
         reviewer_uid=str(run.get("reviewer_uid") or "default"),
         citing_doc_id=str(run.get("citing_doc_id") or ""),
         state="queued",
     )
-    pipeline_run_status.append_event(rid, type="run_resumed", payload={})
+    pipeline_run_status.append_event(
+        rid,
+        project_id=pid,
+        type="run_resumed",
+        payload={},
+    )
     _ORCH.enqueue(rid)
     return {"run_id": rid}
 
 
-def cancel_target(run_id: str, target_id: str) -> dict:
+def cancel_target(run_id: str, target_id: str, *, project_id: str) -> dict:
     rid = str(run_id or "").strip()
     tid = str(target_id or "").strip()
     if not rid:
@@ -478,19 +549,27 @@ def cancel_target(run_id: str, target_id: str) -> dict:
     if not tid:
         raise ValueError("target_id is required")
 
-    current = pipeline_run_status.get_target_status(rid, tid)
+    pid = str(project_id or "").strip()
+    if not pid:
+        raise ValueError("project_id is required")
+    current = pipeline_run_status.get_target_status(rid, tid, project_id=pid)
     if current is None:
         raise KeyError("target not found")
     pipeline_run_status.upsert_target_status(
         rid,
         tid,
+        project_id=pid,
         state="cancelled",
         citation_index=current.get("citation_index"),
         reference_id=current.get("reference_id"),
         attachment_id=current.get("attachment_id"),
     )
     pipeline_run_status.append_event(
-        rid, type="target_cancelled", target_id=tid, payload={}
+        rid,
+        project_id=pid,
+        type="target_cancelled",
+        target_id=tid,
+        payload={},
     )
     return {"run_id": rid, "target_id": tid, "state": "cancelled"}
 

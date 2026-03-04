@@ -8,7 +8,6 @@ from typing import Any, Dict, Optional
 from uuid import uuid4
 
 from backend.db import connect
-from backend.settings import settings as app_settings
 
 
 _RUN_COLS = (
@@ -24,17 +23,11 @@ _RUN_COLS = (
 )
 
 
-def _project_id() -> str:
-    return str(getattr(app_settings, "DEFAULT_PROJECT_ID", "default") or "default")
-
-
-def _user_id() -> str:
-    return str(getattr(app_settings, "DEFAULT_USER_ID", "local") or "local")
-
-
 def create_run(
     work_id: str,
     *,
+    project_id: str,
+    created_by_user_id: str,
     caps: dict,
     settings_json: dict,
     input_fingerprint: str,
@@ -47,8 +40,12 @@ def create_run(
     if not fp:
         raise ValueError("input_fingerprint is required")
 
-    pid = _project_id()
-    uid = _user_id()
+    pid = str(project_id or "").strip()
+    if not pid:
+        raise ValueError("project_id is required")
+    uid = str(created_by_user_id or "").strip()
+    if not uid:
+        raise ValueError("created_by_user_id is required")
     run_id = str(uuid4())
 
     caps_blob = json.dumps(caps or {}, ensure_ascii=True, sort_keys=True)

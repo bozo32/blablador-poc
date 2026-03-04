@@ -32,6 +32,7 @@ services:
       - postgres
       - minio
       - fallback-worker
+    restart: unless-stopped
     volumes:
       - ./data:/app/data
 

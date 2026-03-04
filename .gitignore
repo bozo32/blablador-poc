@@ -1,41 +1,110 @@
-# Python byte-code and caches
+# ─────────────────────────────────────────────────────────────
+# Python build artifacts
+# ─────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
-*.pyc
-# pytest cache
-.pytest_cache/
-# VSCode editor folder
-.vscode/
-# temp / output files
-*.faiss
-*.meta.pkl
-output.json
-tmp.*
+*.pyo
+*.pyd
 
-# secrets
-.env
+# Test / coverage artifacts
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Static analysis / type checking caches
+.mypy_cache/
+.pytype/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# ─────────────────────────────────────────────────────────────
+# Editor / IDE
+# ─────────────────────────────────────────────────────────────
+.vscode/
+.idea/
 
 # macOS
 .DS_Store
-*.pdf
-!fixtures/*.pdf
-*.xml
-**/__pycache__/
-**/*.py[cod]
-# anything else you don’t want under source control
 
-# ─── Project-generated folders ───────────────────────────────────────────────
-# Keep runtime data out of git, but allow the in-repo graph POC dataset.
-data/*
+# ─────────────────────────────────────────────────────────────
+# Environment / secrets
+# ─────────────────────────────────────────────────────────────
+.env
+.env.*
+*.key
+*.pem
+
+# ─────────────────────────────────────────────────────────────
+# Temporary files
+# ─────────────────────────────────────────────────────────────
+tmp.*
+*.log
+*.tmp
+
+# ─────────────────────────────────────────────────────────────
+# Generated ML / search artifacts
+# ─────────────────────────────────────────────────────────────
+*.faiss
+*.meta.pkl
+output.json
+
+# ─────────────────────────────────────────────────────────────
+# Docker / container runtime leftovers
+# ─────────────────────────────────────────────────────────────
+docker-data/
+docker-cache/
+
+# ─────────────────────────────────────────────────────────────
+# Project runtime data
+# Keep runtime data out of git except small canonical examples
+# ─────────────────────────────────────────────────────────────
+data/**
 !data/poc_graph.json
+
 experiments/
 
-# Local-only corpora / scans
+# ─────────────────────────────────────────────────────────────
+# Local corpora and document collections
+# ─────────────────────────────────────────────────────────────
 corpus/local/
-local_corpus/
 corpus/focus/
 corpus/ok/
+local_corpus/
 
-# ─── Local ColBERT clones (use requirements pin or submodule instead) ───────
+corpus/**/*.pdf
+corpus/**/*.xml
+local_corpus/**/*.pdf
+local_corpus/**/*.xml
+
+# ─────────────────────────────────────────────────────────────
+# Test fixtures (explicitly allowed)
+# ─────────────────────────────────────────────────────────────
+!fixtures/**/*.pdf
+!fixtures/**/*.xml
+
+# ─────────────────────────────────────────────────────────────
+# Node / frontend tooling
+# ─────────────────────────────────────────────────────────────
+node_modules/
+
+# ─────────────────────────────────────────────────────────────
+# Local ColBERT clones
+# ─────────────────────────────────────────────────────────────
 ColBERT/
 vendor/colbert/
+
+# ─────────────────────────────────────────────────────────────
+# Opencode / agent tooling state
+# ─────────────────────────────────────────────────────────────
+.opencode/
+
+# ─────────────────────────────────────────────────────────────
+# Misc
+# ─────────────────────────────────────────────────────────────
+*.bak
+*.swp

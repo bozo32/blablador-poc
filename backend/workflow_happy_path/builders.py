@@ -8,23 +8,22 @@ from __future__ import annotations
 
 from typing import Any
 
-from backend.settings import settings as app_settings
 from backend.spine.ingest_view import build_ingested_document_from_spine
 from backend import text_selectors
 from backend.span_graph_store import SpanGraphStore
 
 
-def build_extract_data(*, citing_doc_id: str) -> dict:
+def build_extract_data(*, citing_doc_id: str, project_id: str) -> dict:
     doc_id = str(citing_doc_id or "").strip()
     if not doc_id:
         raise ValueError("citing_doc_id is required")
 
-    project_id = str(
-        getattr(app_settings, "DEFAULT_PROJECT_ID", "default") or "default"
-    )
+    resolved_project_id = str(project_id or "").strip()
+    if not resolved_project_id:
+        raise ValueError("project_id is required")
     doc = build_ingested_document_from_spine(
         work_id=doc_id,
-        project_id=project_id,
+        project_id=resolved_project_id,
         include_extraction_data=True,
     )
     if doc is None:

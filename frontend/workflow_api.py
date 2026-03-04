@@ -26,16 +26,37 @@ def _json(resp: requests.Response) -> dict:
         ) from exc
 
 
+def _project_headers(project_id: Optional[str]) -> Optional[dict[str, str]]:
+    pid = str(project_id or "").strip()
+    if not pid:
+        return None
+    return {"X-Project-Id": pid}
+
+
 def start_claimspan_run(
-    api_url: str, *, claim_id: str, reviewer_uid: str, citing_doc_id: str
+    api_url: str,
+    *,
+    claim_id: str,
+    reviewer_uid: str,
+    citing_doc_id: str,
+    project_id: Optional[str] = None,
 ) -> dict:
     url = f"{_root(api_url)}/workflow/claimspans/{str(claim_id)}/runs"
     payload = {
         "reviewer_uid": str(reviewer_uid or "default"),
         "citing_doc_id": str(citing_doc_id or "").strip(),
     }
+    headers: dict[str, str] = {}
+    pid = str(project_id or "").strip()
+    if pid:
+        headers["X-Project-Id"] = pid
     try:
-        resp = requests.post(url, json=payload, timeout=DEFAULT_TIMEOUT_S)
+        resp = requests.post(
+            url,
+            json=payload,
+            headers=headers or None,
+            timeout=DEFAULT_TIMEOUT_S,
+        )
         resp.raise_for_status()
         return _json(resp)
     except requests.RequestException as exc:
@@ -52,6 +73,7 @@ def finalize_assessment(
     rollup_label: Optional[str] = None,
     by_target: Optional[dict] = None,
     assessed_at: Optional[str] = None,
+    project_id: Optional[str] = None,
 ) -> dict:
     url = f"{_root(api_url)}/workflow/claimspans/{str(claim_id)}/assessment/finalize"
     ts = assessed_at
@@ -67,39 +89,59 @@ def finalize_assessment(
         "judgment_snapshot": judgment_snapshot or {},
     }
     try:
-        resp = requests.post(url, json=payload, timeout=DEFAULT_TIMEOUT_S)
+        resp = requests.post(
+            url,
+            json=payload,
+            headers=_project_headers(project_id),
+            timeout=DEFAULT_TIMEOUT_S,
+        )
         resp.raise_for_status()
         return _json(resp)
     except requests.RequestException as exc:
         raise WorkflowApiError(str(exc)) from exc
 
 
-def resume_run(api_url: str, *, run_id: str) -> dict:
+def resume_run(api_url: str, *, run_id: str, project_id: Optional[str] = None) -> dict:
     url = f"{_root(api_url)}/workflow/runs/{str(run_id)}/resume"
     try:
-        resp = requests.post(url, timeout=DEFAULT_TIMEOUT_S)
+        resp = requests.post(
+            url,
+            headers=_project_headers(project_id),
+            timeout=DEFAULT_TIMEOUT_S,
+        )
         resp.raise_for_status()
         return _json(resp)
     except requests.RequestException as exc:
         raise WorkflowApiError(str(exc)) from exc
 
 
-def get_run_status(api_url: str, *, run_id: str) -> dict:
+def get_run_status(api_url: str, *, run_id: str, project_id: Optional[str] = None) -> dict:
     url = f"{_root(api_url)}/workflow/runs/{str(run_id)}/status"
     try:
-        resp = requests.get(url, timeout=DEFAULT_TIMEOUT_S)
+        resp = requests.get(
+            url,
+            headers=_project_headers(project_id),
+            timeout=DEFAULT_TIMEOUT_S,
+        )
         resp.raise_for_status()
         return _json(resp)
     except requests.RequestException as exc:
         raise WorkflowApiError(str(exc)) from exc
 
 
-def get_latest_run(api_url: str, *, claim_id: str, reviewer_uid: str) -> dict | None:
+def get_latest_run(
+    api_url: str,
+    *,
+    claim_id: str,
+    reviewer_uid: str,
+    project_id: Optional[str] = None,
+) -> dict | None:
     url = f"{_root(api_url)}/workflow/claimspans/{str(claim_id)}/runs/latest"
     try:
         resp = requests.get(
             url,
             params={"reviewer_uid": str(reviewer_uid or "default")},
+            headers=_project_headers(project_id),
             timeout=DEFAULT_TIMEOUT_S,
         )
         resp.raise_for_status()
@@ -110,14 +152,51 @@ def get_latest_run(api_url: str, *, claim_id: str, reviewer_uid: str) -> dict | 
         raise WorkflowApiError(str(exc)) from exc
 
 
-def cancel_target(api_url: str, *, run_id: str, target_id: str) -> dict:
+def cancel_target(
+    api_url: str,
+    *,
+    run_id: str,
+    target_id: str,
+    project_id: Optional[str] = None,
+) -> dict:
     url = (
         f"{_root(api_url)}/workflow/runs/{str(run_id)}/targets/{str(target_id)}/cancel"
     )
     try:
-        resp = requests.post(url, timeout=DEFAULT_TIMEOUT_S)
+        resp = requests.post(
+            url,
+            headers=_project_headers(project_id),
+            timeout=DEFAULT_TIMEOUT_S,
+        )
         resp.raise_for_status()
         return _json(resp)
+    except requests.RequestException as exc:
+        raise WorkflowApiError(str(exc)) from exc
+
+
+def open_events_stream(
+    api_url: str,
+    *,
+    run_id: str,
+    after_event_id: int = 0,
+    heartbeat_ms: int = 10000,
+    project_id: Optional[str] = None,
+) -> requests.Response:
+    url = f"{_root(api_url)}/workflow/runs/{str(run_id)}/events"
+    params = {
+        "after_event_id": int(after_event_id),
+        "heartbeat_ms": int(heartbeat_ms),
+    }
+    try:
+        resp = requests.get(
+            url,
+            params=params,
+            headers=_project_headers(project_id),
+            timeout=DEFAULT_TIMEOUT_S,
+            stream=True,
+        )
+        resp.raise_for_status()
+        return resp
     except requests.RequestException as exc:
         raise WorkflowApiError(str(exc)) from exc
 
@@ -130,4 +209,5 @@ __all__ = [
     "get_run_status",
     "get_latest_run",
     "cancel_target",
+    "open_events_stream",
 ]

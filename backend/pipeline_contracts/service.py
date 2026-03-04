@@ -54,7 +54,12 @@ def _fingerprint(*, work_id: str, caps: dict, settings_json: dict) -> str:
 
 
 def create_run(
-    work_id: str, caps_override: dict | None = None, note: str | None = None
+    work_id: str,
+    *,
+    project_id: str,
+    created_by_user_id: str,
+    caps_override: dict | None = None,
+    note: str | None = None,
 ) -> dict:
     wid = str(work_id or "").strip()
     if not wid:
@@ -64,6 +69,8 @@ def create_run(
     fp = _fingerprint(work_id=wid, caps=caps, settings_json=settings_json)
     run = pipeline_runs.create_run(
         wid,
+        project_id=str(project_id or "").strip(),
+        created_by_user_id=str(created_by_user_id or "").strip(),
         caps=caps,
         settings_json=settings_json,
         input_fingerprint=fp,

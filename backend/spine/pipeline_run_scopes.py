@@ -10,15 +10,6 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from backend.db import connect
-from backend.settings import settings as app_settings
-
-
-def _project_id() -> str:
-    return str(getattr(app_settings, "DEFAULT_PROJECT_ID", "default") or "default")
-
-
-def _user_id() -> str:
-    return str(getattr(app_settings, "DEFAULT_USER_ID", "local") or "local")
 
 
 def _to_iso(value: Any) -> Any:
@@ -29,6 +20,8 @@ def _to_iso(value: Any) -> Any:
 
 def insert_scope(
     *,
+    project_id: str,
+    created_by_user_id: str,
     scope_type: str,
     scope_id: str,
     reviewer_uid: str,
@@ -51,8 +44,12 @@ def insert_scope(
     if not doc:
         raise ValueError("citing_doc_id is required")
 
-    pid = _project_id()
-    uid = _user_id()
+    pid = str(project_id or "").strip()
+    if not pid:
+        raise ValueError("project_id is required")
+    uid = str(created_by_user_id or "").strip()
+    if not uid:
+        raise ValueError("created_by_user_id is required")
 
     with connect() as conn:
         with conn.cursor() as cur:
@@ -75,7 +72,7 @@ def insert_scope(
 
 
 def latest_run_id(
-    *, scope_type: str, scope_id: str, reviewer_uid: str
+    *, project_id: str, scope_type: str, scope_id: str, reviewer_uid: str
 ) -> Optional[str]:
     st = str(scope_type or "").strip()
     sid = str(scope_id or "").strip()
@@ -87,7 +84,9 @@ def latest_run_id(
     if not ruid:
         raise ValueError("reviewer_uid is required")
 
-    pid = _project_id()
+    pid = str(project_id or "").strip()
+    if not pid:
+        raise ValueError("project_id is required")
 
     with connect() as conn:
         with conn.cursor() as cur:
@@ -111,7 +110,7 @@ def latest_run_id(
 
 
 def list_runs(
-    *, scope_type: str, scope_id: str, reviewer_uid: str, limit: int = 25
+    *, project_id: str, scope_type: str, scope_id: str, reviewer_uid: str, limit: int = 25
 ) -> List[Dict[str, Any]]:
     st = str(scope_type or "").strip()
     sid = str(scope_id or "").strip()
@@ -129,7 +128,9 @@ def list_runs(
     if lim > 250:
         lim = 250
 
-    pid = _project_id()
+    pid = str(project_id or "").strip()
+    if not pid:
+        raise ValueError("project_id is required")
 
     cols = (
         "scope_type",

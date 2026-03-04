@@ -7,6 +7,7 @@ import backend.main as backend_main
 
 def test_workflow_assessment_finalize_writes_immutable_artifact() -> None:
     client = TestClient(backend_main.app)
+    project_id = "proj-assessment"
 
     claim_id = "cite:doc-assess:0:default:1a"
     body = {
@@ -20,6 +21,7 @@ def test_workflow_assessment_finalize_writes_immutable_artifact() -> None:
     first = client.post(
         f"/workflow/claimspans/{claim_id}/assessment/finalize",
         json=body,
+        headers={"X-Project-Id": project_id},
     )
     assert first.status_code == 200
     run_id = first.json()["run_id"]
@@ -37,6 +39,7 @@ def test_workflow_assessment_finalize_writes_immutable_artifact() -> None:
             **body,
             "judgment_snapshot": {"status": "final", "verdict": "contradict"},
         },
+        headers={"X-Project-Id": project_id},
     )
     assert second.status_code == 200
     assert second.json().get("already_stored") is True

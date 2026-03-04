@@ -17,6 +17,8 @@ def _utcnow_z() -> str:
 def test_put_and_get_stage_payload_is_write_once() -> None:
     run = pipeline_runs.create_run(
         "work:test",
+        project_id="default",
+        created_by_user_id="local",
         caps={"candidates": 200, "rerank": 50, "nli": 12},
         settings_json={},
         input_fingerprint="fp-test",

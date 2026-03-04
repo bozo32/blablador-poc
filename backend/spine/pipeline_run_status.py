@@ -10,7 +10,6 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from backend.db import connect
-from backend.settings import settings as app_settings
 
 
 RUN_STATES = {
@@ -41,14 +40,6 @@ DEFAULT_STAGES: tuple[str, ...] = (
     "rerank",
     "nli",
 )
-
-
-def _project_id() -> str:
-    return str(getattr(app_settings, "DEFAULT_PROJECT_ID", "default") or "default")
-
-
-def _user_id() -> str:
-    return str(getattr(app_settings, "DEFAULT_USER_ID", "local") or "local")
 
 
 def _utc_now() -> datetime:
@@ -221,6 +212,8 @@ def merge_stage_state_json(current: Any, patch: Any) -> Dict[str, Any]:
 def upsert_run_status(
     run_id: str,
     *,
+    project_id: str,
+    created_by_user_id: str,
     scope_type: str,
     scope_id: str,
     reviewer_uid: str,
@@ -248,8 +241,12 @@ def upsert_run_status(
         raise ValueError("citing_doc_id is required")
     run_state = _validate_state(state, allowed=set(RUN_STATES), label="state")
 
-    pid = _project_id()
-    uid = _user_id()
+    pid = str(project_id or "").strip()
+    if not pid:
+        raise ValueError("project_id is required")
+    uid = str(created_by_user_id or "").strip()
+    if not uid:
+        raise ValueError("created_by_user_id is required")
 
     started_blob = str(started_at).strip() if started_at is not None else None
     finished_blob = str(finished_at).strip() if finished_at is not None else None
@@ -323,7 +320,7 @@ def upsert_run_status(
             )
         conn.commit()
 
-    updated = get_run_status(rid)
+    updated = get_run_status(rid, project_id=pid)
     if updated is None:
         raise RuntimeError("failed to upsert pipeline_run_status")
     return updated
@@ -333,6 +330,7 @@ def upsert_target_status(
     run_id: str,
     target_id: str,
     *,
+    project_id: str,
     state: str,
     citation_index: int | None,
     reference_id: str | None,
@@ -349,7 +347,9 @@ def upsert_target_status(
         raise ValueError("target_id is required")
     tgt_state = _validate_state(state, allowed=set(TARGET_STATES), label="state")
 
-    pid = _project_id()
+    pid = str(project_id or "").strip()
+    if not pid:
+        raise ValueError("project_id is required")
 
     ref = str(reference_id).strip() if reference_id is not None else None
     att = str(attachment_id).strip() if attachment_id is not None else None
@@ -361,7 +361,7 @@ def upsert_target_status(
 
     # Merge stage state as a patch so only touched stages update updated_at.
     if stage_state is not None:
-        existing = get_target_status(rid, tid)
+        existing = get_target_status(rid, tid, project_id=pid)
         if existing is None:
             merged = merge_stage_state_json(default_stage_state_json(), stage_state)
         else:
@@ -443,18 +443,20 @@ def upsert_target_status(
             )
         conn.commit()
 
-    updated = get_target_status(rid, tid)
+    updated = get_target_status(rid, tid, project_id=pid)
     if updated is None:
         raise RuntimeError("failed to upsert pipeline_target_status")
     return updated
 
 
-def get_run_status(run_id: str) -> Optional[Dict[str, Any]]:
+def get_run_status(run_id: str, *, project_id: str) -> Optional[Dict[str, Any]]:
     rid = str(run_id or "").strip()
     if not rid:
         raise ValueError("run_id is required")
 
-    pid = _project_id()
+    pid = str(project_id or "").strip()
+    if not pid:
+        raise ValueError("project_id is required")
 
     cols = (
         "run_id",
@@ -496,7 +498,12 @@ def get_run_status(run_id: str) -> Optional[Dict[str, Any]]:
     return out
 
 
-def get_target_status(run_id: str, target_id: str) -> Optional[Dict[str, Any]]:
+def get_target_status(
+    run_id: str,
+    target_id: str,
+    *,
+    project_id: str,
+) -> Optional[Dict[str, Any]]:
     rid = str(run_id or "").strip()
     tid = str(target_id or "").strip()
     if not rid:
@@ -504,7 +511,9 @@ def get_target_status(run_id: str, target_id: str) -> Optional[Dict[str, Any]]:
     if not tid:
         raise ValueError("target_id is required")
 
-    pid = _project_id()
+    pid = str(project_id or "").strip()
+    if not pid:
+        raise ValueError("project_id is required")
 
     cols = (
         "run_id",
@@ -545,12 +554,14 @@ def get_target_status(run_id: str, target_id: str) -> Optional[Dict[str, Any]]:
     return out
 
 
-def list_target_status(run_id: str) -> List[Dict[str, Any]]:
+def list_target_status(run_id: str, *, project_id: str) -> List[Dict[str, Any]]:
     rid = str(run_id or "").strip()
     if not rid:
         raise ValueError("run_id is required")
 
-    pid = _project_id()
+    pid = str(project_id or "").strip()
+    if not pid:
+        raise ValueError("project_id is required")
 
     cols = (
         "run_id",
@@ -594,6 +605,7 @@ def list_target_status(run_id: str) -> List[Dict[str, Any]]:
 def append_event(
     run_id: str,
     *,
+    project_id: str,
     type: str,
     target_id: str | None = None,
     payload: dict | None = None,
@@ -606,7 +618,9 @@ def append_event(
     if not et:
         raise ValueError("type is required")
 
-    pid = _project_id()
+    pid = str(project_id or "").strip()
+    if not pid:
+        raise ValueError("project_id is required")
     payload_blob = _json_dumps(payload or {})
 
     with connect() as conn:
@@ -634,7 +648,11 @@ def append_event(
 
 
 def list_events(
-    run_id: str, *, after_event_id: int = 0, limit: int = 200
+    run_id: str,
+    *,
+    project_id: str,
+    after_event_id: int = 0,
+    limit: int = 200,
 ) -> List[Dict[str, Any]]:
     rid = str(run_id or "").strip()
     if not rid:
@@ -647,7 +665,9 @@ def list_events(
     if lim > 1000:
         lim = 1000
 
-    pid = _project_id()
+    pid = str(project_id or "").strip()
+    if not pid:
+        raise ValueError("project_id is required")
 
     cols = (
         "event_id",

@@ -125,6 +125,7 @@ from backend.pipeline_contracts import service as pipeline_contracts_service
 from backend.spine.pipeline_artifacts import StageArtifactAlreadyExists
 from backend.spine import pipeline_run_scopes as run_scopes_spine
 from backend.spine import pipeline_run_status as run_status_spine
+from backend.spine import pipeline_runs as run_store_spine
 from backend.spine import evidence_decisions as evidence_decisions_spine
 from backend.spine import opinion_events
 from backend.workflow_happy_path import orchestrator as happy_path_orchestrator
@@ -2199,7 +2200,14 @@ def auto_place_claim_source(
     claim_id: str,
     payload: schemas.AutoPlaceRequest,
     background_tasks: BackgroundTasks,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
 ):
+    project_id, _user_id = _require_scope_for_upload(
+        x_project_id=x_project_id,
+        x_user_id=x_user_id,
+        endpoint="/claims/{claim_id}/auto-place",
+    )
     doc_id = str(payload.doc_id or "").strip()
     target_id = (payload.target_id or "").strip() or None
     citation_index = payload.citation_index
@@ -2296,7 +2304,8 @@ def auto_place_claim_source(
                     "reused": False,
                 }
 
-    cited_ingest_id = graph_store.resolve_reference_to_ingest_id(
+    scoped_store = GraphStore(settings=SimpleNamespace(DEFAULT_PROJECT_ID=project_id))
+    cited_ingest_id = scoped_store.resolve_reference_to_ingest_id(
         citing_doc_id=doc_id,
         reference_id=str(target_id),
     )
@@ -2315,7 +2324,7 @@ def auto_place_claim_source(
         tmp_pdf_path = get_pdf_temp_path(
             doc_id=str(cited_ingest_id),
             work_id=str(cited_ingest_id),
-            project_id=str(app_settings.DEFAULT_PROJECT_ID),
+            project_id=project_id,
             document=None,
         )
         source_path = tmp_pdf_path
@@ -2325,7 +2334,7 @@ def auto_place_claim_source(
     cited_meta = (
         build_ingested_document_from_spine(
             work_id=str(cited_ingest_id),
-            project_id=str(app_settings.DEFAULT_PROJECT_ID),
+            project_id=project_id,
             include_extraction_data=False,
         )
         or {}
@@ -2947,6 +2956,8 @@ def post_pipeline_run(payload: PipelineRunCreateRequest):
     try:
         run = pipeline_contracts_service.create_run(
             work_id=str(payload.work_id),
+            project_id=str(app_settings.DEFAULT_PROJECT_ID),
+            created_by_user_id=str(app_settings.DEFAULT_USER_ID),
             caps_override=dict(payload.caps or {})
             if payload.caps is not None
             else None,
@@ -3023,13 +3034,63 @@ class WorkflowStartRunRequest(BaseModel):
     citing_doc_id: str
 
 
+def _workflow_run_project_context(
+    *, run_id: str, x_project_id: Optional[str], endpoint: str, for_write: bool
+) -> tuple[str, Optional[str]]:
+    rid = str(run_id or "").strip()
+    if not rid:
+        raise HTTPException(status_code=422, detail="run_id is required")
+    run_record = run_store_spine.get_run(rid)
+    if run_record is None:
+        raise HTTPException(status_code=404, detail="run not found")
+
+    project_id = str(run_record.get("project_id") or "").strip()
+    if not project_id:
+        raise HTTPException(status_code=500, detail="run missing project scope")
+
+    header_project_id = str(x_project_id or "").strip() or None
+    if header_project_id and header_project_id != project_id:
+        raise HTTPException(status_code=409, detail="project scope mismatch for run")
+    if for_write and not header_project_id:
+        raise HTTPException(status_code=400, detail="X-Project-Id header is required")
+
+    logger.info(
+        "workflow.scope.resolved %s",
+        json.dumps(
+            {
+                "endpoint": str(endpoint or "").strip() or "unknown",
+                "run_id": rid,
+                "canonical_project_id": project_id,
+                "header_project_id": header_project_id,
+                "for_write": bool(for_write),
+            },
+            sort_keys=True,
+        ),
+    )
+
+    created_by_user_id = str(run_record.get("created_by_user_id") or "").strip() or None
+    return project_id, created_by_user_id
+
+
 @app.post("/workflow/claimspans/{claim_id}/runs")
-def workflow_start_run(claim_id: str, payload: WorkflowStartRunRequest):
+def workflow_start_run(
+    claim_id: str,
+    payload: WorkflowStartRunRequest,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
+    project_id, _user_id, _scope_source = _resolve_scope_observability(
+        endpoint="/workflow/claimspans/{claim_id}/runs",
+        x_project_id=x_project_id,
+        require_project=True,
+        allow_dev_project_default=False,
+        include_user=False,
+    )
     try:
         out = happy_path_orchestrator.start_run_for_claimspan(
             claim_id=str(claim_id),
             reviewer_uid=str(payload.reviewer_uid),
             citing_doc_id=str(payload.citing_doc_id),
+            project_id=project_id,
         )
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -3049,8 +3110,17 @@ class WorkflowAssessmentFinalizeRequest(BaseModel):
 
 @app.post("/workflow/claimspans/{claim_id}/assessment/finalize")
 def workflow_finalize_assessment(
-    claim_id: str, payload: WorkflowAssessmentFinalizeRequest
+    claim_id: str,
+    payload: WorkflowAssessmentFinalizeRequest,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
 ):
+    project_id, _user_id, _scope_source = _resolve_scope_observability(
+        endpoint="/workflow/claimspans/{claim_id}/assessment/finalize",
+        x_project_id=x_project_id,
+        require_project=True,
+        allow_dev_project_default=False,
+        include_user=False,
+    )
     cid = str(claim_id or "").strip()
     reviewer_uid = str(payload.reviewer_uid or "").strip() or "default"
     citing_doc_id = str(payload.citing_doc_id or "").strip()
@@ -3063,6 +3133,7 @@ def workflow_finalize_assessment(
         raise HTTPException(status_code=422, detail="assessed_at is required")
 
     run_id = run_scopes_spine.latest_run_id(
+        project_id=project_id,
         scope_type="claimspan",
         scope_id=cid,
         reviewer_uid=reviewer_uid,
@@ -3070,6 +3141,8 @@ def workflow_finalize_assessment(
     if run_id is None:
         run = pipeline_contracts_service.create_run(
             work_id=work_id_from_doc_id(citing_doc_id),
+            project_id=project_id,
+            created_by_user_id=reviewer_uid,
             note="assessment-only",
         )
         run_id = str(run.get("run_id") or "").strip() or None
@@ -3078,6 +3151,8 @@ def workflow_finalize_assessment(
                 status_code=500, detail="create_run did not return run_id"
             )
         run_scopes_spine.insert_scope(
+            project_id=project_id,
+            created_by_user_id=reviewer_uid,
             scope_type="claimspan",
             scope_id=cid,
             reviewer_uid=reviewer_uid,
@@ -3086,6 +3161,8 @@ def workflow_finalize_assessment(
         )
         run_status_spine.upsert_run_status(
             run_id,
+            project_id=project_id,
+            created_by_user_id=reviewer_uid,
             scope_type="claimspan",
             scope_id=cid,
             reviewer_uid=reviewer_uid,
@@ -3127,13 +3204,14 @@ def workflow_finalize_assessment(
 
     # Best-effort: reflect assessment in per-target stage_state_json.
     try:
-        for tgt in run_status_spine.list_target_status(str(run_id)):
+        for tgt in run_status_spine.list_target_status(str(run_id), project_id=project_id):
             tid = str((tgt or {}).get("target_id") or "").strip()
             if not tid:
                 continue
             run_status_spine.upsert_target_status(
                 str(run_id),
                 tid,
+                project_id=project_id,
                 state=str((tgt or {}).get("state") or "requested"),
                 citation_index=(tgt or {}).get("citation_index"),
                 reference_id=(tgt or {}).get("reference_id"),
@@ -3156,9 +3234,21 @@ def workflow_finalize_assessment(
 
 
 @app.post("/workflow/runs/{run_id}/resume")
-def workflow_resume_run(run_id: str):
+def workflow_resume_run(
+    run_id: str,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
     try:
-        return happy_path_orchestrator.resume_run(str(run_id))
+        canonical_project_id, _created_by_user_id = _workflow_run_project_context(
+            run_id=str(run_id),
+            x_project_id=x_project_id,
+            endpoint="/workflow/runs/{run_id}/resume",
+            for_write=True,
+        )
+        return happy_path_orchestrator.resume_run(
+            str(run_id),
+            project_id=canonical_project_id,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except KeyError as exc:
@@ -3166,9 +3256,21 @@ def workflow_resume_run(run_id: str):
 
 
 @app.get("/workflow/claimspans/{claim_id}/runs/latest")
-def workflow_latest_run(claim_id: str, reviewer_uid: str = Query(...)):
+def workflow_latest_run(
+    claim_id: str,
+    reviewer_uid: str = Query(...),
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
+    project_id, _user_id, _scope_source = _resolve_scope_observability(
+        endpoint="/workflow/claimspans/{claim_id}/runs/latest",
+        x_project_id=x_project_id,
+        require_project=True,
+        allow_dev_project_default=False,
+        include_user=False,
+    )
     try:
         rid = run_scopes_spine.latest_run_id(
+            project_id=project_id,
             scope_type="claimspan",
             scope_id=str(claim_id),
             reviewer_uid=str(reviewer_uid),
@@ -3179,15 +3281,30 @@ def workflow_latest_run(claim_id: str, reviewer_uid: str = Query(...)):
 
 
 @app.get("/workflow/runs/{run_id}/status")
-def workflow_get_run_status(run_id: str):
+def workflow_get_run_status(
+    run_id: str,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
     try:
-        run = run_status_spine.get_run_status(str(run_id))
+        canonical_project_id, _created_by_user_id = _workflow_run_project_context(
+            run_id=str(run_id),
+            x_project_id=x_project_id,
+            endpoint="/workflow/runs/{run_id}/status",
+            for_write=False,
+        )
+        run = run_status_spine.get_run_status(
+            str(run_id),
+            project_id=canonical_project_id,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if run is None:
         raise HTTPException(status_code=404, detail="run not found")
 
-    targets = run_status_spine.list_target_status(str(run_id))
+    targets = run_status_spine.list_target_status(
+        str(run_id),
+        project_id=canonical_project_id,
+    )
     queue = [
         {
             "target_id": t.get("target_id"),
@@ -3204,9 +3321,23 @@ def workflow_get_run_status(run_id: str):
 
 
 @app.post("/workflow/runs/{run_id}/targets/{target_id}/cancel")
-def workflow_cancel_target(run_id: str, target_id: str):
+def workflow_cancel_target(
+    run_id: str,
+    target_id: str,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
+):
     try:
-        return happy_path_orchestrator.cancel_target(str(run_id), str(target_id))
+        canonical_project_id, _created_by_user_id = _workflow_run_project_context(
+            run_id=str(run_id),
+            x_project_id=x_project_id,
+            endpoint="/workflow/runs/{run_id}/targets/{target_id}/cancel",
+            for_write=True,
+        )
+        return happy_path_orchestrator.cancel_target(
+            str(run_id),
+            str(target_id),
+            project_id=canonical_project_id,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except KeyError as exc:
@@ -3218,10 +3349,15 @@ def workflow_events_sse(
     run_id: str,
     after_event_id: int = Query(0, ge=0),
     heartbeat_ms: int = Query(10000, ge=250, le=60000),
+    x_project_id: Optional[str] = Header(None, alias="X-Project-Id"),
 ):
+    canonical_project_id, _created_by_user_id = _workflow_run_project_context(
+        run_id=str(run_id),
+        x_project_id=x_project_id,
+        endpoint="/workflow/runs/{run_id}/events",
+        for_write=False,
+    )
     rid = str(run_id or "").strip()
-    if not rid:
-        raise HTTPException(status_code=422, detail="run_id is required")
 
     async def _gen():
         last = int(after_event_id)
@@ -3230,7 +3366,10 @@ def workflow_events_sse(
             events = []
             try:
                 events = run_status_spine.list_events(
-                    rid, after_event_id=last, limit=200
+                    rid,
+                    project_id=canonical_project_id,
+                    after_event_id=last,
+                    limit=200,
                 )
             except Exception:
                 events = []
